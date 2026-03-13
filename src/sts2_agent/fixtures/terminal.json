@@ -1,0 +1,22 @@
+﻿{
+  "phase": "terminal",
+  "player": {
+    "hp": 63,
+    "max_hp": 80,
+    "block": 0,
+    "energy": 0,
+    "gold": 116,
+    "draw_pile": 0,
+    "discard_pile": 0,
+    "exhaust_pile": 0,
+    "relics": ["Burning Blood"],
+    "potions": [],
+    "hand": []
+  },
+  "enemies": [],
+  "rewards": [],
+  "map_nodes": [],
+  "terminal": true,
+  "metadata": {"room_type": "victory", "result": "win"},
+  "legal_actions": []
+}

@@ -1,0 +1,26 @@
+﻿{
+  "phase": "reward",
+  "player": {
+    "hp": 70,
+    "max_hp": 80,
+    "block": 0,
+    "energy": 0,
+    "gold": 116,
+    "draw_pile": 12,
+    "discard_pile": 4,
+    "exhaust_pile": 0,
+    "relics": ["Burning Blood"],
+    "potions": [],
+    "hand": []
+  },
+  "enemies": [],
+  "rewards": ["Inflame", "Pommel Strike", "Shrug It Off"],
+  "map_nodes": [],
+  "terminal": false,
+  "metadata": {"room_type": "reward"},
+  "legal_actions": [
+    {"type": "choose_reward", "label": "Choose Inflame", "reward": "Inflame"},
+    {"type": "choose_reward", "label": "Choose Pommel Strike", "reward": "Pommel Strike"},
+    {"type": "skip", "label": "Skip Reward"}
+  ]
+}

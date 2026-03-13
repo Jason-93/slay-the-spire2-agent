@@ -1,0 +1,151 @@
+﻿from __future__ import annotations
+
+from dataclasses import asdict, dataclass, field, is_dataclass
+from enum import StrEnum
+from typing import Any
+
+
+class Phase(StrEnum):
+    COMBAT = "combat"
+    REWARD = "reward"
+    MAP = "map"
+    TERMINAL = "terminal"
+
+
+class ActionType(StrEnum):
+    PLAY_CARD = "play_card"
+    END_TURN = "end_turn"
+    CHOOSE_REWARD = "choose_reward"
+    CHOOSE_MAP_NODE = "choose_map_node"
+    USE_POTION = "use_potion"
+    SKIP = "skip"
+
+
+class ActionStatus(StrEnum):
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+    INTERRUPTED = "interrupted"
+
+
+@dataclass(slots=True)
+class CardView:
+    card_id: str
+    name: str
+    cost: int
+    playable: bool = True
+
+
+@dataclass(slots=True)
+class PlayerState:
+    hp: int
+    max_hp: int
+    block: int
+    energy: int
+    gold: int
+    hand: list[CardView] = field(default_factory=list)
+    draw_pile: int = 0
+    discard_pile: int = 0
+    exhaust_pile: int = 0
+    relics: list[str] = field(default_factory=list)
+    potions: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class EnemyState:
+    enemy_id: str
+    name: str
+    hp: int
+    max_hp: int
+    block: int
+    intent: str
+    is_alive: bool = True
+
+
+@dataclass(slots=True)
+class LegalAction:
+    action_id: str
+    type: str
+    label: str
+    params: dict[str, Any] = field(default_factory=dict)
+    target_constraints: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class DecisionSnapshot:
+    session_id: str
+    decision_id: str
+    state_version: int
+    phase: str
+    player: PlayerState | None = None
+    enemies: list[EnemyState] = field(default_factory=list)
+    rewards: list[str] = field(default_factory=list)
+    map_nodes: list[str] = field(default_factory=list)
+    terminal: bool = False
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class ActionSubmission:
+    session_id: str
+    decision_id: str
+    state_version: int
+    action_id: str
+    args: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class ActionResult:
+    status: str
+    session_id: str
+    decision_id: str
+    state_version: int
+    accepted_action_id: str | None = None
+    error_code: str | None = None
+    message: str = ""
+    terminal: bool = False
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class PolicyDecision:
+    action_id: str | None
+    reason: str
+    halt: bool = False
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class TraceEntry:
+    session_id: str
+    decision_id: str
+    state_version: int
+    phase: str
+    legal_actions: list[dict[str, Any]]
+    observation: dict[str, Any]
+    policy_output: dict[str, Any]
+    bridge_result: dict[str, Any]
+    interrupted: bool = False
+    timestamp: str = ""
+
+
+@dataclass(slots=True)
+class RunSummary:
+    session_id: str
+    completed: bool
+    interrupted: bool
+    decisions: int
+    trace_path: str | None = None
+    reason: str = ""
+
+
+def to_dict(value: Any) -> Any:
+    if isinstance(value, StrEnum):
+        return value.value
+    if is_dataclass(value):
+        return {key: to_dict(val) for key, val in asdict(value).items()}
+    if isinstance(value, dict):
+        return {key: to_dict(val) for key, val in value.items()}
+    if isinstance(value, list):
+        return [to_dict(item) for item in value]
+    return value

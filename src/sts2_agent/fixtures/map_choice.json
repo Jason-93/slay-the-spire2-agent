@@ -1,0 +1,26 @@
+﻿{
+  "phase": "map",
+  "player": {
+    "hp": 70,
+    "max_hp": 80,
+    "block": 0,
+    "energy": 0,
+    "gold": 116,
+    "draw_pile": 12,
+    "discard_pile": 4,
+    "exhaust_pile": 0,
+    "relics": ["Burning Blood"],
+    "potions": [],
+    "hand": []
+  },
+  "enemies": [],
+  "rewards": [],
+  "map_nodes": ["monster_left", "elite_center", "question_right"],
+  "terminal": false,
+  "metadata": {"room_type": "map", "floor": 2},
+  "legal_actions": [
+    {"type": "choose_map_node", "label": "Choose monster_left", "node": "monster_left"},
+    {"type": "choose_map_node", "label": "Choose elite_center", "node": "elite_center"},
+    {"type": "choose_map_node", "label": "Choose question_right", "node": "question_right"}
+  ]
+}
