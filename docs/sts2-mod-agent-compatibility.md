@@ -30,7 +30,7 @@
 ## 当前差异
 
 - Python agent 原型使用 `metadata` 字段承载环境细节；mod-side 也保留了该字段，但真实接入后需要根据 STS2 内部对象补充更多内容。
-- 当前 mod-side 原型仍使用 `FixtureGameStateProvider`，尚未接真实 STS2 运行时对象。
+- 当前 mod-side 原型默认使用 `FixtureGameStateProvider`；当发现真实 STS2 安装且显式启用 `prefer-runtime-provider` 时，会切换到 `Sts2RuntimeStateProvider`，但后者暂时只暴露健康信息，尚未完成真实对象读取。
 - Python 侧当前没有真实 `HttpGameBridge`，后续需要新增一个读取这些 endpoint 的 bridge adapter。
 
 ## 后续补充项

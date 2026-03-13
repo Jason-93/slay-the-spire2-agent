@@ -31,10 +31,15 @@ def wait_for_server() -> None:
 def main() -> int:
     command = [
         "dotnet",
-        "run",
-        "--project",
-        str(ROOT / "mod" / "Sts2Mod.StateBridge.Host"),
-        "--",
+        str(
+            ROOT
+            / "mod"
+            / "Sts2Mod.StateBridge.Host"
+            / "bin"
+            / "Debug"
+            / "net8.0"
+            / "Sts2Mod.StateBridge.Host.dll"
+        ),
         "--port",
         str(PORT),
         "--game-version",

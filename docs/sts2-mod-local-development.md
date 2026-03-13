@@ -20,6 +20,7 @@
 2. `Sts2Mod.StateBridge.Host`
    - 用于脱离游戏单独运行本地 bridge
    - 方便手工验证和 agent 联调
+   - 支持自动探测 STS2 安装目录，并可切换到 `runtime provider`
 
 ## 构建
 
@@ -31,6 +32,12 @@ dotnet build mod/Sts2Mod.StateBridge.sln
 
 ```bash
 dotnet run --project mod/Sts2Mod.StateBridge.Host -- --port 17654 --game-version prototype
+```
+
+如果已经安装 STS2，并希望优先尝试真实运行时 provider：
+
+```bash
+dotnet run --project mod/Sts2Mod.StateBridge.Host -- --prefer-runtime-provider true --sts2-managed-dir "E:\SteamLibrary\steamapps\common\Slay the Spire 2\Game"
 ```
 
 启动后可访问：
@@ -48,6 +55,16 @@ dotnet run --project mod/Sts2Mod.StateBridge.Host -- --port 17654 --game-version
 - `GET /actions?phase=reward`
 
 `phase` 参数仅用于本地原型调试；真实接入 STS2 时应由 mod 自动判断当前窗口。
+
+## 自动发现规则
+
+host 会按以下顺序查找 STS2 相关路径：
+
+1. 命令行参数 `--sts2-managed-dir` / `--sts2-modloader-dir`
+2. 环境变量 `STS2_MANAGED_DIR` / `STS2_MODLOADER_DIR`
+3. 常见 Steam 安装目录下的 `Slay the Spire 2` 路径
+
+如果没有找到 `sts2.dll`，会自动回退到 `fixture provider`，保证本地联调仍然可用。
 
 ## 配置真实 STS2 程序集
 

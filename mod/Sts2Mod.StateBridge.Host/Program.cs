@@ -3,10 +3,10 @@ using Sts2Mod.StateBridge.Configuration;
 using Sts2Mod.StateBridge.Logging;
 using Sts2Mod.StateBridge.Providers;
 
-var options = ParseArgs(args);
 var logger = new ConsoleBridgeLogger();
-var provider = new FixtureGameStateProvider(options);
-await using var bootstrap = new ModBootstrap(options, provider, logger);
+var requestedOptions = ParseArgs(args);
+var (provider, effectiveOptions) = ProviderFactory.Create(requestedOptions, logger);
+await using var bootstrap = new ModBootstrap(effectiveOptions, provider, logger);
 await bootstrap.StartAsync();
 
 var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -43,6 +43,9 @@ static BridgeOptions ParseArgs(string[] args)
         ModVersion = values.GetValueOrDefault("mod-version") ?? "0.1.0",
         GameVersion = values.GetValueOrDefault("game-version") ?? "prototype",
         ProviderMode = values.GetValueOrDefault("provider-mode") ?? "fixture",
+        Sts2ManagedDir = values.GetValueOrDefault("sts2-managed-dir"),
+        Sts2ModLoaderDir = values.GetValueOrDefault("sts2-modloader-dir"),
+        PreferRuntimeProvider = string.Equals(values.GetValueOrDefault("prefer-runtime-provider"), "true", StringComparison.OrdinalIgnoreCase),
         AllowDebugPhaseOverride = !string.Equals(values.GetValueOrDefault("allow-debug-phase-override"), "false", StringComparison.OrdinalIgnoreCase),
         ReadOnly = true,
     };

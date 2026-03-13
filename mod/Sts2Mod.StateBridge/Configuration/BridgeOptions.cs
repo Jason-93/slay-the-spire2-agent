@@ -8,6 +8,9 @@ public sealed class BridgeOptions
     public string ModVersion { get; init; } = "0.1.0";
     public string GameVersion { get; init; } = "prototype";
     public string ProviderMode { get; init; } = "fixture";
+    public string? Sts2ManagedDir { get; init; }
+    public string? Sts2ModLoaderDir { get; init; }
+    public bool PreferRuntimeProvider { get; init; }
     public bool AllowDebugPhaseOverride { get; init; } = true;
     public bool ReadOnly { get; init; } = true;
 
