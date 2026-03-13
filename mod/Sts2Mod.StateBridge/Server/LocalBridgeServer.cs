@@ -93,6 +93,13 @@ public sealed class LocalBridgeServer : IAsyncDisposable
     private async Task HandleAsync(HttpListenerContext context, CancellationToken cancellationToken)
     {
         var request = context.Request;
+        var path = request.Url?.AbsolutePath?.TrimEnd('/').ToLowerInvariant() ?? string.Empty;
+        if (string.Equals(request.HttpMethod, "POST", StringComparison.OrdinalIgnoreCase))
+        {
+            await HandlePostAsync(context, path, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         if (!string.Equals(request.HttpMethod, "GET", StringComparison.OrdinalIgnoreCase))
         {
             await WriteAsync(context.Response, 405, new ErrorResponse("method_not_allowed", "Only GET is supported."), cancellationToken).ConfigureAwait(false);
@@ -102,7 +109,6 @@ public sealed class LocalBridgeServer : IAsyncDisposable
         try
         {
             var phase = request.QueryString["phase"];
-            var path = request.Url?.AbsolutePath?.TrimEnd('/').ToLowerInvariant() ?? string.Empty;
             object payload = path switch
             {
                 "/health" => _provider.GetHealth(),
@@ -117,6 +123,42 @@ public sealed class LocalBridgeServer : IAsyncDisposable
         {
             _logger.Error("Request handling failed", ex);
             await WriteAsync(context.Response, 500, new ErrorResponse("state_export_failed", ex.Message), cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task HandlePostAsync(HttpListenerContext context, string path, CancellationToken cancellationToken)
+    {
+        if (!string.Equals(path, "/apply", StringComparison.Ordinal))
+        {
+            await WriteAsync(context.Response, 404, new ErrorResponse("not_found", $"Unknown endpoint: {path}"), cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        try
+        {
+            var request = await JsonSerializer.DeserializeAsync<ActionRequest>(
+                context.Request.InputStream,
+                _jsonOptions,
+                cancellationToken).ConfigureAwait(false);
+
+            if (request is null)
+            {
+                await WriteAsync(context.Response, 400, new ErrorResponse("invalid_request", "Request body is required."), cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            var response = _provider.ApplyAction(request);
+            var statusCode = string.Equals(response.Status, "accepted", StringComparison.OrdinalIgnoreCase) ? 200 : 409;
+            if (string.Equals(response.Status, "failed", StringComparison.OrdinalIgnoreCase))
+            {
+                statusCode = 500;
+            }
+
+            await WriteAsync(context.Response, statusCode, response, cancellationToken).ConfigureAwait(false);
+        }
+        catch (JsonException ex)
+        {
+            await WriteAsync(context.Response, 400, new ErrorResponse("invalid_json", ex.Message), cancellationToken).ConfigureAwait(false);
         }
     }
 

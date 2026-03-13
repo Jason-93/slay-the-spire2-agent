@@ -34,19 +34,51 @@ public sealed class Sts2RuntimeStateProvider : IGameStateProvider
             ProtocolVersion: _options.ProtocolVersion,
             ModVersion: _options.ModVersion,
             GameVersion: _options.GameVersion,
-            ProviderMode: "runtime",
+            ProviderMode: _options.ProviderMode,
             ReadOnly: _options.ReadOnly,
             Status: status.Status);
     }
 
     public DecisionSnapshot GetSnapshot(string? requestedPhase = null)
     {
+        if (InGameRuntimeCoordinator.TryGetCurrentWindow(out var window, out _))
+        {
+            return window.Snapshot;
+        }
+
         return Export().Snapshot;
     }
 
     public IReadOnlyList<LegalAction> GetActions(string? requestedPhase = null)
     {
+        if (InGameRuntimeCoordinator.TryGetCurrentWindow(out var window, out _))
+        {
+            return window.Actions;
+        }
+
         return Export().Actions;
+    }
+
+    public ActionResponse ApplyAction(ActionRequest request)
+    {
+        if (!InGameRuntimeCoordinator.IsInitialized)
+        {
+            return new ActionResponse(
+                RequestId: request.RequestId ?? Guid.NewGuid().ToString("N"),
+                DecisionId: request.DecisionId,
+                ActionId: request.ActionId,
+                Status: "rejected",
+                ErrorCode: "not_in_game_runtime",
+                Message: "Action execution is only available when the bridge is running inside the STS2 process.",
+                Metadata: new Dictionary<string, object?>());
+        }
+
+        return InGameRuntimeCoordinator.ApplyAction(request, _options.ReadOnly);
+    }
+
+    public void EnableInGameRuntime(Logging.IBridgeLogger logger)
+    {
+        InGameRuntimeCoordinator.Initialize(_reader, _options, logger);
     }
 
     private ExportedWindow Export()

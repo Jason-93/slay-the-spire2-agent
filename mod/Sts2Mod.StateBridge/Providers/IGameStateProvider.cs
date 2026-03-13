@@ -9,4 +9,6 @@ public interface IGameStateProvider
     DecisionSnapshot GetSnapshot(string? requestedPhase = null);
 
     IReadOnlyList<LegalAction> GetActions(string? requestedPhase = null);
+
+    ActionResponse ApplyAction(ActionRequest request);
 }

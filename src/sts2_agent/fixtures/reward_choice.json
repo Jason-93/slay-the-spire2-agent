@@ -21,6 +21,6 @@
   "legal_actions": [
     {"type": "choose_reward", "label": "Choose Inflame", "reward": "Inflame"},
     {"type": "choose_reward", "label": "Choose Pommel Strike", "reward": "Pommel Strike"},
-    {"type": "skip", "label": "Skip Reward"}
+    {"type": "skip_reward", "label": "Skip Reward"}
   ]
 }

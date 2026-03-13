@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net9.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
@@ -13,6 +13,8 @@
     <BridgeOutputDir Condition="'$(BridgeOutputDir)' == ''">$(MSBuildProjectDirectory)\bin\$(Configuration)\$(TargetFramework)\mod\</BridgeOutputDir>
     <Sts2ManagedDir Condition="'$(Sts2ManagedDir)' == ''"></Sts2ManagedDir>
     <Sts2ModLoaderDir Condition="'$(Sts2ModLoaderDir)' == ''"></Sts2ModLoaderDir>
+    <HasSts2RuntimeReferences Condition="Exists('$(Sts2ManagedDir)\sts2.dll') and Exists('$(Sts2ModLoaderDir)\0Harmony.dll')">true</HasSts2RuntimeReferences>
+    <DefineConstants Condition="'$(HasSts2RuntimeReferences)' == 'true'">$(DefineConstants);STS2_REAL_RUNTIME</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup Condition="Exists('$(Sts2ManagedDir)\sts2.dll')">
@@ -38,5 +40,14 @@
 
   <Target Name="ShowPrototypeMode" BeforeTargets="Build" Condition="!Exists('$(Sts2ManagedDir)\sts2.dll')">
     <Message Importance="High" Text="Building Sts2Mod.StateBridge in prototype mode; configure Sts2ManagedDir/Sts2ModLoaderDir for real STS2 integration." />
+  </Target>
+
+  <Target Name="WriteModManifest" AfterTargets="Build">
+    <MakeDir Directories="$(BridgeOutputDir)" />
+    <WriteLinesToFile
+      File="$(BridgeOutputDir)mod_manifest.json"
+      Overwrite="true"
+      Lines='{"pckName":"Sts2Mod.StateBridge","name":"STS2 Agent Bridge","author":"OpenCode","description":"Loopback bridge for exporting and controlling Slay the Spire 2 runtime state.","version":"$(Version)"}' />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(BridgeOutputDir)" SkipUnchangedFiles="true" />
   </Target>
 </Project>

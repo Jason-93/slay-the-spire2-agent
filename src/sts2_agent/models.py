@@ -18,7 +18,7 @@ class ActionType(StrEnum):
     CHOOSE_REWARD = "choose_reward"
     CHOOSE_MAP_NODE = "choose_map_node"
     USE_POTION = "use_potion"
-    SKIP = "skip"
+    SKIP_REWARD = "skip_reward"
 
 
 class ActionStatus(StrEnum):

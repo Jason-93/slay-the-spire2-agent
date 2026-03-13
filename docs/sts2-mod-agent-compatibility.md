@@ -1,8 +1,8 @@
-# STS2 mod 与 agent 协议一致性检查
+﻿# STS2 mod 与 Python agent 的兼容性说明
 
-## 已对齐字段
+## 已对齐的核心协议
 
-当前 mod-side 原型已对齐 `src/sts2_agent/models.py` 中的关键字段：
+C# bridge 侧与 Python `sts2_agent` 当前共享以下稳定字段：
 
 - `session_id`
 - `decision_id`
@@ -18,7 +18,7 @@
 - `params`
 - `target_constraints`
 
-同时补充了 `compatibility` 字段，用于暴露：
+兼容性元数据统一放在 `compatibility` 中，便于 agent 判断当前 bridge 是否可安全使用：
 
 - `protocol_version`
 - `mod_version`
@@ -26,16 +26,77 @@
 - `provider_mode`
 - `read_only`
 - `ready`
+- `status`
 
-## 当前差异
+## 本次变更后的真实 bridge 约束
 
-- Python agent 原型使用 `metadata` 字段承载环境细节；mod-side 也保留了该字段，但真实接入后需要根据 STS2 内部对象补充更多内容。
-- 当前 mod-side 原型默认使用 `FixtureGameStateProvider`；当发现真实 STS2 安装且显式启用 `prefer-runtime-provider` 时，会切换到 `Sts2RuntimeStateProvider`，但后者暂时只暴露健康信息，尚未完成真实对象读取。
-- Python 侧当前没有真实 `HttpGameBridge`，后续需要新增一个读取这些 endpoint 的 bridge adapter。
+### 1. provider mode 必须被 agent 显式识别
 
-## 后续补充项
+agent 侧不应再把所有运行态都视为单一 `runtime`，而应区分：
 
-- 为战斗目标选择补充更细粒度的目标约束
-- 为事件 / 商店 / 遗物 / 药水交互扩展更多窗口类型
-- 为未来动作提交接口预留 `action_submission` / `action_result` 对应字段
-- 在真实游戏模式下增加游戏版本和 mod loader 版本采集
+- `fixture`
+- `runtime-host`
+- `in-game-runtime`
+
+只有 `in-game-runtime` 且 `read_only=false` 时，才应尝试真正提交写动作。
+
+### 2. 奖励跳过动作统一为 `skip_reward`
+
+真实 bridge 已把奖励跳过动作固定为 `skip_reward`，Python 原型也已同步。后续若实现 `HttpGameBridge`，不要再依赖旧的 `skip` 名称。
+
+### 3. 写动作必须携带当前 `decision_id`
+
+`POST /apply` 的最小请求体建议为：
+
+```json
+{
+  "decision_id": "dec-...",
+  "action_id": "act-...",
+  "params": {}
+}
+```
+
+agent 不应仅凭 `action_id` 盲发请求；`decision_id` 是 stale action 拦截的第一道保护。
+
+### 4. 动作结果需要映射为三类结论
+
+真实 bridge 会返回：
+
+- `accepted`
+- `rejected`
+- `failed`
+
+Python 侧后续接入真实 HTTP bridge 时，建议把：
+
+- `accepted` 映射为当前 `ActionStatus.ACCEPTED`
+- `rejected` 映射为可恢复失败，并保留 `error_code`
+- `failed` 映射为中断或基础设施错误，触发 fail-closed
+
+## 推荐的 Python 适配点
+
+当前仓库还没有真实 `HttpGameBridge`。后续实现时，建议最少补齐以下逻辑：
+
+- `attach_or_start()`: 探测本地 loopback bridge 是否在线。
+- `get_snapshot()`: 调用 `GET /snapshot`。
+- `get_legal_actions()`: 调用 `GET /actions`。
+- `submit_action()`: 调用 `POST /apply`，并把返回结果转换为 `ActionResult`。
+- `stop()` / `reset()`: 真实 STS2 bridge 目前没有对应远程生命周期接口，可先在适配层定义为 no-op 或仅清理本地状态。
+
+## agent 侧需要保留的防御性策略
+
+- 对每次决策都重新拉取 `snapshot` 与 `actions`，不要缓存跨窗口动作。
+- 当 `/health` 显示 `read_only=true` 时，只做观测，不提交动作。
+- 收到 `stale_decision`、`illegal_action`、`runtime_not_ready` 时，应重新读取状态而不是重试旧动作。
+- 收到 `failed` 或连接错误时，应让 orchestrator fail-closed，避免连续误操作。
+
+## 当前仍未覆盖的真实窗口
+
+以下窗口仍应视为后续扩展点，而不是首版能力：
+
+- 商店购买
+- 事件分支
+- 篝火操作
+- 遗物交互
+- 药水使用与复杂目标选择
+
+因此，agent 设计上应允许“窗口可读但不可写”的阶段存在，不要假设每个 `phase` 都有可执行动作。

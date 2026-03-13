@@ -47,6 +47,6 @@ static BridgeOptions ParseArgs(string[] args)
         Sts2ModLoaderDir = values.GetValueOrDefault("sts2-modloader-dir"),
         PreferRuntimeProvider = string.Equals(values.GetValueOrDefault("prefer-runtime-provider"), "true", StringComparison.OrdinalIgnoreCase),
         AllowDebugPhaseOverride = !string.Equals(values.GetValueOrDefault("allow-debug-phase-override"), "false", StringComparison.OrdinalIgnoreCase),
-        ReadOnly = true,
+        ReadOnly = !string.Equals(values.GetValueOrDefault("read-only"), "false", StringComparison.OrdinalIgnoreCase),
     };
 }

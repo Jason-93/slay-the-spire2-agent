@@ -5,6 +5,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.request import urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,22 +29,42 @@ def wait_for_server() -> None:
     raise RuntimeError("bridge server did not become healthy in time")
 
 
+def resolve_host_dll() -> Path:
+    candidates = sorted(
+        (ROOT / "mod" / "Sts2Mod.StateBridge.Host" / "bin" / "Debug").glob("net*/Sts2Mod.StateBridge.Host.dll"),
+        reverse=True,
+    )
+    if not candidates:
+        raise FileNotFoundError("could not find Sts2Mod.StateBridge.Host.dll; build the solution first")
+    return candidates[0]
+
+
+def post_json(path: str, payload: dict) -> tuple[int, dict]:
+    import urllib.request
+
+    request = urllib.request.Request(
+        BASE_URL + path,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=5) as response:
+            return response.status, json.loads(response.read().decode("utf-8"))
+    except HTTPError as ex:
+        return ex.code, json.loads(ex.read().decode("utf-8"))
+
+
 def main() -> int:
     command = [
         "dotnet",
-        str(
-            ROOT
-            / "mod"
-            / "Sts2Mod.StateBridge.Host"
-            / "bin"
-            / "Debug"
-            / "net8.0"
-            / "Sts2Mod.StateBridge.Host.dll"
-        ),
+        str(resolve_host_dll()),
         "--port",
         str(PORT),
         "--game-version",
         "prototype",
+        "--read-only",
+        "false",
     ]
     process = subprocess.Popen(command, cwd=ROOT)
     try:
@@ -61,6 +82,32 @@ def main() -> int:
             else:
                 assert snapshot["terminal"] is False
                 assert len(actions) >= 1
+        combat_snapshot = fetch("/snapshot?phase=combat")
+        combat_actions = fetch("/actions?phase=combat")
+        status_code, apply_response = post_json(
+            "/apply",
+            {
+                "decision_id": combat_snapshot["decision_id"],
+                "action_id": combat_actions[0]["action_id"],
+                "params": {},
+            },
+        )
+        assert status_code == 200
+        assert apply_response["status"] == "accepted"
+        reward_snapshot = fetch("/snapshot")
+        assert reward_snapshot["phase"] == "reward"
+
+        status_code, stale_response = post_json(
+            "/apply",
+            {
+                "decision_id": combat_snapshot["decision_id"],
+                "action_id": combat_actions[0]["action_id"],
+                "params": {},
+            },
+        )
+        assert status_code == 409
+        assert stale_response["status"] == "rejected"
+        assert stale_response["error_code"] == "stale_decision"
         print("mod bridge validation passed")
         return 0
     finally:

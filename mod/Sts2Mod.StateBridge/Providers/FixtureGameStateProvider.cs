@@ -49,12 +49,93 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
         return Export(requestedPhase).Actions;
     }
 
+    public ActionResponse ApplyAction(ActionRequest request)
+    {
+        if (_options.ReadOnly)
+        {
+            return Reject(request, "read_only", "Bridge is running in read-only mode.");
+        }
+
+        var exported = Export(null);
+        if (!string.Equals(request.DecisionId, exported.Snapshot.DecisionId, StringComparison.Ordinal))
+        {
+            return Reject(request, "stale_decision", "Requested decision_id is no longer current.");
+        }
+
+        var action = ResolveAction(exported.Actions, request);
+        if (action is null)
+        {
+            return Reject(request, "illegal_action", "Requested action is not part of the current legal action set.");
+        }
+
+        switch (action.Type)
+        {
+            case "play_card":
+            case "end_turn":
+                _currentPhase = DecisionPhase.Reward;
+                break;
+            case "choose_reward":
+            case "skip_reward":
+            case "skip":
+                _currentPhase = DecisionPhase.Map;
+                break;
+            case "choose_map_node":
+                _currentPhase = DecisionPhase.Combat;
+                break;
+            default:
+                return Reject(request, "unsupported_action", $"Fixture provider cannot execute action type '{action.Type}'.");
+        }
+
+        var nextSnapshot = Export(null).Snapshot;
+        return Accept(request, action, "Fixture action applied.", new Dictionary<string, object?>
+        {
+            ["next_decision_id"] = nextSnapshot.DecisionId,
+            ["next_phase"] = nextSnapshot.Phase,
+        });
+    }
+
     private ExportedWindow Export(string? requestedPhase)
     {
         var phase = ResolvePhase(requestedPhase);
         _currentPhase = phase;
         var context = _windows[phase];
         return _extractors[phase].Export(context, _sessionState);
+    }
+
+    private static LegalAction? ResolveAction(IEnumerable<LegalAction> actions, ActionRequest request)
+    {
+        if (!string.IsNullOrWhiteSpace(request.ActionId))
+        {
+            return actions.FirstOrDefault(action => string.Equals(action.ActionId, request.ActionId, StringComparison.Ordinal));
+        }
+
+        return actions.FirstOrDefault(action =>
+            string.Equals(action.Type, request.ActionType, StringComparison.OrdinalIgnoreCase) &&
+            request.Params.All(pair => action.Params.TryGetValue(pair.Key, out var value) && Equals(value, pair.Value)));
+    }
+
+    private static ActionResponse Reject(ActionRequest request, string errorCode, string message)
+    {
+        return new ActionResponse(
+            RequestId: request.RequestId ?? Guid.NewGuid().ToString("N"),
+            DecisionId: request.DecisionId,
+            ActionId: request.ActionId,
+            Status: "rejected",
+            ErrorCode: errorCode,
+            Message: message,
+            Metadata: new Dictionary<string, object?>());
+    }
+
+    private static ActionResponse Accept(ActionRequest request, LegalAction action, string message, IReadOnlyDictionary<string, object?> metadata)
+    {
+        return new ActionResponse(
+            RequestId: request.RequestId ?? Guid.NewGuid().ToString("N"),
+            DecisionId: request.DecisionId,
+            ActionId: action.ActionId,
+            Status: "accepted",
+            ErrorCode: null,
+            Message: message,
+            Metadata: metadata);
     }
 
     private string ResolvePhase(string? requestedPhase)
@@ -125,7 +206,7 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                 {
                     new RuntimeActionDefinition("choose_reward", "Choose Inflame", new Dictionary<string, object?> { ["reward"] = "Inflame" }),
                     new RuntimeActionDefinition("choose_reward", "Choose Pommel Strike", new Dictionary<string, object?> { ["reward"] = "Pommel Strike" }),
-                    new RuntimeActionDefinition("skip", "Skip Reward", new Dictionary<string, object?>()),
+                    new RuntimeActionDefinition("skip_reward", "Skip Reward", new Dictionary<string, object?>()),
                 }),
             [DecisionPhase.Map] = new RuntimeWindowContext(
                 DecisionPhase.Map,

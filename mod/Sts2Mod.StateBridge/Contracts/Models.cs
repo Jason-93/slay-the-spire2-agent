@@ -71,6 +71,22 @@ public sealed record HealthResponse(
     bool ReadOnly,
     string Status);
 
+public sealed record ActionRequest(
+    string DecisionId,
+    string? ActionId,
+    string? ActionType,
+    IReadOnlyDictionary<string, object?> Params,
+    string? RequestId = null);
+
+public sealed record ActionResponse(
+    string RequestId,
+    string DecisionId,
+    string? ActionId,
+    string Status,
+    string? ErrorCode,
+    string Message,
+    IReadOnlyDictionary<string, object?> Metadata);
+
 public sealed record ErrorResponse(string ErrorCode, string Message, string? TraceId = null);
 
 public sealed record ExportedWindow(DecisionSnapshot Snapshot, IReadOnlyList<LegalAction> Actions);

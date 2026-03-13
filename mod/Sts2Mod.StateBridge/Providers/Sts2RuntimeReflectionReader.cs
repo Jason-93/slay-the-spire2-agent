@@ -12,6 +12,17 @@ internal sealed class RuntimeStatusReport(bool healthy, string status)
     public string Status { get; } = status;
 }
 
+internal sealed class RuntimeActionResult(bool accepted, string message, string? errorCode = null, IReadOnlyDictionary<string, object?>? metadata = null)
+{
+    public bool Accepted { get; } = accepted;
+
+    public string Message { get; } = message;
+
+    public string? ErrorCode { get; } = errorCode;
+
+    public IReadOnlyDictionary<string, object?> Metadata { get; } = metadata ?? new Dictionary<string, object?>();
+}
+
 internal sealed class Sts2RuntimeReflectionReader
 {
     private const string Sts2AssemblyName = "sts2";
@@ -47,6 +58,11 @@ internal sealed class Sts2RuntimeReflectionReader
             status: $"live runtime attached; phase={phase}; game_version={_probe.GameVersion ?? _options.GameVersion}");
     }
 
+    public bool IsAssemblyLoaded()
+    {
+        return FindSts2Assembly() is not null;
+    }
+
     public RuntimeWindowContext CaptureWindow()
     {
         var assembly = FindSts2Assembly()
@@ -64,6 +80,30 @@ internal sealed class Sts2RuntimeReflectionReader
             DecisionPhase.Map => BuildMapWindow(root.RunState),
             DecisionPhase.Terminal => BuildTerminalWindow(root.RunState),
             _ => BuildCombatWindow(root.RunState),
+        };
+    }
+
+    public RuntimeActionResult ExecuteAction(ActionRequest request, LegalAction action)
+    {
+        var assembly = FindSts2Assembly();
+        if (assembly is null)
+        {
+            return new RuntimeActionResult(false, "sts2 assembly is not loaded in the current process.", "runtime_not_ready");
+        }
+
+        if (!TryGetRuntimeRoot(assembly, out var root, out var status))
+        {
+            return new RuntimeActionResult(false, status, "runtime_not_ready");
+        }
+
+        return action.Type switch
+        {
+            "play_card" => ExecutePlayCard(root.RunState, request, action),
+            "end_turn" => ExecuteEndTurn(request),
+            "choose_reward" => ExecuteChooseReward(root.RunNode, request, action),
+            "skip_reward" => ExecuteSkipReward(root.RunNode, request),
+            "choose_map_node" => ExecuteChooseMapNode(request, action),
+            _ => new RuntimeActionResult(false, $"Action type '{action.Type}' is not supported yet.", "unsupported_action"),
         };
     }
 
@@ -669,4 +709,220 @@ internal sealed class Sts2RuntimeReflectionReader
     private readonly record struct RuntimeRoot(object GameInstance, object RunNode, object RunState);
 
     private readonly record struct HandCardDescriptor(string CardId, string Name, string? TargetType, bool Playable);
+
+    private RuntimeActionResult ExecutePlayCard(object runState, ActionRequest request, LegalAction action)
+    {
+        var player = GetPlayers(runState).FirstOrDefault();
+        var playerCombatState = GetMemberValue(player, "PlayerCombatState");
+        var hand = GetMemberValue(playerCombatState, "Hand");
+        var cardId = ConvertToText(GetDictionaryValue(action.Params, "card_id"));
+        if (string.IsNullOrWhiteSpace(cardId))
+        {
+            return new RuntimeActionResult(false, "Action does not contain a card_id.", "invalid_action");
+        }
+
+        var card = EnumerateObjects(GetMemberValue(hand, "Cards"))
+            .FirstOrDefault(candidate => string.Equals(ResolveCardId(candidate, 0), cardId, StringComparison.Ordinal));
+        if (card is null)
+        {
+            return new RuntimeActionResult(false, $"Card '{cardId}' is no longer in hand.", "stale_action");
+        }
+
+        object? target = null;
+        var targetId = ConvertToText(GetDictionaryValue(request.Params, "target_id"));
+        if (!string.IsNullOrWhiteSpace(targetId))
+        {
+            target = EnumerateObjects(GetMemberValue(GetCombatState(runState), "Enemies"))
+                .FirstOrDefault(enemy => string.Equals(ResolveEnemyId(enemy, 0), targetId, StringComparison.Ordinal));
+
+            if (target is null)
+            {
+                return new RuntimeActionResult(false, $"Target '{targetId}' is no longer available.", "invalid_target");
+            }
+        }
+
+        var tryManualPlay = card.GetType().GetMethod("TryManualPlay", BindingFlags.Public | BindingFlags.Instance);
+        if (tryManualPlay is null)
+        {
+            return new RuntimeActionResult(false, "Card.TryManualPlay is not available in this runtime.", "runtime_incompatible");
+        }
+
+        var played = tryManualPlay.Invoke(card, new[] { target }) as bool?;
+        if (played != true)
+        {
+            return new RuntimeActionResult(false, $"Card '{cardId}' could not be played.", "play_rejected");
+        }
+
+        return new RuntimeActionResult(true, $"Played card '{cardId}'.", metadata: new Dictionary<string, object?>
+        {
+            ["card_id"] = cardId,
+            ["target_id"] = targetId,
+        });
+    }
+
+    private RuntimeActionResult ExecuteEndTurn(ActionRequest request)
+    {
+        var managerType = FindSts2Assembly()?.GetType("MegaCrit.Sts2.Core.Combat.CombatManager");
+        var manager = GetMemberValue(managerType, "Instance");
+        var method = manager?.GetType().GetMethod("OnEndedTurnLocally", BindingFlags.Public | BindingFlags.Instance);
+        if (method is null || manager is null)
+        {
+            return new RuntimeActionResult(false, "CombatManager.OnEndedTurnLocally is not available.", "runtime_incompatible");
+        }
+
+        method.Invoke(manager, null);
+        return new RuntimeActionResult(true, "Ended the current turn.", metadata: new Dictionary<string, object?>
+        {
+            ["action_type"] = "end_turn",
+        });
+    }
+
+    private RuntimeActionResult ExecuteChooseReward(object runNode, ActionRequest request, LegalAction action)
+    {
+        var rewardScreen = GetRewardScreen(runNode);
+        if (rewardScreen is null)
+        {
+            return new RuntimeActionResult(false, "Rewards screen is not available.", "runtime_not_ready");
+        }
+
+        var rewardButtons = EnumerateObjects(GetMemberValue(rewardScreen, "_rewardButtons")).ToArray();
+        if (rewardButtons.Length == 0)
+        {
+            return new RuntimeActionResult(false, "No reward buttons are currently available.", "stale_action");
+        }
+
+        var rewardIndex = GetNullableIntFromObject(GetDictionaryValue(action.Params, "reward_index"));
+        var button = rewardIndex is not null && rewardIndex.Value >= 0 && rewardIndex.Value < rewardButtons.Length
+            ? rewardButtons[rewardIndex.Value]
+            : rewardButtons.FirstOrDefault();
+        if (button is null)
+        {
+            return new RuntimeActionResult(false, "Reward selection target is no longer available.", "stale_action");
+        }
+
+        var reward = GetMemberValue(button, "Reward");
+        var onSelectWrapper = reward?.GetType().GetMethod("OnSelectWrapper", BindingFlags.Public | BindingFlags.Instance);
+        var rewardCollectedFrom = rewardScreen.GetType().GetMethod("RewardCollectedFrom", BindingFlags.Public | BindingFlags.Instance);
+        if (reward is null || onSelectWrapper is null || rewardCollectedFrom is null)
+        {
+            return new RuntimeActionResult(false, "Reward selection hooks are not available.", "runtime_incompatible");
+        }
+
+        _ = onSelectWrapper.Invoke(reward, null);
+        rewardCollectedFrom.Invoke(rewardScreen, new[] { button });
+        return new RuntimeActionResult(true, "Selected reward.", metadata: new Dictionary<string, object?>
+        {
+            ["reward"] = ConvertToText(GetDictionaryValue(action.Params, "reward")),
+            ["reward_index"] = rewardIndex,
+        });
+    }
+
+    private RuntimeActionResult ExecuteSkipReward(object runNode, ActionRequest request)
+    {
+        var rewardScreen = GetRewardScreen(runNode);
+        if (rewardScreen is null)
+        {
+            return new RuntimeActionResult(false, "Rewards screen is not available.", "runtime_not_ready");
+        }
+
+        var rewardButtons = EnumerateObjects(GetMemberValue(rewardScreen, "_rewardButtons")).ToArray();
+        if (rewardButtons.Length == 0)
+        {
+            return new RuntimeActionResult(false, "No reward buttons are currently available.", "stale_action");
+        }
+
+        var button = rewardButtons[0];
+        var reward = GetMemberValue(button, "Reward");
+        var onSkipped = reward?.GetType().GetMethod("OnSkipped", BindingFlags.Public | BindingFlags.Instance);
+        var rewardSkippedFrom = rewardScreen.GetType().GetMethod("RewardSkippedFrom", BindingFlags.Public | BindingFlags.Instance);
+        if (reward is null || onSkipped is null || rewardSkippedFrom is null)
+        {
+            return new RuntimeActionResult(false, "Reward skip hooks are not available.", "runtime_incompatible");
+        }
+
+        onSkipped.Invoke(reward, null);
+        rewardSkippedFrom.Invoke(rewardScreen, new[] { button });
+        return new RuntimeActionResult(true, "Skipped current reward.", metadata: new Dictionary<string, object?>
+        {
+            ["action_type"] = "skip_reward",
+        });
+    }
+
+    private RuntimeActionResult ExecuteChooseMapNode(ActionRequest request, LegalAction action)
+    {
+        var mapScreenType = FindSts2Assembly()?.GetType("MegaCrit.Sts2.Core.Nodes.Screens.Map.NMapScreen");
+        var mapScreen = GetMemberValue(mapScreenType, "Instance");
+        if (mapScreen is null)
+        {
+            return new RuntimeActionResult(false, "Map screen is not available.", "runtime_not_ready");
+        }
+
+        var node = ConvertToText(GetDictionaryValue(action.Params, "node"));
+        if (string.IsNullOrWhiteSpace(node))
+        {
+            return new RuntimeActionResult(false, "Action does not contain a node label.", "invalid_action");
+        }
+
+        var coord = ParseMapCoord(node);
+        if (coord is null)
+        {
+            return new RuntimeActionResult(false, $"Could not parse map node '{node}'.", "invalid_action");
+        }
+
+        var mapCoordType = FindSts2Assembly()?.GetType("MegaCrit.Sts2.Core.Map.MapCoord");
+        var travelMethod = mapScreen.GetType().GetMethod("TravelToMapCoord", BindingFlags.Public | BindingFlags.Instance);
+        if (mapCoordType is null || travelMethod is null)
+        {
+            return new RuntimeActionResult(false, "Map travel hooks are not available.", "runtime_incompatible");
+        }
+
+        var mapCoord = Activator.CreateInstance(mapCoordType, coord.Value.Col, coord.Value.Row);
+        _ = travelMethod.Invoke(mapScreen, new[] { mapCoord });
+        return new RuntimeActionResult(true, $"Traveling to map node '{node}'.", metadata: new Dictionary<string, object?>
+        {
+            ["node"] = node,
+            ["coord"] = $"{coord.Value.Col},{coord.Value.Row}",
+        });
+    }
+
+    private static object? GetDictionaryValue(IReadOnlyDictionary<string, object?> dictionary, string key)
+    {
+        return dictionary.TryGetValue(key, out var value) ? value : null;
+    }
+
+    private static int? GetNullableIntFromObject(object? value)
+    {
+        if (value is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return Convert.ToInt32(value);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static (int Col, int Row)? ParseMapCoord(string nodeLabel)
+    {
+        var atIndex = nodeLabel.LastIndexOf('@');
+        if (atIndex < 0 || atIndex + 1 >= nodeLabel.Length)
+        {
+            return null;
+        }
+
+        var coordinate = nodeLabel[(atIndex + 1)..].Split(',');
+        if (coordinate.Length != 2 ||
+            !int.TryParse(coordinate[0], out var col) ||
+            !int.TryParse(coordinate[1], out var row))
+        {
+            return null;
+        }
+
+        return (col, row);
+    }
 }
