@@ -52,6 +52,27 @@ python tools/debug_sts2_mod.py install
 python tools/debug_sts2_mod.py debug --game-dir "F:\\SteamLibrary\\steamapps\\common\\Slay the Spire 2"
 ```
 
+### 真实 `POST /apply` 验证
+
+只读 discovery：
+
+```bash
+python tools/validate_live_apply.py
+```
+
+启动游戏并开启写入后做一次真实自动出牌验证：
+
+```bash
+python tools/validate_live_apply.py \
+  --launch \
+  --enable-writes \
+  --apply \
+  --allow-write \
+  --game-dir "F:\\SteamLibrary\\steamapps\\common\\Slay the Spire 2"
+```
+
+每次执行都会在 `tmp/live-apply-validation/<timestamp>/` 下输出结构化 artifacts，包括 `health.json`、`before_snapshot.json`、`before_actions.json`、`apply_request.json`、`apply_response.json`、`after_snapshot.json`、`after_actions.json` 和 `result.json`。
+
 ## Bridge 接口
 
 mod 成功注入后，会在本地暴露以下接口：
@@ -62,6 +83,8 @@ mod 成功注入后，会在本地暴露以下接口：
 - `POST /apply`：提交动作
 
 默认以只读模式启动；如需真实执行动作，需显式开启写入能力。
+
+`tools/validate_live_apply.py` 会额外要求 `--allow-write` 显式确认，避免误发真实动作。
 
 ## 当前进度
 

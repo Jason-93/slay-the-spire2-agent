@@ -6,6 +6,7 @@
 - `mod/Sts2Mod.StateBridge.Host/`: 本地宿主进程，便于在 `fixture` 或 `runtime-host` 模式下联调。
 - `mod/Sts2Mod.StateBridge.sln`: C# 解决方案入口。
 - `tools/validate_mod_bridge.py`: 最小闭环校验脚本，会验证 `health`、`snapshot`、`actions` 和 `POST /apply`。
+- `tools/validate_live_apply.py`: 真实游戏内的 live discovery / apply 验证脚本，会输出可复盘 artifacts。
 
 ## 运行模式
 
@@ -142,6 +143,50 @@ python tools/debug_sts2_mod.py debug --enable-writes
 - `install`：把 `.pck`、DLL、manifest 复制到游戏 `mods/Sts2Mod.StateBridge/`
 - `debug`：执行构建 + 安装 + 启动游戏，并轮询 `http://127.0.0.1:17654/health`
 - 可通过 `--game-dir` 覆盖默认游戏路径，也可设置环境变量 `STS2_GAME_DIR`
+
+### 真实 live apply 验证
+
+默认 discovery 只读探测：
+
+```bash
+python tools/validate_live_apply.py
+```
+
+如果要让脚本自动构建、安装、启动游戏，并在 live bridge 上执行一次真实 `POST /apply`：
+
+```bash
+python tools/validate_live_apply.py \
+  --launch \
+  --enable-writes \
+  --apply \
+  --allow-write \
+  --game-dir "F:\SteamLibrary\steamapps\common\Slay the Spire 2"
+```
+
+关键约束：
+
+- 不传 `--apply` 时，脚本只做 discovery，不会修改游戏状态。
+- 传了 `--apply` 也必须再传 `--allow-write`，否则脚本会拒绝发送真实写请求。
+- bridge `/health` 仍然必须返回 `read_only=false`，否则验证会被安全拒绝。
+- 默认优先选择无需目标的 `play_card`；若当前没有安全出牌动作，会回退到更低风险动作，或直接返回 `no_candidate`。
+
+每次执行都会落盘到 `tmp/live-apply-validation/<timestamp>/`，至少包含：
+
+- `health.json`
+- `before_snapshot.json`
+- `before_actions.json`
+- `candidate.json`
+- `apply_request.json` / `apply_response.json`（仅 apply 模式）
+- `after_snapshot.json` / `after_actions.json`（仅 apply 模式）
+- `result.json`
+
+`result.json` 的常见结论：
+
+- `discovery_only`：完成只读探测，未发起写入
+- `no_candidate`：当前窗口没有满足默认安全策略的动作
+- `success`：请求被接受，且观测到 live 状态推进
+- `inconclusive`：请求被接受，但超时窗口内未观测到明确推进
+- `rejected` / `failed`：安全校验、协议或运行时失败
 
 ### 真实游戏手工联调
 
