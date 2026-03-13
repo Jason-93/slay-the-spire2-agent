@@ -362,7 +362,7 @@ internal sealed class Sts2RuntimeReflectionReader
                     "Title",
                     "Name");
                 return new HandCardDescriptor(
-                    ResolveCardId(card, index),
+                    RuntimeCardIdentity.CreateCardId(card, index),
                     nameResolution.Text ?? $"card_{index}",
                     nameResolution,
                     ConvertToText(GetMemberValue(card, "TargetType")),
@@ -375,7 +375,7 @@ internal sealed class Sts2RuntimeReflectionReader
     {
         return EnumerateObjects(GetMemberValue(pile, "Cards"))
             .Select((card, index) => new RuntimeCard(
-                CardId: ResolveCardId(card, index),
+                CardId: RuntimeCardIdentity.CreateCardId(card, index),
                 Name: ConvertToText(GetMemberValue(card, "Title") ?? GetMemberValue(card, "Name") ?? card, $"{path}[{index}].name", textDiagnostics, "Title", "Name")
                       ?? $"card_{index}",
                 Cost: ResolveCardCost(card),
@@ -523,14 +523,6 @@ internal sealed class Sts2RuntimeReflectionReader
     {
         return AppDomain.CurrentDomain.GetAssemblies()
             .FirstOrDefault(assembly => string.Equals(assembly.GetName().Name, Sts2AssemblyName, StringComparison.OrdinalIgnoreCase));
-    }
-
-    private static string ResolveCardId(object? card, int index)
-    {
-        return ConvertToText(GetMemberValue(card, "ModelId"))
-               ?? ConvertToText(GetMemberValue(card, "Title"))
-               ?? ConvertToText(GetMemberValue(card, "Name"))
-               ?? $"card_{index}";
     }
 
     private static int ResolveCardCost(object? card)
@@ -735,7 +727,9 @@ internal sealed class Sts2RuntimeReflectionReader
         }
 
         var card = EnumerateObjects(GetMemberValue(hand, "Cards"))
-            .FirstOrDefault(candidate => string.Equals(ResolveCardId(candidate, 0), cardId, StringComparison.Ordinal));
+            .Select((candidate, index) => new { Card = candidate, CardId = RuntimeCardIdentity.CreateCardId(candidate, index) })
+            .FirstOrDefault(candidate => string.Equals(candidate.CardId, cardId, StringComparison.Ordinal))
+            ?.Card;
         if (card is null)
         {
             return new RuntimeActionResult(false, $"Card '{cardId}' is no longer in hand.", "stale_action");
