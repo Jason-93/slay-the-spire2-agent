@@ -1,4 +1,4 @@
-﻿## ADDED Requirements
+## ADDED Requirements
 
 ### Requirement: Mod 必须提供本地只读 bridge 健康检查接口
 系统 MUST 提供本机 loopback 可访问的健康检查接口，用于返回 bridge 服务是否已启动、当前 mod 版本和协议版本。

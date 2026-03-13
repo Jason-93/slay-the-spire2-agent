@@ -1,4 +1,4 @@
-﻿# STS2 mod 与 Python agent 的兼容性说明
+# STS2 mod 与 Python agent 的兼容性说明
 
 ## 已对齐的核心协议
 

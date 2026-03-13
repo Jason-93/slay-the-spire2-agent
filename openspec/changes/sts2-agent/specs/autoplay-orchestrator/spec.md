@@ -1,4 +1,4 @@
-﻿## ADDED Requirements
+## ADDED Requirements
 
 ### Requirement: Orchestrator 逐步执行策略驱动的自动打牌
 系统 MUST 运行一个 autoplay 循环：读取 bridge 提供的最新快照和合法动作，调用已配置 policy，提交一个被选择的动作，并持续重复直到会话结束或满足人工停止条件。

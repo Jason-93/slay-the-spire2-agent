@@ -1,4 +1,4 @@
-﻿# 原型 bridge 校验记录
+# 原型 bridge 校验记录
 
 当前最小验证脚本为 `tools/validate_mod_bridge.py`，默认启动 `Sts2Mod.StateBridge.Host` 的 `fixture` 模式，并执行一轮读写闭环检查。
 

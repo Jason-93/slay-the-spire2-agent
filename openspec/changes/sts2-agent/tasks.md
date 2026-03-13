@@ -1,4 +1,4 @@
-﻿## 1. 协议基础
+## 1. 协议基础
 
 - [x] 1.1 定义 STS2 agent 契约所需的 observation、legal action、action result、trace 等版本化数据模型
 - [x] 1.2 为战斗、奖励选择、地图选择、终局等核心决策窗口补充 capability 级说明或 schema fixture

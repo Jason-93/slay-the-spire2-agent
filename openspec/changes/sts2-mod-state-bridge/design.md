@@ -1,4 +1,4 @@
-﻿## 背景
+## 背景
 
 当前仓库已经有了 agent 侧协议模型与原型 orchestrator，但真实游戏输入仍然依赖 fixture。要真正把 Slay the Spire 2 接到 agent 上，必须先补上游戏侧 mod：它既要读到游戏内部对象，又要把这些对象稳定转换成 agent 能消费的结构化数据。
 
