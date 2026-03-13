@@ -1,4 +1,4 @@
-﻿## 1. 游戏内 mod 挂载
+## 1. 游戏内 mod 挂载
 
 - [x] 1.1 确认可用的 STS2 mod loader 入口，并补齐游戏内 bootstrap 初始化代码
 - [x] 1.2 让 `Sts2Mod.StateBridge` 能随游戏进程启动、停止，并区分 `fixture`、`runtime-host`、`in-game-runtime` 模式

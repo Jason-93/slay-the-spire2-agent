@@ -1,5 +1,8 @@
-## ADDED Requirements
+# in-game-runtime-bridge Specification
 
+## Purpose
+定义 STS2 bridge 作为真实游戏内 mod 运行时的状态导出约束，确保 live `health`、`snapshot`、`actions` 在受控线程上下文中稳定可用。
+## Requirements
 ### Requirement: 游戏内 mod 必须暴露 live runtime bridge
 系统 MUST 能以真实 STS2 mod 的形式运行在游戏进程内，并通过 loopback bridge 对外暴露 live `health`、`snapshot`、`actions` 能力。该 bridge SHALL 复用统一的决策窗口模型，并在游戏内无活动 run、运行时未就绪或版本不兼容时返回可诊断状态，而不是崩溃或阻塞游戏。
 

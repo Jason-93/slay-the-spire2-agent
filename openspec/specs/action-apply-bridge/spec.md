@@ -1,5 +1,8 @@
-## ADDED Requirements
+# action-apply-bridge Specification
 
+## Purpose
+定义 STS2 bridge 的外部动作提交协议、合法性校验和受控执行语义，确保 agent 可以基于当前决策上下文安全地提交动作并获得明确回执。
+## Requirements
 ### Requirement: bridge 必须支持外部动作提交与决策校验
 系统 MUST 提供 `apply action` 能力，允许外部 agent 基于当前 `decision_id` 提交动作请求。bridge MUST 在执行前校验 `read_only` 开关、`decision_id`、当前 phase 与 legal action 集合，并对拒绝原因返回明确的结构化结果。
 

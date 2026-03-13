@@ -1,4 +1,4 @@
-﻿## Context
+## Context
 
 当前仓库已经具备三块基础能力：
 1. Python 侧 `sts2-agent` 原型，可消费 `DecisionSnapshot` / `LegalAction` 协议；
