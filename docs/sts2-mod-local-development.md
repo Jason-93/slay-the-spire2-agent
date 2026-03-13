@@ -128,6 +128,21 @@ python tools/validate_mod_pck.py
 - `.pck`、DLL 与 manifest 已一起生成
 - `.pck` 内可检测到 `res://mod_manifest.json`
 
+### 一键安装与调试
+
+```bash
+python tools/debug_sts2_mod.py build
+python tools/debug_sts2_mod.py install
+python tools/debug_sts2_mod.py debug --enable-writes
+```
+
+说明：
+
+- `build`：使用真实 STS2 引用重新构建 mod，并生成 `.pck`
+- `install`：把 `.pck`、DLL、manifest 复制到游戏 `mods/Sts2Mod.StateBridge/`
+- `debug`：执行构建 + 安装 + 启动游戏，并轮询 `http://127.0.0.1:17654/health`
+- 可通过 `--game-dir` 覆盖默认游戏路径，也可设置环境变量 `STS2_GAME_DIR`
+
 ### 真实游戏手工联调
 
 1. 以真实引用重新构建 bridge。
