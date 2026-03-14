@@ -135,8 +135,11 @@ public sealed class CombatWindowExtractor : WindowExtractorBase
         var metadata = new Dictionary<string, object?>(context.Metadata)
         {
             ["supports_targeting"] = true,
-            ["window_kind"] = "player_turn"
         };
+        if (!metadata.ContainsKey("window_kind"))
+        {
+            metadata["window_kind"] = "player_turn";
+        }
         return metadata;
     }
 }
@@ -150,8 +153,11 @@ public sealed class RewardWindowExtractor : WindowExtractorBase
         var metadata = new Dictionary<string, object?>(context.Metadata)
         {
             ["reward_count"] = context.Rewards.Count,
-            ["window_kind"] = "reward_choice"
         };
+        if (!metadata.ContainsKey("window_kind"))
+        {
+            metadata["window_kind"] = "reward_choice";
+        }
         return metadata;
     }
 }

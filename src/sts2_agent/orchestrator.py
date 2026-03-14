@@ -997,10 +997,10 @@ class AutoplayOrchestrator:
         step_index: int,
         current_turn_actions: int,
         total_actions: int,
-            stale_action_attempts: int,
-            consecutive_failures: int,
-            pending_end_turn_transition: tuple[str, int] | None,
-            summary: RunSummary | None,
+        stale_action_attempts: int,
+        consecutive_failures: int,
+        pending_end_turn_transition: tuple[str, int] | None,
+        summary: RunSummary | None,
     ) -> dict[str, object]:
         return {
             "step_index": step_index,

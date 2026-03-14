@@ -29,6 +29,8 @@ internal sealed class Sts2RuntimeReflectionReader
     private const string Sts2AssemblyName = "sts2";
     private const string NGameTypeName = "MegaCrit.Sts2.Core.Nodes.NGame";
     private const string NRunTypeName = "MegaCrit.Sts2.Core.Nodes.NRun";
+    private const string OverlayStackTypeName = "MegaCrit.Sts2.Core.Nodes.Screens.Overlays.NOverlayStack";
+    private const string RewardScreenTypeName = "MegaCrit.Sts2.Core.Nodes.Screens.NRewardsScreen";
     private readonly BridgeOptions _options;
     private readonly InstallationProbeResult _probe;
 
@@ -80,7 +82,7 @@ internal sealed class Sts2RuntimeReflectionReader
             DecisionPhase.Reward => BuildRewardWindow(root.RunNode, root.RunState),
             DecisionPhase.Map => BuildMapWindow(root.RunState),
             DecisionPhase.Terminal => BuildTerminalWindow(root.RunState),
-            _ => BuildCombatWindow(root.RunState),
+            _ => BuildCombatWindow(root.RunNode, root.RunState),
         };
     }
 
@@ -108,14 +110,31 @@ internal sealed class Sts2RuntimeReflectionReader
         };
     }
 
-    private RuntimeWindowContext BuildCombatWindow(object runState)
+    private RuntimeWindowContext BuildCombatWindow(object runNode, object runState)
     {
         var textDiagnostics = new TextDiagnosticsCollector();
         var player = BuildPlayerState(runState, textDiagnostics);
         var enemies = BuildEnemies(runState, textDiagnostics);
         var metadata = CreateBaseMetadata(runState, DecisionPhase.Combat);
+        var rewardAnalysis = AnalyzeRewardPhase(runNode, runState);
+        metadata["phase_detection"] = rewardAnalysis.ToMetadata();
         var actions = new List<RuntimeActionDefinition>();
         var liveEnemyIds = enemies.Where(enemy => enemy.IsAlive).Select(enemy => enemy.EnemyId).ToArray();
+        if (liveEnemyIds.Length == 0)
+        {
+            metadata["window_kind"] = "combat_transition";
+            metadata["reward_pending"] = true;
+            metadata["text_diagnostics"] = textDiagnostics.ToMetadata();
+            return new RuntimeWindowContext(
+                DecisionPhase.Combat,
+                player,
+                enemies,
+                Array.Empty<string>(),
+                Array.Empty<string>(),
+                Terminal: false,
+                Metadata: metadata,
+                Actions: Array.Empty<RuntimeActionDefinition>());
+        }
 
         foreach (var card in GetHandCardDescriptors(runState, textDiagnostics).Where(card => card.Playable))
         {
@@ -176,6 +195,7 @@ internal sealed class Sts2RuntimeReflectionReader
         var rewards = ExtractRewards(runNode, textDiagnostics);
         var player = BuildPlayerState(runState, textDiagnostics);
         var metadata = CreateBaseMetadata(runState, DecisionPhase.Reward);
+        metadata["phase_detection"] = AnalyzeRewardPhase(runNode, runState).ToMetadata();
         metadata["reward_count"] = rewards.Count;
         var actions = rewards
             .Select((reward, index) =>
@@ -397,7 +417,7 @@ internal sealed class Sts2RuntimeReflectionReader
             return new List<RewardOption>();
         }
 
-        return EnumerateObjects(GetMemberValue(rewardScreen, "_rewardButtons"))
+        return GetRewardButtons(rewardScreen)
             .Select((button, index) => DescribeReward(GetMemberValue(button, "Reward"), $"rewards[{index}]", textDiagnostics))
             .OfType<RewardOption>()
             .Where(reward => !string.IsNullOrWhiteSpace(reward.Label))
@@ -481,12 +501,6 @@ internal sealed class Sts2RuntimeReflectionReader
             return DecisionPhase.Terminal;
         }
 
-        var rewardScreen = GetRewardScreen(runNode);
-        if (rewardScreen is not null && !GetBoolean(rewardScreen, "IsComplete"))
-        {
-            return DecisionPhase.Reward;
-        }
-
         var screenTracker = GetMemberValue(runNode, "ScreenStateTracker");
         if (GetBoolean(screenTracker, "_mapScreenVisible"))
         {
@@ -499,13 +513,144 @@ internal sealed class Sts2RuntimeReflectionReader
             return DecisionPhase.Map;
         }
 
+        if (AnalyzeRewardPhase(runNode, runState).TreatAsReward)
+        {
+            return DecisionPhase.Reward;
+        }
+
         return DecisionPhase.Combat;
     }
 
     private object? GetRewardScreen(object runNode)
     {
         var screenTracker = GetMemberValue(runNode, "ScreenStateTracker");
-        return GetMemberValue(screenTracker, "_connectedRewardsScreen");
+        var trackerRewardScreen = GetMemberValue(screenTracker, "_connectedRewardsScreen")
+                                  ?? GetMemberValue(screenTracker, "ConnectedRewardsScreen")
+                                  ?? GetMemberValue(screenTracker, "_rewardScreen")
+                                  ?? GetMemberValue(screenTracker, "RewardScreen");
+        if (trackerRewardScreen is not null)
+        {
+            return trackerRewardScreen;
+        }
+
+        var overlayRewardScreen = GetOverlayRewardScreen(runNode);
+        if (overlayRewardScreen is not null)
+        {
+            return overlayRewardScreen;
+        }
+
+        return GetMemberValue(GetRewardScreenType(), "Instance");
+    }
+
+    private RewardPhaseAnalysis AnalyzeRewardPhase(object runNode, object runState)
+    {
+        var rewardScreen = GetRewardScreen(runNode);
+        var rewardButtons = GetRewardButtons(rewardScreen).ToArray();
+        var hasRewardScreen = rewardScreen is not null;
+        var rewardScreenComplete = hasRewardScreen && GetBoolean(rewardScreen, "IsComplete");
+        var rewardScreenVisible = hasRewardScreen && IsRewardScreenVisible(runNode, rewardScreen!);
+        var hasLiveEnemies = BuildEnemies(runState, new TextDiagnosticsCollector()).Any(enemy => enemy.IsAlive);
+        var treatAsReward = hasRewardScreen &&
+                            (!rewardScreenComplete ||
+                             rewardButtons.Length > 0 ||
+                             rewardScreenVisible ||
+                             !hasLiveEnemies);
+
+        return new RewardPhaseAnalysis(
+            TreatAsReward: treatAsReward,
+            HasRewardScreen: hasRewardScreen,
+            RewardScreenComplete: rewardScreenComplete,
+            RewardScreenVisible: rewardScreenVisible,
+            RewardButtonCount: rewardButtons.Length,
+            HasLiveEnemies: hasLiveEnemies,
+            RewardScreenSource: ResolveRewardScreenSource(runNode, rewardScreen));
+    }
+
+    private IEnumerable<object> GetRewardButtons(object? rewardScreen)
+    {
+        return EnumerateObjects(
+            GetMemberValue(rewardScreen, "_rewardButtons")
+            ?? GetMemberValue(rewardScreen, "RewardButtons")
+            ?? GetMemberValue(rewardScreen, "Buttons"));
+    }
+
+    private static bool IsRewardScreenVisible(object runNode, object rewardScreen)
+    {
+        var screenTracker = GetMemberValue(runNode, "ScreenStateTracker");
+        return GetBoolean(screenTracker, "_rewardScreenVisible") ||
+               GetBoolean(screenTracker, "RewardScreenVisible") ||
+               GetBoolean(rewardScreen, "Visible") ||
+               GetBoolean(rewardScreen, "IsVisible") ||
+               InvokeBooleanMethod(rewardScreen, "IsVisibleInTree");
+    }
+
+    private object? GetOverlayRewardScreen(object runNode)
+    {
+        var overlayStack = GetOverlayStack(runNode);
+        var overlayScreen = TryInvokeParameterlessMethod(overlayStack, "Peek");
+        return IsRewardScreenObject(overlayScreen) ? overlayScreen : null;
+    }
+
+    private object? GetOverlayStack(object runNode)
+    {
+        var globalUi = GetMemberValue(runNode, "GlobalUi");
+        return GetMemberValue(globalUi, "Overlays")
+               ?? GetMemberValue(GetOverlayStackType(), "Instance");
+    }
+
+    private Type? GetOverlayStackType()
+    {
+        return FindSts2Assembly()?.GetType(OverlayStackTypeName);
+    }
+
+    private Type? GetRewardScreenType()
+    {
+        return FindSts2Assembly()?.GetType(RewardScreenTypeName);
+    }
+
+    private string ResolveRewardScreenSource(object runNode, object? rewardScreen)
+    {
+        if (rewardScreen is null)
+        {
+            return "none";
+        }
+
+        var screenTracker = GetMemberValue(runNode, "ScreenStateTracker");
+        var trackerRewardScreen = GetMemberValue(screenTracker, "_connectedRewardsScreen")
+                                  ?? GetMemberValue(screenTracker, "ConnectedRewardsScreen")
+                                  ?? GetMemberValue(screenTracker, "_rewardScreen")
+                                  ?? GetMemberValue(screenTracker, "RewardScreen");
+        if (ReferenceEquals(trackerRewardScreen, rewardScreen))
+        {
+            return "screen_state_tracker";
+        }
+
+        var overlayRewardScreen = GetOverlayRewardScreen(runNode);
+        if (ReferenceEquals(overlayRewardScreen, rewardScreen))
+        {
+            return "overlay_stack";
+        }
+
+        if (ReferenceEquals(GetMemberValue(GetRewardScreenType(), "Instance"), rewardScreen))
+        {
+            return "reward_screen_instance";
+        }
+
+        return "other";
+    }
+
+    private static bool IsRewardScreenObject(object? target)
+    {
+        if (target is null)
+        {
+            return false;
+        }
+
+        var typeName = GetTypeName(target);
+        return string.Equals(typeName, RewardScreenTypeName, StringComparison.Ordinal) ||
+               string.Equals(target.GetType().Name, "NRewardsScreen", StringComparison.Ordinal) ||
+               GetMemberValue(target, "_rewardButtons") is not null ||
+               GetMemberValue(target, "RewardButtons") is not null;
     }
 
     private object? GetCombatState(object runState)
@@ -653,6 +798,29 @@ internal sealed class Sts2RuntimeReflectionReader
         }
     }
 
+    private static object? TryInvokeParameterlessMethod(object? target, string methodName)
+    {
+        if (target is null)
+        {
+            return null;
+        }
+
+        var method = target.GetType().GetMethod(methodName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance, null, Type.EmptyTypes, null);
+        if (method is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return method.Invoke(target, null);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private static IEnumerable<object> EnumerateObjects(object? source)
     {
         if (source is null)
@@ -688,6 +856,12 @@ internal sealed class Sts2RuntimeReflectionReader
         return value is bool boolean ? boolean : defaultValue;
     }
 
+    private static bool InvokeBooleanMethod(object? target, string methodName, bool defaultValue = false)
+    {
+        var value = TryInvokeParameterlessMethod(target, methodName);
+        return value is bool boolean ? boolean : defaultValue;
+    }
+
     private static int? GetNullableInt(object? target, string memberName)
     {
         var value = GetMemberValue(target, memberName);
@@ -715,6 +889,29 @@ internal sealed class Sts2RuntimeReflectionReader
 
     private readonly record struct HandCardDescriptor(string CardId, string Name, TextResolutionResult NameResolution, string? TargetType, bool Playable);
     private readonly record struct RewardOption(string Label, TextResolutionResult Resolution);
+    private readonly record struct RewardPhaseAnalysis(
+        bool TreatAsReward,
+        bool HasRewardScreen,
+        bool RewardScreenComplete,
+        bool RewardScreenVisible,
+        int RewardButtonCount,
+        bool HasLiveEnemies,
+        string RewardScreenSource)
+    {
+        public IReadOnlyDictionary<string, object?> ToMetadata()
+        {
+            return new Dictionary<string, object?>
+            {
+                ["treat_as_reward"] = TreatAsReward,
+                ["has_reward_screen"] = HasRewardScreen,
+                ["reward_screen_complete"] = RewardScreenComplete,
+                ["reward_screen_visible"] = RewardScreenVisible,
+                ["reward_button_count"] = RewardButtonCount,
+                ["has_live_enemies"] = HasLiveEnemies,
+                ["reward_screen_source"] = RewardScreenSource,
+            };
+        }
+    }
 
     private RuntimeActionResult ExecutePlayCard(object runState, ActionRequest request, LegalAction action)
     {
@@ -798,7 +995,7 @@ internal sealed class Sts2RuntimeReflectionReader
             return new RuntimeActionResult(false, "Rewards screen is not available.", "runtime_not_ready");
         }
 
-        var rewardButtons = EnumerateObjects(GetMemberValue(rewardScreen, "_rewardButtons")).ToArray();
+        var rewardButtons = GetRewardButtons(rewardScreen).ToArray();
         if (rewardButtons.Length == 0)
         {
             return new RuntimeActionResult(false, "No reward buttons are currently available.", "stale_action");
@@ -838,7 +1035,7 @@ internal sealed class Sts2RuntimeReflectionReader
             return new RuntimeActionResult(false, "Rewards screen is not available.", "runtime_not_ready");
         }
 
-        var rewardButtons = EnumerateObjects(GetMemberValue(rewardScreen, "_rewardButtons")).ToArray();
+        var rewardButtons = GetRewardButtons(rewardScreen).ToArray();
         if (rewardButtons.Length == 0)
         {
             return new RuntimeActionResult(false, "No reward buttons are currently available.", "stale_action");

@@ -138,3 +138,14 @@ python tools/validate_mod_bridge.py
 - 联调结论：
   - `PlayerCmd.EndTurn(...)` 已修复此前 `end_turn` accepted 但状态不推进的问题
   - 多步 runner 在真实战斗中已能跨多次 `stale_action` 竞争态恢复，并完成“玩家回合内连续出牌 -> 自动结束回合”的闭环
+
+### 2026-03-14（reward 窗口识别修复 live 冒烟）
+
+- 背景：曾出现“画面已进入奖励，但 bridge 仍导出 `phase=combat`、`window_kind=player_turn`、`actions=[end_turn]`”的误判。修复后引入 `combat_transition` 过渡态，并在 reward 已可见时稳定切换为 `phase=reward`。
+- 关键修复点：单人模式下 STS2 的 `ScreenStateTracker` 不会维护 `_connectedRewardsScreen`，因此改为从 `NOverlayStack.Peek()` 读取当前 overlay 的 `NRewardsScreen` 作为 reward screen 来源。
+- live snapshot 结果（bridge 端）：
+  - `phase = reward`
+  - `rewards = ["17金币", "将一张牌添加到你的牌组。"]`
+  - `actions = [choose_reward x2, skip_reward]`
+  - `metadata.phase_detection.reward_screen_source = "overlay_stack"`
+- 对应 artifacts：`tmp/reward-phase-detection/20260314-105321`
