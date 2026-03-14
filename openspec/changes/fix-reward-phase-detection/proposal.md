@@ -1,4 +1,4 @@
-﻿## Why
+## Why
 
 当前真实游戏里已经出现“玩家肉眼看到 reward 界面，但 bridge 仍导出 `phase = combat`、`window_kind = player_turn`、`legal_actions = [end_turn]`”的误判。这会让上层 autoplay runner 把战斗结束后的奖励窗口继续当作战斗尾帧处理，既影响状态可信度，也阻塞后续 reward 自动决策接入。
 

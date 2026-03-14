@@ -1,4 +1,4 @@
-﻿## Context
+## Context
 
 当前 live bridge 的 phase 判定主要依赖 `GetRewardScreen(runNode)` 与 `rewardScreen.IsComplete`。在真实联调中已经出现：游戏画面已进入 reward，但 runtime 仍导出 `phase = combat`、`window_kind = player_turn`、`legal_actions = [end_turn]`，同时 `enemies = []`。这说明 reward 检测存在窗口对象不稳定、生命周期边界过窄或过渡态遗漏的问题。
 
