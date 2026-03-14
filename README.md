@@ -27,6 +27,12 @@
 - Godot 4.5.1（用于生成与游戏兼容的 `.pck`）
 - 已安装的《Slay the Spire 2》Windows 版
 
+## 文档编码注意事项
+
+- 仓库内中文文档、OpenSpec artifacts 与说明文件统一使用 UTF-8 无 BOM。
+- 不要通过 PowerShell 文本管道写中文文件，例如 `@'...'@ | python -`；这类写法在当前环境下可能把中文写成 `???`。
+- 更新中文文档时，优先使用直接文件写入方式或 `apply_patch`。
+
 ## 常用命令
 
 ### Python 侧

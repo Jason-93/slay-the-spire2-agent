@@ -21,6 +21,7 @@
 ## Coding Style & Naming Conventions
 
 - Use UTF-8 without BOM for docs and OpenSpec files.
+- Do not write Chinese content through a PowerShell text pipe (for example `@'...'@ | python -`); it can corrupt characters into `???`. Use direct file writes or `apply_patch` instead.
 - Python: 4-space indentation, `snake_case` for functions/modules, `PascalCase` for dataclasses and classes.
 - C#: 4-space indentation, `PascalCase` for types/methods, `camelCase` for locals/fields, one public type per file when practical.
 - Keep comments sparse and only for non-obvious logic.

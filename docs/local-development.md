@@ -11,6 +11,12 @@
 - `src/sts2_agent/fixtures/`：战斗、奖励、地图、终局等决策窗口 fixture
 - `tests/`：协议与编排的回归测试
 
+## 文档写入注意事项
+
+- 中文文档与 OpenSpec 文件统一使用 UTF-8 无 BOM。
+- 避免通过 PowerShell 文本管道生成中文内容，例如 `@'...'@ | python -`；该写法可能把中文落盘成 `???`。
+- 需要批量改中文说明时，优先使用 `apply_patch` 或明确指定 UTF-8 的直接写文件方式。
+
 ## Bridge 入口与适配方式
 
 当前仓库提供的是 `MockGameBridge`，用于模拟 STS2 mod 的本地桥接能力。后续接入真实 mod 时，建议保留 `GameBridge` 抽象不变，只新增一个真实适配器，例如：
