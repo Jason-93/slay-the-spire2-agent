@@ -21,5 +21,5 @@
 
 - [x] 4.1 在 `mod/Sts2Mod.StateBridge.Host` 或 fixture provider 中加入可复现的“卡牌奖励选择界面”快照/动作样例，用于回归导出字段与 action 列表。
 - [x] 4.2 为新增的 reward 子窗口导出逻辑补充最小单测/集成测试，覆盖：phase 判定、rewards 非空、choose_reward 索引一致、skip_reward 条件导出。
-- [ ] 4.3 增加 live 冒烟步骤与 artifacts：进入 reward，选择“加牌”，确认二级选牌界面仍导出为 `phase=reward` 且可执行 `choose_reward|skip_reward`，并记录日志/trace 文件路径。
+- [x] 4.3 增加 live 冒烟步骤与 artifacts：进入 reward，选择“加牌”，确认二级选牌界面仍导出为 `phase=reward` 且可执行 `choose_reward|skip_reward`，并记录日志/trace 文件路径。（artifacts: `tmp/reward-card-selection-validation/20260314-125328`）
 - [x] 4.4 更新 `docs/prototype-validation.md`，写明该场景的验证命令、期望输出与常见失败诊断字段。

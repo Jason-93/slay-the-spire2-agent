@@ -175,3 +175,6 @@ python tools/validate_mod_bridge.py
 - live 冒烟（需要把游戏停在选牌二级界面）：
   - 只读 capture：`python tools/validate_reward_card_selection.py`
   - 如需真实选择一张牌（写入）：先以 `read_only=false` 且 `STS2_BRIDGE_ENABLE_WRITES=true` 启动游戏，再运行 `python tools/validate_reward_card_selection.py --apply --allow-write`
+  - 实测 artifacts：
+    - capture（仅导出）：`tmp/reward-card-selection-validation/20260314-125308`
+    - apply（真实 choose_reward）：`tmp/reward-card-selection-validation/20260314-125328`

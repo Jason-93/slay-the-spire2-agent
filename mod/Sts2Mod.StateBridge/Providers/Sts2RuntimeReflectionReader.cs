@@ -42,6 +42,8 @@ internal sealed class Sts2RuntimeReflectionReader
 
     private static readonly string[] CardRewardChoiceCollectionMembers =
     {
+        "_cardHolders",
+        "CardHolders",
         "_cards",
         "Cards",
         "_rewardCards",
@@ -62,6 +64,8 @@ internal sealed class Sts2RuntimeReflectionReader
     {
         "Card",
         "_card",
+        "CardModel",
+        "CardNode",
         "Reward",
         "_reward",
         "Value",
@@ -84,6 +88,7 @@ internal sealed class Sts2RuntimeReflectionReader
 
     private static readonly string[] CardRewardChoiceSkipMethodNames =
     {
+        "CancelFree",
         "Skip",
         "OnSkip",
         "OnSkipped",
@@ -533,7 +538,7 @@ internal sealed class Sts2RuntimeReflectionReader
 
     private List<RewardOption> ExtractCardRewardSelectionRewards(object cardRewardScreen, TextDiagnosticsCollector textDiagnostics)
     {
-        var choices = ExtractCardRewardChoiceItems(cardRewardScreen);
+        var choices = FilterCardRewardSelectionChoices(ExtractCardRewardChoiceItems(cardRewardScreen));
         if (choices.Count == 0)
         {
             return new List<RewardOption>();
@@ -552,6 +557,24 @@ internal sealed class Sts2RuntimeReflectionReader
         return options
             .Where(option => !string.IsNullOrWhiteSpace(option.Label))
             .ToList();
+    }
+
+    private List<object> FilterCardRewardSelectionChoices(List<object> choices)
+    {
+        if (choices.Count == 0)
+        {
+            return choices;
+        }
+
+        // If we already discovered holder-like nodes, drop entries that do not actually carry a card model/node.
+        if (choices.Any(choice => GetMemberValue(choice, "CardModel") is not null || GetMemberValue(choice, "CardNode") is not null))
+        {
+            return choices
+                .Where(choice => GetMemberValue(choice, "CardModel") is not null || GetMemberValue(choice, "CardNode") is not null)
+                .ToList();
+        }
+
+        return choices;
     }
 
     private List<string> ExtractMapNodes(object runState, TextDiagnosticsCollector textDiagnostics)
@@ -778,6 +801,12 @@ internal sealed class Sts2RuntimeReflectionReader
 
     private List<object> ExtractCardRewardChoiceItems(object cardRewardScreen)
     {
+        var holders = ExtractCardRewardChoiceHoldersFromRow(cardRewardScreen);
+        if (holders.Count > 0)
+        {
+            return holders;
+        }
+
         foreach (var memberName in CardRewardChoiceCollectionMembers)
         {
             var value = GetMemberValue(cardRewardScreen, memberName);
@@ -800,6 +829,12 @@ internal sealed class Sts2RuntimeReflectionReader
         };
         foreach (var container in nestedContainers.Where(container => container is not null))
         {
+            holders = ExtractCardRewardChoiceHoldersFromContainer(container!);
+            if (holders.Count > 0)
+            {
+                return holders;
+            }
+
             foreach (var memberName in CardRewardChoiceCollectionMembers)
             {
                 var value = GetMemberValue(container, memberName);
@@ -812,6 +847,171 @@ internal sealed class Sts2RuntimeReflectionReader
         }
 
         return new List<object>();
+    }
+
+    private List<object> ExtractCardRewardChoiceHoldersFromRow(object cardRewardScreen)
+    {
+        var cardRow = GetMemberValue(cardRewardScreen, "_cardRow") ?? GetMemberValue(cardRewardScreen, "CardRow");
+        if (cardRow is not null)
+        {
+            var holders = ExtractCardRewardChoiceHoldersFromContainer(cardRow);
+            if (holders.Count > 0)
+            {
+                return holders;
+            }
+        }
+
+        return ExtractCardRewardChoiceHoldersFromContainer(cardRewardScreen);
+    }
+
+    private List<object> ExtractCardRewardChoiceHoldersFromContainer(object container)
+    {
+        var cardHolderType = FindSts2Assembly()?.GetType("MegaCrit.Sts2.Core.Nodes.Cards.Holders.NCardHolder");
+        return EnumerateNodeDescendants(container, maxDepth: 6)
+            .Where(child =>
+            {
+                var typeName = GetTypeName(child) ?? string.Empty;
+                if (cardHolderType is not null && cardHolderType.IsInstanceOfType(child))
+                {
+                    // Filter out non-card holders (e.g. hitboxes) that still derive from NCardHolder.
+                    return GetMemberValue(child, "CardModel") is not null || GetMemberValue(child, "CardNode") is not null;
+                }
+
+                if (typeName.Contains("NCardHolder", StringComparison.Ordinal) ||
+                    string.Equals(child.GetType().Name, "NCardHolder", StringComparison.Ordinal))
+                {
+                    return true;
+                }
+
+                return false;
+            })
+            .ToList();
+    }
+
+    private IEnumerable<object> EnumerateNodeDescendants(object root, int maxDepth)
+    {
+        if (maxDepth <= 0)
+        {
+            yield break;
+        }
+
+        var visited = new HashSet<object>(ReferenceEqualityComparer.Instance);
+        var queue = new Queue<(object Node, int Depth)>();
+        queue.Enqueue((root, 0));
+        visited.Add(root);
+
+        while (queue.Count > 0)
+        {
+            var (node, depth) = queue.Dequeue();
+            if (depth >= maxDepth)
+            {
+                continue;
+            }
+
+            foreach (var child in EnumerateNodeChildren(node))
+            {
+                if (child is null)
+                {
+                    continue;
+                }
+
+                yield return child;
+                if (!child.GetType().IsValueType && visited.Add(child))
+                {
+                    queue.Enqueue((child, depth + 1));
+                }
+            }
+        }
+    }
+
+    private IEnumerable<object> EnumerateNodeChildren(object node)
+    {
+        var type = node.GetType();
+        var flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+
+        // Prefer GetChildren overloads when available.
+        var method = type.GetMethod("GetChildren", flags, null, Type.EmptyTypes, null);
+        if (method is not null)
+        {
+            object? value = null;
+            try
+            {
+                value = method.Invoke(node, null);
+            }
+            catch
+            {
+                value = null;
+            }
+
+            foreach (var child in EnumerateObjects(value))
+            {
+                yield return child;
+            }
+            yield break;
+        }
+
+        method = type.GetMethod("GetChildren", flags, null, new[] { typeof(bool) }, null);
+        if (method is not null)
+        {
+            object? value = null;
+            try
+            {
+                // STS2 uses Godot 4 which may place important UI nodes under internal children.
+                value = method.Invoke(node, new object?[] { true });
+            }
+            catch
+            {
+                value = null;
+            }
+
+            foreach (var child in EnumerateObjects(value))
+            {
+                yield return child;
+            }
+            yield break;
+        }
+
+        // Fallback: enumerate GetChildCount/GetChild.
+        var getChildCount = type.GetMethod("GetChildCount", flags, null, Type.EmptyTypes, null)
+                           ?? type.GetMethod("GetChildCount", flags, null, new[] { typeof(bool) }, null);
+        var getChild = type.GetMethod("GetChild", flags, null, new[] { typeof(int), typeof(bool) }, null)
+                     ?? type.GetMethod("GetChild", flags, null, new[] { typeof(int) }, null);
+        if (getChildCount is null || getChild is null)
+        {
+            yield break;
+        }
+
+        int count;
+        try
+        {
+            count = getChildCount.GetParameters().Length == 0
+                ? Convert.ToInt32(getChildCount.Invoke(node, null))
+                : Convert.ToInt32(getChildCount.Invoke(node, new object?[] { true }));
+        }
+        catch
+        {
+            yield break;
+        }
+
+        for (var index = 0; index < count; index++)
+        {
+            object? child = null;
+            try
+            {
+                child = getChild.GetParameters().Length == 1
+                    ? getChild.Invoke(node, new object?[] { index })
+                    : getChild.Invoke(node, new object?[] { index, true });
+            }
+            catch
+            {
+                child = null;
+            }
+
+            if (child is not null)
+            {
+                yield return child;
+            }
+        }
     }
 
     private static object? ResolveCardRewardChoiceCard(object choice)
@@ -1315,7 +1515,7 @@ internal sealed class Sts2RuntimeReflectionReader
         var cardRewardScreen = GetCardRewardSelectionScreen(runNode);
         if (cardRewardScreen is not null)
         {
-            var choices = ExtractCardRewardChoiceItems(cardRewardScreen);
+            var choices = FilterCardRewardSelectionChoices(ExtractCardRewardChoiceItems(cardRewardScreen));
             if (choices.Count == 0)
             {
                 return new RuntimeActionResult(false, "No card reward choices are currently available.", "stale_action");
@@ -1329,6 +1529,39 @@ internal sealed class Sts2RuntimeReflectionReader
 
             var choice = choices[selectedIndex];
             var card = ResolveCardRewardChoiceCard(choice);
+
+            var choiceTypeName = GetTypeName(choice) ?? string.Empty;
+            var directSelect = cardRewardScreen.GetType()
+                .GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                .FirstOrDefault(candidate =>
+                {
+                    if (!string.Equals(candidate.Name, "SelectCard", StringComparison.Ordinal))
+                    {
+                        return false;
+                    }
+
+                    var parameters = candidate.GetParameters();
+                    return parameters.Length == 1 && parameters[0].ParameterType.IsInstanceOfType(choice);
+                });
+
+            if (directSelect is not null)
+            {
+                try
+                {
+                    directSelect.Invoke(cardRewardScreen, new[] { choice });
+                    return new RuntimeActionResult(true, "Selected card reward.", metadata: new Dictionary<string, object?>
+                    {
+                        ["reward"] = ConvertToText(GetDictionaryValue(action.Params, "reward")),
+                        ["reward_index"] = selectedIndex,
+                        ["runtime_handler"] = $"card_reward_screen.{directSelect.Name}",
+                        ["choice_type"] = choiceTypeName,
+                    });
+                }
+                catch (Exception ex)
+                {
+                    return new RuntimeActionResult(false, $"Card reward selection failed: {ex.GetBaseException().Message}", "runtime_incompatible");
+                }
+            }
             var handlers = new List<(object Target, string Label)>
             {
                 (cardRewardScreen, "card_reward_screen"),
