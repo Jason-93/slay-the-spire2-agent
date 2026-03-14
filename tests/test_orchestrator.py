@@ -27,6 +27,17 @@ class InvalidActionPolicy:
         return PolicyDecision(action_id="act-invalid", reason="invalid action")
 
 
+class MultiTargetPolicy:
+    def __init__(self, target_id: str | None) -> None:
+        self.target_id = target_id
+
+    def decide(self, snapshot, legal_actions):
+        metadata = {}
+        if self.target_id is not None:
+            metadata["action_args"] = {"target_id": self.target_id}
+        return PolicyDecision(action_id="act-multi", reason="choose target", metadata=metadata)
+
+
 class FailingPolicyError(PolicyError):
     error_code = "llm_parse_error"
 
@@ -182,6 +193,20 @@ class SequencedCombatBridge:
 
     def reset(self, session_id: str):
         raise NotImplementedError
+
+
+class MultiTargetBridge(CapturingBridge):
+    def get_legal_actions(self, session_id: str) -> list[LegalAction]:
+        return [
+            LegalAction(
+                action_id="act-multi",
+                type="play_card",
+                label="Play Strike",
+                params={"card_id": "card-1", "target_type": "AnyEnemy"},
+                target_constraints=["1", "2"],
+                metadata={},
+            )
+        ]
 
 
 class SnapshotDriftBridge(SequencedCombatBridge):
@@ -743,6 +768,53 @@ class OrchestratorTests(unittest.TestCase):
             self.assertEqual(len(bridge.submissions), 1)
             self.assertEqual(bridge.submissions[0].args["target_id"], "1")
             self.assertEqual(bridge.submissions[0].args["card_id"], "card-1")
+
+    def test_orchestrator_uses_policy_target_id_for_multi_target_action(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            bridge = MultiTargetBridge()
+            orchestrator = AutoplayOrchestrator(
+                bridge=bridge,
+                policy=MultiTargetPolicy("2"),
+                config=OrchestratorConfig(trace_dir=tmpdir),
+            )
+            summary = orchestrator.run(scenario="live")
+
+            self.assertTrue(summary.completed)
+            self.assertEqual(len(bridge.submissions), 1)
+            self.assertEqual(bridge.submissions[0].args["target_id"], "2")
+            self.assertEqual(bridge.submissions[0].args["card_id"], "card-1")
+
+    def test_orchestrator_rejects_multi_target_action_without_target_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            bridge = MultiTargetBridge()
+            orchestrator = AutoplayOrchestrator(
+                bridge=bridge,
+                policy=MultiTargetPolicy(None),
+                config=OrchestratorConfig(trace_dir=tmpdir),
+            )
+            summary = orchestrator.run(scenario="live")
+
+            self.assertTrue(summary.interrupted)
+            self.assertEqual(summary.reason, "policy_invalid_action_args")
+            self.assertEqual(bridge.submissions, [])
+            record = json.loads(Path(summary.trace_path).read_text(encoding="utf-8").splitlines()[0])
+            self.assertEqual(record["bridge_result"]["error_code"], "policy_invalid_action_args")
+
+    def test_orchestrator_rejects_target_id_outside_legal_target_set(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            bridge = MultiTargetBridge()
+            orchestrator = AutoplayOrchestrator(
+                bridge=bridge,
+                policy=MultiTargetPolicy("99"),
+                config=OrchestratorConfig(trace_dir=tmpdir),
+            )
+            summary = orchestrator.run(scenario="live")
+
+            self.assertTrue(summary.interrupted)
+            self.assertEqual(summary.reason, "policy_invalid_action_args")
+            self.assertEqual(bridge.submissions, [])
+            record = json.loads(Path(summary.trace_path).read_text(encoding="utf-8").splitlines()[0])
+            self.assertEqual(record["bridge_result"]["error_code"], "policy_invalid_action_args")
 
     def test_orchestrator_continues_multiple_actions_in_same_turn(self) -> None:
         bridge = SequencedCombatBridge(

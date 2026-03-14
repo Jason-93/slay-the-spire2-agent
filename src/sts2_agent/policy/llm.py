@@ -48,7 +48,7 @@ class ChatCompletionsPolicy:
         response_payload = self._post_json("/chat/completions", request_payload)
         raw_content = self._extract_content(response_payload)
         parsed = self._parse_response_text(raw_content)
-        return PolicyDecision(
+        decision = PolicyDecision(
             action_id=parsed["action_id"],
             reason=parsed["reason"],
             halt=parsed["halt"],
@@ -64,13 +64,17 @@ class ChatCompletionsPolicy:
                 "raw_response_text": raw_content,
             },
         )
+        if parsed["args"]:
+            decision.metadata["action_args"] = parsed["args"]
+        return decision
 
     def _build_messages(self, snapshot: DecisionSnapshot, legal_actions: list[LegalAction]) -> list[dict[str, str]]:
         system_prompt = (
             "你是 Slay the Spire 2 自动打牌 agent。"
             "只能从给定 legal actions 中选择一个 action_id。"
-            "必须返回 JSON，字段为 action_id、reason、halt。"
+            "必须返回 JSON，字段为 action_id、reason、halt、args。"
             "如果你认为当前不应继续自动操作，可以返回 halt=true 且 action_id=null。"
+            "args 可省略或填空对象；若所选动作有多个 target_constraints，必须在 args.target_id 中返回其中一个合法目标。"
             "当 snapshot.phase=reward 时，你需要在 choose_reward 或 skip_reward 等奖励动作中做选择；"
             "若不确定，优先返回 halt=true 或选择 skip_reward（并在 reason 说明原因）。"
             "当 snapshot.phase=map 时，只能在 choose_map_node 中选择一个可达节点；"
@@ -83,6 +87,9 @@ class ChatCompletionsPolicy:
                 "action_id": "string|null",
                 "reason": "string",
                 "halt": "boolean",
+                "args": {
+                    "target_id": "string, required when selected action has multiple target_constraints",
+                },
             },
         }
         return [
@@ -165,16 +172,27 @@ class ChatCompletionsPolicy:
         action_id = payload.get("action_id")
         reason = payload.get("reason")
         halt = payload.get("halt")
+        args = payload.get("args")
         if action_id is not None and not isinstance(action_id, str):
             raise ChatCompletionsParseError("action_id must be a string or null")
         if not isinstance(reason, str) or not reason.strip():
             raise ChatCompletionsParseError("reason must be a non-empty string")
         if not isinstance(halt, bool):
             raise ChatCompletionsParseError("halt must be a boolean")
+        if args is None:
+            normalized_args: dict[str, Any] = {}
+        else:
+            if not isinstance(args, dict):
+                raise ChatCompletionsParseError("args must be an object when provided")
+            normalized_args = dict(args)
+            target_id = normalized_args.get("target_id")
+            if target_id is not None and not isinstance(target_id, str):
+                raise ChatCompletionsParseError("args.target_id must be a string when provided")
         return {
             "action_id": action_id,
             "reason": reason.strip(),
             "halt": halt,
+            "args": normalized_args,
         }
 
     @staticmethod

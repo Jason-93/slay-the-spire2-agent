@@ -9,7 +9,7 @@ from typing import Any
 
 from sts2_agent.bridge import BridgeError, GameBridge, InvalidPayloadError, InterruptedSessionError, StaleActionError
 from sts2_agent.models import ActionSubmission, PolicyDecision, RunSummary, TraceEntry, to_dict
-from sts2_agent.policy import PolicyError
+from sts2_agent.policy import PolicyDecisionValidationError, PolicyError
 from sts2_agent.trace import JsonlTraceRecorder
 
 
@@ -809,7 +809,7 @@ class AutoplayOrchestrator:
                     decision_id=snapshot.decision_id,
                     state_version=snapshot.state_version,
                     action_id=selected_action.action_id,
-                    args=self._build_action_args(selected_action),
+                    args=self._build_action_args(selected_action, policy_output),
                 )
             )
         except (InvalidPayloadError, InterruptedSessionError, BridgeError) as exc:
@@ -1079,7 +1079,7 @@ class AutoplayOrchestrator:
                     decision_id=snapshot.decision_id,
                     state_version=snapshot.state_version,
                     action_id=selected_action.action_id,
-                    args=self._build_action_args(selected_action),
+                    args=self._build_action_args(selected_action, policy_output),
                 )
             )
         except (InvalidPayloadError, InterruptedSessionError, BridgeError) as exc:
@@ -1739,7 +1739,7 @@ class AutoplayOrchestrator:
                     decision_id=snapshot.decision_id,
                     state_version=snapshot.state_version,
                     action_id=policy_output.action_id,
-                    args=self._build_action_args(selected_action),
+                    args=self._build_action_args(selected_action, policy_output),
                 )
             )
             total_actions += 1
@@ -2288,8 +2288,37 @@ class AutoplayOrchestrator:
         return effective_actions
 
     @staticmethod
-    def _build_action_args(action) -> dict[str, object]:
+    def _policy_action_args(policy_output: PolicyDecision | None) -> dict[str, object]:
+        if policy_output is None:
+            return {}
+        raw_args = policy_output.metadata.get("action_args")
+        if raw_args is None:
+            return {}
+        if not isinstance(raw_args, dict):
+            raise PolicyDecisionValidationError("policy action_args must be an object")
+        return dict(raw_args)
+
+    @classmethod
+    def _build_action_args(cls, action, policy_output: PolicyDecision | None = None) -> dict[str, object]:
         args = dict(action.params)
-        if len(action.target_constraints) == 1 and "target_id" not in args:
-            args["target_id"] = action.target_constraints[0]
+        policy_args = cls._policy_action_args(policy_output)
+        for key, value in policy_args.items():
+            if key in args and args[key] != value:
+                raise PolicyDecisionValidationError(f"policy cannot override legal action param '{key}'")
+            args.setdefault(key, value)
+        target_constraints = list(action.target_constraints)
+        target_id = args.get("target_id")
+        if not target_constraints:
+            if target_id is not None:
+                raise PolicyDecisionValidationError("policy provided target_id for a non-targeted action")
+            return args
+        if target_id is None:
+            if len(target_constraints) == 1:
+                args["target_id"] = target_constraints[0]
+                return args
+            raise PolicyDecisionValidationError("policy must provide args.target_id for multi-target actions")
+        if not isinstance(target_id, str):
+            raise PolicyDecisionValidationError("policy target_id must be a string")
+        if target_id not in target_constraints:
+            raise PolicyDecisionValidationError("policy target_id is outside the legal target set")
         return args

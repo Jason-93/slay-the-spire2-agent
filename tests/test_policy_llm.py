@@ -141,6 +141,30 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
         self.assertEqual(decision.reason, "先出防御")
         self.assertFalse(decision.halt)
 
+    def test_policy_persists_action_args_metadata(self) -> None:
+        response_payload = {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "action_id": "act-1",
+                                "reason": "打击需要明确目标",
+                                "halt": False,
+                                "args": {"target_id": "enemy-2"},
+                            },
+                            ensure_ascii=False,
+                        )
+                    }
+                }
+            ]
+        }
+
+        with patch("sts2_agent.policy.llm.urlopen", return_value=FakeHttpResponse(response_payload)):
+            decision = self.policy.decide(build_snapshot(), build_actions())
+
+        self.assertEqual(decision.metadata["action_args"]["target_id"], "enemy-2")
+
     def test_policy_raises_timeout(self) -> None:
         with patch("sts2_agent.policy.llm.urlopen", side_effect=TimeoutError()):
             with self.assertRaises(ChatCompletionsTimeoutError):
@@ -154,6 +178,34 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
 
     def test_policy_rejects_missing_required_fields(self) -> None:
         response_payload = {"choices": [{"message": {"content": "{\"action_id\":\"act-1\"}"}}]}
+        with patch("sts2_agent.policy.llm.urlopen", return_value=FakeHttpResponse(response_payload)):
+            with self.assertRaises(ChatCompletionsParseError):
+                self.policy.decide(build_snapshot(), build_actions())
+
+    def test_policy_rejects_non_object_args(self) -> None:
+        response_payload = {
+            "choices": [
+                {
+                    "message": {
+                        "content": "{\"action_id\":\"act-1\",\"reason\":\"bad args\",\"halt\":false,\"args\":\"enemy-1\"}"
+                    }
+                }
+            ]
+        }
+        with patch("sts2_agent.policy.llm.urlopen", return_value=FakeHttpResponse(response_payload)):
+            with self.assertRaises(ChatCompletionsParseError):
+                self.policy.decide(build_snapshot(), build_actions())
+
+    def test_policy_rejects_non_string_target_id(self) -> None:
+        response_payload = {
+            "choices": [
+                {
+                    "message": {
+                        "content": "{\"action_id\":\"act-1\",\"reason\":\"bad args\",\"halt\":false,\"args\":{\"target_id\":1}}"
+                    }
+                }
+            ]
+        }
         with patch("sts2_agent.policy.llm.urlopen", return_value=FakeHttpResponse(response_payload)):
             with self.assertRaises(ChatCompletionsParseError):
                 self.policy.decide(build_snapshot(), build_actions())

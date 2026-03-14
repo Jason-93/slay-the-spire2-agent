@@ -1,4 +1,4 @@
-from .base import Policy, PolicyError
+from .base import Policy, PolicyDecisionValidationError, PolicyError
 from .heuristic import FirstLegalActionPolicy
 from .llm import (
     ChatCompletionsConfig,
@@ -16,5 +16,6 @@ __all__ = [
     "ChatCompletionsTimeoutError",
     "FirstLegalActionPolicy",
     "Policy",
+    "PolicyDecisionValidationError",
     "PolicyError",
 ]

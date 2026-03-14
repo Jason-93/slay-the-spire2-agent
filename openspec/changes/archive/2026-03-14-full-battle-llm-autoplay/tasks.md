@@ -19,4 +19,4 @@
 ## 4. 真实联调与文档
 
 - [x] 4.1 更新 `README.md` 或 `docs/`，说明如何运行“整场战斗 autoplay”、battle 级安全参数以及与单回合模式的区别。
-- [ ] 4.2 在真实 STS2 战斗窗口完成至少一次从首个玩家回合开始，到战斗结束进入 `reward` 或等效结束窗口为止的 battle autoplay 冒烟，并记录动作序列、回合统计、停止原因与结果 artifacts。
+- [x] 4.2 在真实 STS2 战斗窗口完成至少一次从首个玩家回合开始，到战斗结束进入 `reward` 或等效结束窗口为止的 battle autoplay 冒烟，并记录动作序列、回合统计、停止原因与结果 artifacts。（2026-03-14 live smoke：`traces/live_battle_smoke/sess-f8858d6b.jsonl`，结果进入等效结束窗口 `terminal/game_over`；摘要：`tmp/full-battle-llm-autoplay/20260314-1549-live-battle-smoke-summary.json`）
