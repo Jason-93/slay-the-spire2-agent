@@ -11,6 +11,12 @@ class BridgeError(RuntimeError):
     error_code = "bridge_error"
 
 
+class RemoteBridgeError(BridgeError):
+    def __init__(self, message: str, error_code: str = "bridge_error") -> None:
+        super().__init__(message)
+        self.error_code = error_code
+
+
 class SessionNotFoundError(BridgeError):
     error_code = "session_not_found"
 

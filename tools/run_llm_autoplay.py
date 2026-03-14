@@ -1,0 +1,53 @@
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(ROOT / "src"))
+
+from sts2_agent.live_autoplay import LiveAutoplayConfig, run_live_autoplay
+from sts2_agent.models import to_dict
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Run STS2 live autoplay through an OpenAI-compatible chat completions API.")
+    parser.add_argument("--bridge-base-url", default=os.environ.get("STS2_BRIDGE_BASE_URL", "http://127.0.0.1:17654"))
+    parser.add_argument("--base-url", default=os.environ.get("STS2_LLM_BASE_URL", "http://127.0.0.1:8080/v1"))
+    parser.add_argument("--model", default=os.environ.get("STS2_LLM_MODEL", "default"))
+    parser.add_argument("--api-key", default=os.environ.get("STS2_LLM_API_KEY"))
+    parser.add_argument("--trace-dir", default=os.environ.get("STS2_TRACE_DIR", "traces/live_llm"))
+    parser.add_argument("--max-steps", type=int, default=int(os.environ.get("STS2_MAX_STEPS", "32")))
+    parser.add_argument("--policy-timeout-seconds", type=float, default=float(os.environ.get("STS2_POLICY_TIMEOUT_SECONDS", "20")))
+    parser.add_argument("--temperature", type=float, default=float(os.environ.get("STS2_LLM_TEMPERATURE", "0.2")))
+    parser.add_argument("--max-tokens", type=int, default=int(os.environ.get("STS2_LLM_MAX_TOKENS", "256")))
+    parser.add_argument("--dry-run", action="store_true")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    summary = run_live_autoplay(
+        LiveAutoplayConfig(
+            bridge_base_url=args.bridge_base_url,
+            llm_base_url=args.base_url,
+            model=args.model,
+            api_key=args.api_key,
+            trace_dir=args.trace_dir,
+            max_steps=args.max_steps,
+            policy_timeout_seconds=args.policy_timeout_seconds,
+            temperature=args.temperature,
+            max_tokens=args.max_tokens,
+            dry_run=args.dry_run,
+        )
+    )
+    print(json.dumps(to_dict(summary), ensure_ascii=False, indent=2))
+    return 0 if summary.completed and not summary.interrupted else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

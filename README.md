@@ -86,6 +86,63 @@ mod 成功注入后，会在本地暴露以下接口：
 
 `tools/validate_live_apply.py` 会额外要求 `--allow-write` 显式确认，避免误发真实动作。
 
+## 大模型自动打牌
+
+仓库现在已经提供了：
+
+- `src/sts2_agent/bridge/http.py`：把本地 STS2 HTTP bridge 封装成 `GameBridge`
+- `src/sts2_agent/policy/llm.py`：OpenAI 兼容 `chat/completions` policy
+- `tools/run_llm_autoplay.py`：live autoplay 调试入口
+
+默认本地模型接口为：
+
+```text
+http://127.0.0.1:8080/v1
+```
+
+可先查看可用模型：
+
+```bash
+curl http://127.0.0.1:8080/v1/models
+```
+
+### Dry-run
+
+只读取局面并调用模型，不真实提交动作：
+
+```bash
+python tools/run_llm_autoplay.py \
+  --base-url "http://127.0.0.1:8080/v1" \
+  --model "Qwen3.5-9B-Q5_K_M.gguf" \
+  --dry-run
+```
+
+### Live autoplay
+
+进入一场真实战斗并确认 bridge 允许写入后，可执行：
+
+```bash
+python tools/run_llm_autoplay.py \
+  --bridge-base-url "http://127.0.0.1:17654" \
+  --base-url "http://127.0.0.1:8080/v1" \
+  --model "Qwen3.5-9B-Q5_K_M.gguf"
+```
+
+常用参数：
+
+- `--dry-run`：只做模型决策，不发送 `/apply`
+- `--trace-dir`：指定 trace 输出目录
+- `--max-steps`：限制自动打牌步数
+- `--policy-timeout-seconds`：限制单步模型调用超时
+
+每次运行都会输出 `RunSummary`，并在 `trace_dir` 下保存 JSONL trace。单步 trace 至少包含：
+
+- 当前 `snapshot`
+- 当前 `legal_actions`
+- 模型输出的 `action_id` / `reason` / `halt`
+- 原始模型响应文本 `raw_response_text`
+- bridge 回执或 dry-run 结果
+
 ## 当前进度
 
 目前仓库已经能够：

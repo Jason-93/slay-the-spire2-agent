@@ -83,3 +83,24 @@ python tools/validate_mod_bridge.py
   - `player_energy_changed`
 - 对应 artifacts：`tmp/live-apply-validation/20260314-081224`
 - 结论：真实战斗窗口中的 in-game action queue 已能在游戏线程 dequeue + execute，`action_timeout` 问题已完成回归验证。
+
+### 2026-03-14（本地 LLM 自动打牌冒烟）
+
+- 执行命令：`python tools/run_llm_autoplay.py --base-url "http://127.0.0.1:8080/v1" --model "Qwen3.5-9B-Q5_K_M.gguf" --bridge-base-url "http://127.0.0.1:17654" --trace-dir "tmp/llm-autoplay/20260314-live2" --max-steps 1`
+- 本地模型接口探测：
+  - `GET /v1/models` 可正常返回模型列表
+  - 实际使用模型：`Qwen3.5-9B-Q5_K_M.gguf`
+- 模型输出：
+  - `action_id = "act-ebcfb923"`
+  - `reason` 指向优先打出 `痛击`
+  - `halt = false`
+- 自动提交结果：
+  - `bridge_result.status = "accepted"`
+  - `bridge_result.message = "Played card 'card-292f28c0'."`
+  - `target_id = "1"`
+  - `queue_stage = "completed"`
+- 状态推进结果：
+  - 执行前：`decision_id = "dec-26615189"`、`state_version = 9`、敌人 `hp = 46`、玩家 `energy = 2`、手牌含 `痛击`
+  - 执行后：`decision_id = "dec-7da0488f"`、`state_version = 12`、敌人 `hp = 38`、玩家 `energy = 0`、`痛击` 已离开手牌
+- 对应 trace：`tmp/llm-autoplay/20260314-live2/sess-0d1e57b5.jsonl`
+- 额外诊断：首次尝试 `tmp/llm-autoplay/20260314-live1/sess-0d1e57b5.jsonl` 因未补 `target_id` 返回 `play_rejected`；随后在 orchestrator 提交阶段自动补齐唯一目标后，真实自动出牌成功。

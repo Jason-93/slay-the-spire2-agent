@@ -7,6 +7,7 @@ from pathlib import Path
 
 from sts2_agent.bridge import BridgeError, GameBridge, InvalidPayloadError, InterruptedSessionError, StaleActionError
 from sts2_agent.models import ActionSubmission, PolicyDecision, RunSummary, TraceEntry, to_dict
+from sts2_agent.policy import PolicyError
 from sts2_agent.trace import JsonlTraceRecorder
 
 
@@ -15,6 +16,7 @@ class OrchestratorConfig:
     timeout_seconds: float = 2.0
     max_steps: int = 32
     trace_dir: str = "traces"
+    dry_run: bool = False
 
 
 class AutoplayOrchestrator:
@@ -69,9 +71,32 @@ class AutoplayOrchestrator:
                         reason="policy_halt",
                     )
 
-                action_ids = {action.action_id for action in legal_actions}
-                if policy_output.action_id not in action_ids:
+                legal_actions_by_id = {action.action_id: action for action in legal_actions}
+                if policy_output.action_id not in legal_actions_by_id:
                     raise InvalidPayloadError("policy returned an action outside the legal action set")
+                selected_action = legal_actions_by_id[policy_output.action_id]
+
+                if self.config.dry_run:
+                    self._record(
+                        recorder,
+                        snapshot,
+                        legal_actions,
+                        policy_output,
+                        {
+                            "status": "dry_run",
+                            "planned_action_id": policy_output.action_id,
+                            "message": "dry run enabled; bridge submission skipped",
+                        },
+                        False,
+                    )
+                    return RunSummary(
+                        session_id=session.session_id,
+                        completed=False,
+                        interrupted=True,
+                        decisions=decisions,
+                        trace_path=str(trace_path),
+                        reason="dry_run",
+                    )
 
                 result = self.bridge.submit_action(
                     ActionSubmission(
@@ -79,6 +104,7 @@ class AutoplayOrchestrator:
                         decision_id=snapshot.decision_id,
                         state_version=snapshot.state_version,
                         action_id=policy_output.action_id,
+                        args=self._build_action_args(selected_action),
                     )
                 )
                 decisions += 1
@@ -95,6 +121,18 @@ class AutoplayOrchestrator:
             except (StaleActionError, InvalidPayloadError, InterruptedSessionError, BridgeError) as exc:
                 interrupted_payload = {"status": "interrupted", "error_code": getattr(exc, "error_code", "bridge_error"), "message": str(exc)}
                 fallback_output = locals().get("policy_output", PolicyDecision(action_id=None, reason="policy unavailable", halt=True))
+                self._record(recorder, snapshot, legal_actions, fallback_output, interrupted_payload, True)
+                return RunSummary(
+                    session_id=session.session_id,
+                    completed=False,
+                    interrupted=True,
+                    decisions=decisions,
+                    trace_path=str(trace_path),
+                    reason=interrupted_payload["error_code"],
+                )
+            except PolicyError as exc:
+                interrupted_payload = {"status": "interrupted", "error_code": getattr(exc, "error_code", "policy_error"), "message": str(exc)}
+                fallback_output = PolicyDecision(action_id=None, reason=str(exc), halt=True, metadata={"error_code": interrupted_payload["error_code"]})
                 self._record(recorder, snapshot, legal_actions, fallback_output, interrupted_payload, True)
                 return RunSummary(
                     session_id=session.session_id,
@@ -137,3 +175,10 @@ class AutoplayOrchestrator:
                 timestamp=datetime.now(UTC).isoformat(),
             )
         )
+
+    @staticmethod
+    def _build_action_args(action) -> dict[str, object]:
+        args = dict(action.params)
+        if len(action.target_constraints) == 1 and "target_id" not in args:
+            args["target_id"] = action.target_constraints[0]
+        return args
