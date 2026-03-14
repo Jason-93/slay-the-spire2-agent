@@ -42,6 +42,16 @@ internal sealed class Sts2RuntimeReflectionReader
         "ironclad", "silent", "defect", "watcher",
         "铁甲", "静默", "机器人", "观者",
     };
+    private static readonly string[] MenuActivationMethodNames =
+    {
+        "Click",
+        "Press",
+        "Activate",
+        "OnPressed",
+        "OnPress",
+        "Confirm",
+        "Select",
+    };
     private static readonly string[] CardRewardSelectionTypeHints =
     {
         "CardReward",
@@ -267,6 +277,9 @@ internal sealed class Sts2RuntimeReflectionReader
         metadata["menu_root_count"] = roots.Count;
 
         var discovered = new List<(object Node, string Label, string Source)>();
+        var seenNodes = new HashSet<object>(ReferenceEqualityComparer.Instance);
+        var suppressedNonInteractable = 0;
+        var suppressedUnlabeled = 0;
         foreach (var root in roots)
         {
             var rootNode = root.Node;
@@ -278,22 +291,26 @@ internal sealed class Sts2RuntimeReflectionReader
             var rootType = GetTypeName(rootNode) ?? string.Empty;
             foreach (var node in EnumerateNodeDescendants(rootNode, maxDepth: 7).Prepend(rootNode))
             {
+                if (!seenNodes.Add(node))
+                {
+                    continue;
+                }
+
                 if (!IsPotentialMenuButton(node))
                 {
                     continue;
                 }
 
-                var label = ConvertToText(
-                    GetMemberValue(node, "Text") ?? GetMemberValue(node, "Label") ?? GetMemberValue(node, "Title") ?? GetMemberValue(node, "Name") ?? node,
-                    $"menu.button.label",
-                    textDiagnostics,
-                    "Text",
-                    "Label",
-                    "Title",
-                    "Name");
-                label = string.IsNullOrWhiteSpace(label) ? null : label.Trim();
+                if (!IsMenuNodeInteractable(node))
+                {
+                    suppressedNonInteractable += 1;
+                    continue;
+                }
+
+                var label = GetMenuNodeLabel(node, textDiagnostics);
                 if (string.IsNullOrWhiteSpace(label))
                 {
+                    suppressedUnlabeled += 1;
                     continue;
                 }
 
@@ -318,6 +335,8 @@ internal sealed class Sts2RuntimeReflectionReader
         }
 
         metadata["menu_button_candidate_count"] = discovered.Count;
+        metadata["menu_suppressed_non_interactable_count"] = suppressedNonInteractable;
+        metadata["menu_suppressed_unlabeled_count"] = suppressedUnlabeled;
 
         // Classify actions conservatively.
         var actions = new List<MenuActionCandidate>();
@@ -439,9 +458,92 @@ internal sealed class Sts2RuntimeReflectionReader
         }
 
         var type = node.GetType();
-        return type.GetMethod("EmitSignal", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance) is not null &&
-               (type.GetProperty("Text", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance) is not null ||
-                type.GetProperty("Label", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance) is not null);
+        var methods = type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+        var hasActivationMethod = methods.Any(method => MenuActivationMethodNames.Contains(method.Name, StringComparer.Ordinal));
+        if (!hasActivationMethod)
+        {
+            return false;
+        }
+
+        return type.GetProperty("Text", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance) is not null ||
+               type.GetProperty("Label", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance) is not null ||
+               type.GetProperty("Title", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance) is not null ||
+               type.GetProperty("Name", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance) is not null;
+    }
+
+    private static bool IsMenuNodeInteractable(object node)
+    {
+        if (GetMemberValue(node, "Visible") is bool visible && !visible)
+        {
+            return false;
+        }
+
+        if (TryInvokeParameterlessMethod(node, "IsVisibleInTree") is bool visibleInTree && !visibleInTree)
+        {
+            return false;
+        }
+
+        if (GetMemberValue(node, "IsEnabled") is bool isEnabled && !isEnabled)
+        {
+            return false;
+        }
+
+        if (GetMemberValue(node, "_isEnabled") is bool privateEnabled && !privateEnabled)
+        {
+            return false;
+        }
+
+        if (GetMemberValue(node, "Disabled") is bool disabled && disabled)
+        {
+            return false;
+        }
+
+        if (GetMemberValue(node, "IsLocked") is bool isLocked && isLocked)
+        {
+            return false;
+        }
+
+        if (GetMemberValue(node, "_isLocked") is bool privateLocked && privateLocked)
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static string? GetMenuNodeLabel(object node, TextDiagnosticsCollector? textDiagnostics = null)
+    {
+        var label = ConvertToText(
+            GetMemberValue(node, "Text") ?? GetMemberValue(node, "Label") ?? GetMemberValue(node, "Title"),
+            "menu.button.label",
+            textDiagnostics,
+            "Text",
+            "Label",
+            "Title");
+        if (!string.IsNullOrWhiteSpace(label))
+        {
+            return label.Trim();
+        }
+
+        if (!CanUseMenuNodeNameFallback(node))
+        {
+            return null;
+        }
+
+        label = ConvertToText(
+            GetMemberValue(node, "Name") ?? node,
+            "menu.button.name",
+            textDiagnostics,
+            "Name");
+        return string.IsNullOrWhiteSpace(label) ? null : label.Trim();
+    }
+
+    private static bool CanUseMenuNodeNameFallback(object node)
+    {
+        var typeName = GetTypeName(node) ?? string.Empty;
+        return typeName.Contains("Button", StringComparison.OrdinalIgnoreCase) ||
+               typeName.Contains("CharacterSelect", StringComparison.OrdinalIgnoreCase) ||
+               typeName.Contains("Confirm", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsDangerLabel(string label)
@@ -570,7 +672,8 @@ internal sealed class Sts2RuntimeReflectionReader
             return new RuntimeActionResult(false, "Menu target node could not be resolved.", "runtime_incompatible", resolveMetadata);
         }
 
-        if (!TryActivateMenuNode(node, out var handler))
+        if (!TryExecuteMenuActionHighLevel(gameInstance, expectedKind, node, out var handler) &&
+            !TryActivateMenuNode(node, out handler))
         {
             return new RuntimeActionResult(false, "Menu target node is not clickable.", "not_clickable", new Dictionary<string, object?>
             {
@@ -585,6 +688,7 @@ internal sealed class Sts2RuntimeReflectionReader
             ["action_type"] = expectedKind,
             ["runtime_handler"] = handler,
             ["target_type"] = GetTypeName(node),
+            ["resolve_metadata"] = resolveMetadata,
         });
     }
 
@@ -604,7 +708,12 @@ internal sealed class Sts2RuntimeReflectionReader
                     continue;
                 }
 
-                var childLabel = ConvertToText(GetMemberValue(child, "Text") ?? GetMemberValue(child, "Label") ?? GetMemberValue(child, "Title") ?? GetMemberValue(child, "Name") ?? child);
+                if (!IsMenuNodeInteractable(child))
+                {
+                    continue;
+                }
+
+                var childLabel = GetMenuNodeLabel(child);
                 if (string.IsNullOrWhiteSpace(childLabel))
                 {
                     continue;
@@ -651,6 +760,229 @@ internal sealed class Sts2RuntimeReflectionReader
         return false;
     }
 
+    private bool TryExecuteMenuActionHighLevel(object gameInstance, string expectedKind, object node, out string handler)
+    {
+        return expectedKind switch
+        {
+            "continue_run" => TryExecuteContinueRunAction(gameInstance, node, out handler),
+            "start_new_run" => TryExecuteStartNewRunAction(gameInstance, node, out handler),
+            "select_character" => TryExecuteSelectCharacterAction(gameInstance, node, out handler),
+            "confirm_start_run" => TryExecuteConfirmStartRunAction(gameInstance, node, out handler),
+            _ => TryReturnUnhandled(out handler),
+        };
+    }
+
+    private bool TryExecuteContinueRunAction(object gameInstance, object node, out string handler)
+    {
+        var mainMenu = GetMemberValue(node, "_mainMenu")
+            ?? GetMemberValue(node, "MainMenu")
+            ?? FindMainMenuOwner(gameInstance, node);
+        if (mainMenu is not null)
+        {
+            if (TryInvokeFirstCompatibleMethod(mainMenu, new[] { "OnContinueButtonPressed" }, new[] { new object?[] { node } }, out var methodName))
+            {
+                handler = $"main_menu.{methodName}";
+                return true;
+            }
+
+            if (TryInvokeFirstCompatibleMethod(mainMenu, new[] { "OnContinueButtonPressedAsync" }, new[] { Array.Empty<object?>() }, out methodName))
+            {
+                handler = $"main_menu.{methodName}";
+                return true;
+            }
+        }
+
+        handler = string.Empty;
+        return false;
+    }
+
+    private bool TryExecuteStartNewRunAction(object gameInstance, object node, out string handler)
+    {
+        var submenu = FindSingleplayerSubmenu(gameInstance, node);
+        if (submenu is not null &&
+            TryInvokeFirstCompatibleMethod(submenu, new[] { "OpenCharacterSelect" }, new[] { new object?[] { node } }, out var submenuMethod))
+        {
+            handler = $"singleplayer_submenu.{submenuMethod}";
+            return true;
+        }
+
+        var mainMenu = GetMemberValue(node, "_mainMenu")
+            ?? GetMemberValue(node, "MainMenu")
+            ?? FindMainMenuOwner(gameInstance, node);
+        if (mainMenu is not null)
+        {
+            if (TryInvokeFirstCompatibleMethod(mainMenu, new[] { "OpenSingleplayerSubmenu" }, new[] { Array.Empty<object?>() }, out var methodName))
+            {
+                handler = $"main_menu.{methodName}";
+                return true;
+            }
+
+            if (TryInvokeFirstCompatibleMethod(mainMenu, new[] { "SingleplayerButtonPressed" }, new[] { new object?[] { node } }, out methodName))
+            {
+                handler = $"main_menu.{methodName}";
+                return true;
+            }
+        }
+
+        handler = string.Empty;
+        return false;
+    }
+
+    private bool TryExecuteSelectCharacterAction(object gameInstance, object node, out string handler)
+    {
+        var character = GetMemberValue(node, "Character") ?? GetMemberValue(node, "_character");
+        var screen = FindCharacterSelectScreen(gameInstance, node);
+        if (screen is not null && character is not null &&
+            TryInvokeFirstCompatibleMethod(screen, new[] { "SelectCharacter" }, new[] { new object?[] { node, character } }, out var screenMethod))
+        {
+            handler = $"character_select_screen.{screenMethod}";
+            return true;
+        }
+
+        var buttonDelegate = GetMemberValue(node, "_delegate") ?? GetMemberValue(node, "Delegate");
+        if (buttonDelegate is not null && character is not null &&
+            TryInvokeFirstCompatibleMethod(buttonDelegate, new[] { "SelectCharacter" }, new[] { new object?[] { node, character } }, out var delegateMethod))
+        {
+            handler = $"character_select_delegate.{delegateMethod}";
+            return true;
+        }
+
+        if (TryInvokeFirstCompatibleMethod(node, new[] { "Select" }, new[] { Array.Empty<object?>() }, out var methodName))
+        {
+            handler = $"menu_node.{methodName}";
+            return true;
+        }
+
+        handler = string.Empty;
+        return false;
+    }
+
+    private bool TryExecuteConfirmStartRunAction(object gameInstance, object node, out string handler)
+    {
+        var screen = FindCharacterSelectScreen(gameInstance, node);
+        if (screen is not null &&
+            TryInvokeFirstCompatibleMethod(screen, new[] { "OnEmbarkPressed" }, new[] { new object?[] { node } }, out var methodName))
+        {
+            handler = $"character_select_screen.{methodName}";
+            return true;
+        }
+
+        handler = string.Empty;
+        return false;
+    }
+
+    private object? FindMainMenuOwner(object gameInstance, object node)
+    {
+        foreach (var root in EnumerateMenuRoots(gameInstance))
+        {
+            if (root.Node is null)
+            {
+                continue;
+            }
+
+            foreach (var candidate in EnumerateNodeDescendants(root.Node, maxDepth: 6).Prepend(root.Node))
+            {
+                var typeName = GetTypeName(candidate) ?? string.Empty;
+                if (!typeName.Contains("NMainMenu", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (ReferenceEquals(GetMemberValue(candidate, "_continueButton"), node) ||
+                    ContainsNodeReference(candidate, node, maxDepth: 4))
+                {
+                    return candidate;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private object? FindSingleplayerSubmenu(object gameInstance, object node)
+    {
+        foreach (var root in EnumerateMenuRoots(gameInstance))
+        {
+            if (root.Node is null)
+            {
+                continue;
+            }
+
+            foreach (var candidate in EnumerateNodeDescendants(root.Node, maxDepth: 6).Prepend(root.Node))
+            {
+                var typeName = GetTypeName(candidate) ?? string.Empty;
+                if (!typeName.Contains("NSingleplayerSubmenu", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (ReferenceEquals(GetMemberValue(candidate, "_standardButton"), node) ||
+                    ContainsNodeReference(candidate, node, maxDepth: 4))
+                {
+                    return candidate;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private object? FindCharacterSelectScreen(object gameInstance, object node)
+    {
+        var buttonDelegate = GetMemberValue(node, "_delegate") ?? GetMemberValue(node, "Delegate");
+        if (buttonDelegate is not null)
+        {
+            var delegateTypeName = GetTypeName(buttonDelegate) ?? string.Empty;
+            if (delegateTypeName.Contains("NCharacterSelectScreen", StringComparison.Ordinal))
+            {
+                return buttonDelegate;
+            }
+        }
+
+        foreach (var root in EnumerateMenuRoots(gameInstance))
+        {
+            if (root.Node is null)
+            {
+                continue;
+            }
+
+            foreach (var candidate in EnumerateNodeDescendants(root.Node, maxDepth: 6).Prepend(root.Node))
+            {
+                var typeName = GetTypeName(candidate) ?? string.Empty;
+                if (!typeName.Contains("NCharacterSelectScreen", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (ReferenceEquals(GetMemberValue(candidate, "_embarkButton"), node) ||
+                    ReferenceEquals(GetMemberValue(candidate, "_selectedButton"), node) ||
+                    ContainsNodeReference(candidate, node, maxDepth: 4))
+                {
+                    return candidate;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private bool ContainsNodeReference(object root, object target, int maxDepth)
+    {
+        if (ReferenceEquals(root, target))
+        {
+            return true;
+        }
+
+        return EnumerateNodeDescendants(root, maxDepth)
+            .Any(child => ReferenceEquals(child, target));
+    }
+
+    private static bool TryReturnUnhandled(out string handler)
+    {
+        handler = string.Empty;
+        return false;
+    }
+
     private static bool TryActivateMenuNode(object node, out string handler)
     {
         var argSets = new List<object?[]>
@@ -661,30 +993,98 @@ internal sealed class Sts2RuntimeReflectionReader
             new object?[] { "pressed" },
         };
 
-        if (TryInvokeFirstCompatibleMethod(node, new[] { "Click", "Press", "Activate", "OnPressed", "OnPress", "Confirm", "Select" }, argSets, out var methodName))
+        if (TryInvokeFirstCompatibleMethod(node, MenuActivationMethodNames, argSets, out var methodName))
         {
             handler = $"menu_node.{methodName}";
             return true;
         }
 
-        var emitSignal = node.GetType().GetMethod("EmitSignal", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-        if (emitSignal is not null)
+        var emitSignalCandidates = node.GetType()
+            .GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+            .Where(method => string.Equals(method.Name, "EmitSignal", StringComparison.Ordinal))
+            .ToArray();
+        foreach (var emitSignal in emitSignalCandidates)
         {
+            var parameters = emitSignal.GetParameters();
+            if (parameters.Length == 0)
+            {
+                continue;
+            }
+
+            // Prefer EmitSignal(StringName signal, Variant[] args)
+            if (parameters.Length == 2 && parameters[1].ParameterType.IsArray)
             try
             {
-                // Godot buttons emit "pressed" when clicked.
-                emitSignal.Invoke(node, new object?[] { "pressed" });
-                handler = "menu_node.EmitSignal(pressed)";
+                var signalArg = CreateSignalArgument(parameters[0].ParameterType, "pressed");
+                if (signalArg is null)
+                {
+                    continue;
+                }
+
+                var elementType = parameters[1].ParameterType.GetElementType();
+                if (elementType is null)
+                {
+                    continue;
+                }
+
+                var argsArray = Array.CreateInstance(elementType, 0);
+                emitSignal.Invoke(node, new[] { signalArg, argsArray });
+                handler = $"menu_node.{emitSignal.Name}(pressed)";
                 return true;
             }
             catch
             {
                 // ignore
             }
+
+            // Fallback: EmitSignal(string signal) style overloads.
+            if (parameters.Length == 1)
+            {
+                try
+                {
+                    var signalArg = CreateSignalArgument(parameters[0].ParameterType, "pressed");
+                    if (signalArg is null)
+                    {
+                        continue;
+                    }
+
+                    emitSignal.Invoke(node, new[] { signalArg });
+                    handler = $"menu_node.{emitSignal.Name}(pressed)";
+                    return true;
+                }
+                catch
+                {
+                    // ignore
+                }
+            }
         }
 
         handler = "menu_node.unhandled";
         return false;
+    }
+
+    private static object? CreateSignalArgument(Type parameterType, string signal)
+    {
+        if (parameterType == typeof(string))
+        {
+            return signal;
+        }
+
+        // Godot's C# bindings usually use Godot.StringName for signal identifiers.
+        if (string.Equals(parameterType.Name, "StringName", StringComparison.Ordinal) ||
+            string.Equals(parameterType.FullName, "Godot.StringName", StringComparison.Ordinal))
+        {
+            try
+            {
+                return Activator.CreateInstance(parameterType, signal);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        return null;
     }
 
     private Dictionary<string, object?> CreateMenuMetadata(object gameInstance)
