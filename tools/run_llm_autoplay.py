@@ -32,24 +32,43 @@ def build_parser() -> argparse.ArgumentParser:
         default=float(os.environ.get("STS2_WAIT_FOR_NEXT_PLAYER_TURN_SECONDS", "30")),
     )
     parser.add_argument(
+        "--transition-timeout-seconds",
+        type=float,
+        default=float(os.environ.get("STS2_TRANSITION_TIMEOUT_SECONDS", "15")),
+    )
+    parser.add_argument(
         "--poll-interval-seconds",
         type=float,
         default=float(os.environ.get("STS2_POLL_INTERVAL_SECONDS", "0.5")),
     )
+    parser.add_argument("--max-non-combat-steps", type=int, default=int(os.environ.get("STS2_MAX_NON_COMBAT_STEPS", "24")))
+    parser.add_argument("--unknown-window-fuse", type=int, default=int(os.environ.get("STS2_UNKNOWN_WINDOW_FUSE", "2")))
     parser.add_argument("--policy-timeout-seconds", type=float, default=float(os.environ.get("STS2_POLICY_TIMEOUT_SECONDS", "20")))
     parser.add_argument("--temperature", type=float, default=float(os.environ.get("STS2_LLM_TEMPERATURE", "0.2")))
     parser.add_argument("--max-tokens", type=int, default=int(os.environ.get("STS2_LLM_MAX_TOKENS", "256")))
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--reward-mode", default=os.environ.get("STS2_REWARD_MODE", "halt"), choices=("halt", "skip", "llm"))
+    parser.add_argument(
+        "--reward-mode",
+        default=os.environ.get("STS2_REWARD_MODE", "halt"),
+        choices=("halt", "skip", "skip-only", "safe-default", "llm"),
+    )
+    parser.add_argument(
+        "--map-mode",
+        default=os.environ.get("STS2_MAP_MODE", "halt"),
+        choices=("halt", "safe-default", "llm"),
+    )
     parser.set_defaults(
         battle_mode=_read_optional_bool("STS2_BATTLE_MODE", False),
         stop_after_player_turn=_read_optional_bool("STS2_STOP_AFTER_PLAYER_TURN", True),
         auto_end_turn_when_only_end_turn=_read_optional_bool("STS2_AUTO_END_TURN_WHEN_ONLY_END_TURN", True),
+        stop_after_next_combat=_read_optional_bool("STS2_STOP_AFTER_NEXT_COMBAT", False),
     )
     parser.add_argument("--battle-mode", dest="battle_mode", action="store_true")
     parser.add_argument("--turn-mode", dest="battle_mode", action="store_false")
     parser.add_argument("--stop-after-player-turn", dest="stop_after_player_turn", action="store_true")
     parser.add_argument("--no-stop-after-player-turn", dest="stop_after_player_turn", action="store_false")
+    parser.add_argument("--stop-after-next-combat", dest="stop_after_next_combat", action="store_true")
+    parser.add_argument("--no-stop-after-next-combat", dest="stop_after_next_combat", action="store_false")
     parser.add_argument("--auto-end-turn-when-only-end-turn", dest="auto_end_turn_when_only_end_turn", action="store_true")
     parser.add_argument("--no-auto-end-turn-when-only-end-turn", dest="auto_end_turn_when_only_end_turn", action="store_false")
     return parser
@@ -87,11 +106,16 @@ def main(argv: list[str] | None = None) -> int:
             max_total_actions=args.max_total_actions,
             max_consecutive_failures=args.max_consecutive_failures,
             wait_for_next_player_turn_seconds=args.wait_for_next_player_turn_seconds,
+            transition_timeout_seconds=args.transition_timeout_seconds,
             poll_interval_seconds=args.poll_interval_seconds,
+            max_non_combat_steps=args.max_non_combat_steps,
+            unknown_window_fuse=args.unknown_window_fuse,
             policy_timeout_seconds=args.policy_timeout_seconds,
             temperature=args.temperature,
             max_tokens=args.max_tokens,
             reward_mode=args.reward_mode,
+            map_mode=args.map_mode,
+            stop_after_next_combat=args.stop_after_next_combat,
             dry_run=args.dry_run,
         )
     )

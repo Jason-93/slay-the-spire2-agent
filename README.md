@@ -74,6 +74,18 @@ python tools/validate_live_apply.py \
 
 每次执行都会在 `tmp/live-apply-validation/<timestamp>/` 下输出结构化 artifacts，包括 `health.json`、`before_snapshot.json`、`before_actions.json`、`apply_request.json`、`apply_response.json`、`after_snapshot.json`、`after_actions.json` 和 `result.json`。
 
+### reward -> map -> 下一场战斗链路验证
+
+当游戏已经来到 reward 或 map 窗口，且 bridge 允许写入时，可用保守默认策略验证整段过渡链路：
+
+```bash
+python tools/validate_reward_map_next_battle.py \
+  --apply \
+  --allow-write
+```
+
+脚本会优先 `skip_reward`，并在地图阶段使用保守默认选路，直到回到下一场 `combat` 或命中超时。artifacts 默认写到 `tmp/reward-map-next-battle-validation/<timestamp>/`。
+
 ## Bridge 接口
 
 mod 成功注入后，会在本地暴露以下接口：
@@ -142,7 +154,7 @@ python tools/run_llm_autoplay.py \
 
 ### Live autoplay（整场战斗）
 
-如需从当前玩家回合一路打到战斗结束并进入奖励窗口，可显式启用 battle 模式：
+如需从当前玩家回合一路打到战斗结束、处理 reward/map，并尝试接回下一场战斗，可显式启用 battle 模式：
 
 ```bash
 python tools/run_llm_autoplay.py \
@@ -150,26 +162,37 @@ python tools/run_llm_autoplay.py \
   --base-url "http://127.0.0.1:8080/v1" \
   --model "Qwen3.5-9B-Q5_K_M.gguf" \
   --battle-mode \
+  --reward-mode safe-default \
+  --map-mode safe-default \
+  --stop-after-next-combat \
   --max-turns-per-battle 12 \
   --max-total-actions 48 \
-  --wait-for-next-player-turn-seconds 30
+  --wait-for-next-player-turn-seconds 30 \
+  --transition-timeout-seconds 15
 ```
 
 battle 模式下，runner 会在敌方回合和动画窗口持续轮询，直到：
 
-- 观察到 `reward` 等非 `combat` 窗口，正常结束
+- 进入 `reward`、`map`、过渡等待等跨窗口状态并继续推进
+- 命中 `next_combat_entered`、`map_phase_reached`、`reward_phase_reached` 等显式停止边界
 - 命中 `max_turns_per_battle`、`max_total_actions`
-- 等待下一玩家回合超时
+- 等待下一玩家回合或 reward/map 过渡超时
 - 模型或 bridge 失败中断
 
 新增常用参数：
 
 - `--battle-mode`：启用整场战斗模式，等价于关闭 `stop_after_player_turn`
+- `--reward-mode`：reward 策略，可选 `halt`、`skip`、`skip-only`、`safe-default`、`llm`
+- `--map-mode`：map 策略，可选 `halt`、`safe-default`、`llm`
+- `--stop-after-next-combat`：一旦重新进入下一场战斗就停止，便于验证跨窗口链路
 - `--max-turns-per-battle`：限制整场战斗最多完成多少个玩家回合
 - `--max-total-actions`：限制整场战斗最多提交多少个动作
 - `--max-consecutive-failures`：限制连续失败预算
 - `--wait-for-next-player-turn-seconds`：等待下一玩家回合的超时
+- `--transition-timeout-seconds`：等待 reward/map/房间切换的超时
 - `--poll-interval-seconds`：敌方回合 / 动画窗口的轮询间隔
+- `--max-non-combat-steps`：限制 reward/map/transition 等非战斗步骤预算
+- `--unknown-window-fuse`：未知窗口连续出现多少次后熔断停止
 
 每次运行都会输出 `RunSummary`，并在 `trace_dir` 下保存 JSONL trace。回合级结果重点看：
 
@@ -183,6 +206,9 @@ battle 模式下再重点看：
 - `turns_completed`：已经完成的玩家回合数
 - `total_actions`：整场战斗累计提交动作数
 - `current_turn_index`：当前观测到的玩家回合索引
+- `reward_actions_taken` / `map_actions_taken`：reward 与 map 阶段已提交动作数
+- `non_combat_steps`：本次运行累计经过多少个非战斗步骤
+- `next_combat_entered`：是否成功重新接回下一场战斗
 
 单步 trace 至少包含：
 
@@ -196,6 +222,8 @@ battle 模式下再重点看：
 
 - `step_index`
 - `actions_this_turn`
+- `phase_kind` / `step_kind`
+- `transition_elapsed_seconds`
 - `is_final_step`
 - `stop_reason`
 

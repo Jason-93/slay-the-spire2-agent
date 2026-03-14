@@ -11,6 +11,7 @@ class Phase(StrEnum):
     MAP = "map"
     MENU = "menu"
     TERMINAL = "terminal"
+    UNKNOWN = "unknown"
 
 
 class ActionType(StrEnum):
@@ -131,6 +132,15 @@ class TraceEntry:
     actions_this_turn: int = 0
     total_actions: int = 0
     waiting_for_player_turn: bool = False
+    phase_kind: str = ""
+    step_kind: str = ""
+    transition_elapsed_seconds: float = 0.0
+    transition_attempt: int = 0
+    reward_actions_taken: int = 0
+    map_actions_taken: int = 0
+    non_combat_steps: int = 0
+    transition_wait_steps: int = 0
+    next_combat_entered: bool = False
     is_final_step: bool = False
     stop_reason: str = ""
     battle_stop_reason: str = ""
@@ -152,6 +162,11 @@ class RunSummary:
     turns_completed: int = 0
     total_actions: int = 0
     current_turn_index: int = 0
+    reward_actions_taken: int = 0
+    map_actions_taken: int = 0
+    non_combat_steps: int = 0
+    transition_wait_steps: int = 0
+    next_combat_entered: bool = False
     ended_by: str = ""
 
 

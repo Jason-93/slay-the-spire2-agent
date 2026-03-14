@@ -154,6 +154,61 @@ public sealed class RewardPhaseDetectionTests
         Assert.Equal("skip_hook_not_found", exported.Snapshot.Metadata["reward_skip_reason"]);
     }
 
+    [Fact]
+    public void BuildMapWindow_ExportsReadyMetadataAndChooseMapNodeActions()
+    {
+        var reader = CreateReader();
+        var runNode = new FakeRunNode(new FakeScreenTracker(mapScreenVisible: true));
+        var currentPoint = new FakeMapPoint("Current", new FakeMapCoord(0, 0),
+            new FakeMapPoint("Monster", new FakeMapCoord(1, 2)),
+            new FakeMapPoint("Elite", new FakeMapCoord(2, 2)));
+        var runState = new FakeRunState(Array.Empty<FakeEnemy>(), currentRoom: new FakeMapRoom(), currentMapPoint: currentPoint);
+
+        var window = InvokeBuildMapWindow(reader, runNode, runState);
+        var exported = new MapWindowExtractor().Export(window, new BridgeSessionState(new BridgeOptions()));
+
+        Assert.Equal(DecisionPhase.Map, window.Phase);
+        Assert.Equal(new[] { "Monster@1,2", "Elite@2,2" }, window.MapNodes);
+        Assert.Equal("map_ready", exported.Snapshot.Metadata["window_kind"]);
+        Assert.Equal(true, exported.Snapshot.Metadata["map_ready"]);
+        Assert.Equal("current_map_point", exported.Snapshot.Metadata["map_node_source"]);
+        Assert.Contains(window.Actions, action => action.Type == "choose_map_node");
+    }
+
+    [Fact]
+    public void BuildMapWindow_UsesStartingPointFallbackAndTransitionMetadata()
+    {
+        var reader = CreateReader();
+        var runNode = new FakeRunNode(new FakeScreenTracker(mapScreenVisible: true));
+        var startingPoint = new FakeMapPoint("Start", new FakeMapCoord(0, 0),
+            new FakeMapPoint("Monster", new FakeMapCoord(3, 1)));
+        var runState = new FakeRunState(
+            Array.Empty<FakeEnemy>(),
+            currentRoom: new FakeMapRoom(),
+            currentMapPoint: new FakeMapPoint("Current", new FakeMapCoord(0, 0)),
+            map: new FakeMap(startingPoint));
+
+        var fallbackWindow = InvokeBuildMapWindow(reader, runNode, runState);
+        var fallbackExported = new MapWindowExtractor().Export(fallbackWindow, new BridgeSessionState(new BridgeOptions()));
+
+        Assert.Equal(new[] { "Monster@3,1" }, fallbackWindow.MapNodes);
+        Assert.Equal("starting_map_point_fallback", fallbackExported.Snapshot.Metadata["map_node_source"]);
+        Assert.Equal("map_ready", fallbackExported.Snapshot.Metadata["window_kind"]);
+
+        var emptyRunState = new FakeRunState(
+            Array.Empty<FakeEnemy>(),
+            currentRoom: new FakeMapRoom(),
+            currentMapPoint: new FakeMapPoint("Current", new FakeMapCoord(0, 0)),
+            map: new FakeMap(new FakeMapPoint("Start", new FakeMapCoord(0, 0))));
+        var transitionWindow = InvokeBuildMapWindow(reader, runNode, emptyRunState);
+        var transitionExported = new MapWindowExtractor().Export(transitionWindow, new BridgeSessionState(new BridgeOptions()));
+
+        Assert.Empty(transitionWindow.Actions);
+        Assert.Equal("map_transition", transitionExported.Snapshot.Metadata["window_kind"]);
+        Assert.Equal(true, transitionExported.Snapshot.Metadata["no_reachable_nodes"]);
+        Assert.Equal("no_reachable_nodes", transitionExported.Snapshot.Metadata["map_node_source"]);
+    }
+
     private static Sts2RuntimeReflectionReader CreateReader()
     {
         return new Sts2RuntimeReflectionReader(new BridgeOptions(), new InstallationProbeResult(true, null, null, null, null));
@@ -174,6 +229,12 @@ public sealed class RewardPhaseDetectionTests
     private static RuntimeWindowContext InvokeBuildRewardWindow(Sts2RuntimeReflectionReader reader, object runNode, object runState)
     {
         var method = typeof(Sts2RuntimeReflectionReader).GetMethod("BuildRewardWindow", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        return (RuntimeWindowContext)method.Invoke(reader, new[] { runNode, runState })!;
+    }
+
+    private static RuntimeWindowContext InvokeBuildMapWindow(Sts2RuntimeReflectionReader reader, object runNode, object runState)
+    {
+        var method = typeof(Sts2RuntimeReflectionReader).GetMethod("BuildMapWindow", BindingFlags.Instance | BindingFlags.NonPublic)!;
         return (RuntimeWindowContext)method.Invoke(reader, new[] { runNode, runState })!;
     }
 
@@ -254,13 +315,38 @@ public sealed class RewardPhaseDetectionTests
         }
     }
 
-    private sealed class FakeRunState(IEnumerable<FakeEnemy> enemies)
+    private sealed class FakeRunState(
+        IEnumerable<FakeEnemy> enemies,
+        object? currentRoom = null,
+        FakeMapPoint? currentMapPoint = null,
+        FakeMap? map = null)
     {
-        public object CurrentRoom { get; } = new FakeCombatRoom();
+        public object CurrentRoom { get; } = currentRoom ?? new FakeCombatRoom();
         public List<FakePlayer> Players { get; } = new() { new FakePlayer(enemies.ToArray()) };
+        public FakeMapPoint? CurrentMapPoint { get; } = currentMapPoint;
+        public FakeMap? Map { get; } = map;
     }
 
     private sealed class FakeCombatRoom;
+    private sealed class FakeMapRoom;
+
+    private sealed class FakeMap(FakeMapPoint startingMapPoint)
+    {
+        public FakeMapPoint StartingMapPoint { get; } = startingMapPoint;
+    }
+
+    private sealed class FakeMapPoint(string pointType, FakeMapCoord coord, params FakeMapPoint[] children)
+    {
+        public string PointType { get; } = pointType;
+        public FakeMapCoord coord { get; } = coord;
+        public List<FakeMapPoint> Children { get; } = new(children);
+    }
+
+    private sealed class FakeMapCoord(int col, int row)
+    {
+        public int col { get; } = col;
+        public int row { get; } = row;
+    }
 
     private sealed class FakePlayer(FakeEnemy[] enemies)
     {

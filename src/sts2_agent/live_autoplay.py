@@ -20,12 +20,17 @@ class LiveAutoplayConfig:
     battle_mode: bool = False
     stop_after_player_turn: bool = True
     auto_end_turn_when_only_end_turn: bool = True
-    reward_mode: str = "halt"  # halt|skip|llm
+    reward_mode: str = "halt"  # halt|skip|skip-only|safe-default|llm
+    map_mode: str = "halt"  # halt|safe-default|llm
     max_turns_per_battle: int | None = None
     max_total_actions: int | None = None
     max_consecutive_failures: int = 6
     wait_for_next_player_turn_seconds: float = 30.0
+    transition_timeout_seconds: float = 15.0
     poll_interval_seconds: float = 0.5
+    max_non_combat_steps: int = 24
+    unknown_window_fuse: int = 2
+    stop_after_next_combat: bool = False
     policy_timeout_seconds: float = 20.0
     temperature: float = 0.2
     max_tokens: int = 256
@@ -62,11 +67,16 @@ def run_live_autoplay(config: LiveAutoplayConfig) -> RunSummary:
             stop_after_player_turn=stop_after_player_turn,
             auto_end_turn_when_only_end_turn=config.auto_end_turn_when_only_end_turn,
             reward_mode=config.reward_mode,
+            map_mode=config.map_mode,
             max_turns_per_battle=config.max_turns_per_battle,
             max_total_actions=config.max_total_actions,
             max_consecutive_failures=config.max_consecutive_failures,
             wait_for_next_player_turn_seconds=config.wait_for_next_player_turn_seconds,
+            transition_timeout_seconds=config.transition_timeout_seconds,
             poll_interval_seconds=config.poll_interval_seconds,
+            max_non_combat_steps=config.max_non_combat_steps,
+            unknown_window_fuse=config.unknown_window_fuse,
+            stop_after_next_combat=config.stop_after_next_combat,
             trace_dir=config.trace_dir,
             dry_run=config.dry_run,
         ),

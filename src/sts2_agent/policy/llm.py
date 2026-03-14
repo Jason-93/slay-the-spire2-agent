@@ -73,6 +73,8 @@ class ChatCompletionsPolicy:
             "如果你认为当前不应继续自动操作，可以返回 halt=true 且 action_id=null。"
             "当 snapshot.phase=reward 时，你需要在 choose_reward 或 skip_reward 等奖励动作中做选择；"
             "若不确定，优先返回 halt=true 或选择 skip_reward（并在 reason 说明原因）。"
+            "当 snapshot.phase=map 时，只能在 choose_map_node 中选择一个可达节点；"
+            "若没有足够信息判断路线，请优先选择更保守的普通战斗节点。"
         )
         user_payload = {
             "snapshot": self._summarize_snapshot(snapshot),

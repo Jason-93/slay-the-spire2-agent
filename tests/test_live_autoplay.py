@@ -54,7 +54,13 @@ class LiveAutoplayTests(unittest.TestCase):
                     max_total_actions=9,
                     max_consecutive_failures=5,
                     wait_for_next_player_turn_seconds=12.5,
+                    transition_timeout_seconds=8.0,
                     poll_interval_seconds=0.2,
+                    max_non_combat_steps=11,
+                    unknown_window_fuse=3,
+                    reward_mode="safe-default",
+                    map_mode="safe-default",
+                    stop_after_next_combat=True,
                     auto_end_turn_when_only_end_turn=False,
                 )
             )
@@ -71,7 +77,13 @@ class LiveAutoplayTests(unittest.TestCase):
         self.assertEqual(captured["config"].max_total_actions, 9)
         self.assertEqual(captured["config"].max_consecutive_failures, 5)
         self.assertEqual(captured["config"].wait_for_next_player_turn_seconds, 12.5)
+        self.assertEqual(captured["config"].transition_timeout_seconds, 8.0)
         self.assertEqual(captured["config"].poll_interval_seconds, 0.2)
+        self.assertEqual(captured["config"].max_non_combat_steps, 11)
+        self.assertEqual(captured["config"].unknown_window_fuse, 3)
+        self.assertEqual(captured["config"].reward_mode, "safe-default")
+        self.assertEqual(captured["config"].map_mode, "safe-default")
+        self.assertTrue(captured["config"].stop_after_next_combat)
         self.assertFalse(captured["config"].auto_end_turn_when_only_end_turn)
 
     def test_cli_main_prints_json_summary(self) -> None:
@@ -111,6 +123,17 @@ class LiveAutoplayTests(unittest.TestCase):
                         "5",
                         "--max-total-actions",
                         "12",
+                        "--transition-timeout-seconds",
+                        "9",
+                        "--max-non-combat-steps",
+                        "10",
+                        "--unknown-window-fuse",
+                        "3",
+                        "--reward-mode",
+                        "safe-default",
+                        "--map-mode",
+                        "safe-default",
+                        "--stop-after-next-combat",
                     ]
                 )
 
@@ -142,8 +165,19 @@ class LiveAutoplayTests(unittest.TestCase):
                 "4",
                 "--wait-for-next-player-turn-seconds",
                 "9",
+                "--transition-timeout-seconds",
+                "7",
                 "--poll-interval-seconds",
                 "0.25",
+                "--max-non-combat-steps",
+                "12",
+                "--unknown-window-fuse",
+                "3",
+                "--reward-mode",
+                "safe-default",
+                "--map-mode",
+                "safe-default",
+                "--stop-after-next-combat",
                 "--no-auto-end-turn-when-only-end-turn",
                 "--no-stop-after-player-turn",
             ]
@@ -155,7 +189,13 @@ class LiveAutoplayTests(unittest.TestCase):
         self.assertEqual(args.max_total_actions, 10)
         self.assertEqual(args.max_consecutive_failures, 4)
         self.assertEqual(args.wait_for_next_player_turn_seconds, 9)
+        self.assertEqual(args.transition_timeout_seconds, 7)
         self.assertEqual(args.poll_interval_seconds, 0.25)
+        self.assertEqual(args.max_non_combat_steps, 12)
+        self.assertEqual(args.unknown_window_fuse, 3)
+        self.assertEqual(args.reward_mode, "safe-default")
+        self.assertEqual(args.map_mode, "safe-default")
+        self.assertTrue(args.stop_after_next_combat)
         self.assertFalse(args.auto_end_turn_when_only_end_turn)
         self.assertFalse(args.stop_after_player_turn)
 

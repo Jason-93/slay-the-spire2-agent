@@ -171,8 +171,11 @@ public sealed class MapWindowExtractor : WindowExtractorBase
         var metadata = new Dictionary<string, object?>(context.Metadata)
         {
             ["node_count"] = context.MapNodes.Count,
-            ["window_kind"] = "map_choice"
         };
+        if (!metadata.ContainsKey("window_kind"))
+        {
+            metadata["window_kind"] = "map_choice";
+        }
         return metadata;
     }
 }

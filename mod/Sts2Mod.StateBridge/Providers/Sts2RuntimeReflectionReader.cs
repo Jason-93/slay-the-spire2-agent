@@ -1122,6 +1122,7 @@ internal sealed class Sts2RuntimeReflectionReader
         {
             metadata["window_kind"] = "combat_transition";
             metadata["reward_pending"] = true;
+            metadata["transition_kind"] = "combat_reward_transition";
             metadata["text_diagnostics"] = textDiagnostics.ToMetadata();
             return new RuntimeWindowContext(
                 DecisionPhase.Combat,
@@ -1201,6 +1202,10 @@ internal sealed class Sts2RuntimeReflectionReader
         {
             metadata["window_kind"] = "reward_card_selection";
         }
+        else
+        {
+            metadata["window_kind"] = "reward_choice";
+        }
         metadata["reward_count"] = rewards.Count;
         var actions = rewards
             .Select((reward, index) =>
@@ -1253,10 +1258,14 @@ internal sealed class Sts2RuntimeReflectionReader
     private RuntimeWindowContext BuildMapWindow(object runNode, object runState)
     {
         var textDiagnostics = new TextDiagnosticsCollector();
-        var mapNodes = ExtractMapNodes(runState, textDiagnostics);
+        var mapNodes = ExtractMapNodes(runState, textDiagnostics, out var mapNodeSource);
         var player = BuildPlayerState(runState, textDiagnostics);
         var metadata = CreateBaseMetadata(runNode, runState, DecisionPhase.Map);
         metadata["node_count"] = mapNodes.Count;
+        metadata["window_kind"] = mapNodes.Count > 0 ? "map_ready" : "map_transition";
+        metadata["map_ready"] = mapNodes.Count > 0;
+        metadata["map_node_source"] = mapNodeSource;
+        metadata["no_reachable_nodes"] = mapNodes.Count == 0;
         metadata["text_diagnostics"] = textDiagnostics.ToMetadata();
         var actions = mapNodes
             .Select(node => new RuntimeActionDefinition(
@@ -1508,7 +1517,7 @@ internal sealed class Sts2RuntimeReflectionReader
         return choices;
     }
 
-    private List<string> ExtractMapNodes(object runState, TextDiagnosticsCollector textDiagnostics)
+    private List<string> ExtractMapNodes(object runState, TextDiagnosticsCollector textDiagnostics, out string source)
     {
         var currentMapPoint = GetMemberValue(runState, "CurrentMapPoint");
         var nodes = EnumerateObjects(GetMemberValue(currentMapPoint, "Children"))
@@ -1520,17 +1529,20 @@ internal sealed class Sts2RuntimeReflectionReader
 
         if (nodes.Count > 0)
         {
+            source = "current_map_point";
             return nodes;
         }
 
         var map = GetMemberValue(runState, "Map");
         var startingPoint = GetMemberValue(map, "StartingMapPoint");
-        return EnumerateObjects(GetMemberValue(startingPoint, "Children"))
+        nodes = EnumerateObjects(GetMemberValue(startingPoint, "Children"))
             .Select((node, index) => DescribeMapNode(node, $"map_nodes[{index}]", textDiagnostics))
             .Where(label => !string.IsNullOrWhiteSpace(label))
             .Select(label => label!)
             .Distinct(StringComparer.Ordinal)
             .ToList();
+        source = nodes.Count > 0 ? "starting_map_point_fallback" : "no_reachable_nodes";
+        return nodes;
     }
 
     private bool TryGetRuntimeRoot(Assembly assembly, out RuntimeRoot root, out string status)
@@ -2651,8 +2663,11 @@ internal sealed class Sts2RuntimeReflectionReader
         _ = travelMethod.Invoke(mapScreen, new[] { mapCoord });
         return new RuntimeActionResult(true, $"Traveling to map node '{node}'.", metadata: new Dictionary<string, object?>
         {
+            ["action_type"] = "choose_map_node",
             ["node"] = node,
             ["coord"] = $"{coord.Value.Col},{coord.Value.Row}",
+            ["next_window_expected"] = "room_transition",
+            ["transition_kind"] = "map_travel_submitted",
         });
     }
 

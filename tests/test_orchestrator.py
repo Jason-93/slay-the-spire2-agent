@@ -133,6 +133,8 @@ class SequencedCombatBridge:
                     for card_id in window.get("hand", ["card-1"])
                 ],
             ),
+            rewards=list(window.get("rewards", [])),
+            map_nodes=list(window.get("map_nodes", [])),
             enemies=[EnemyState(**enemy) for enemy in raw_enemies] if raw_enemies is not None else [EnemyState(enemy_id="1", name="Louse", hp=20, max_hp=20, block=0, intent="unknown")],
             terminal=bool(window.get("terminal", False)),
             metadata=metadata,
@@ -290,6 +292,8 @@ def make_window(
     hand: list[str] | None = None,
     metadata: dict[str, object] | None = None,
     enemies: list[dict[str, object]] | None = None,
+    rewards: list[str] | None = None,
+    map_nodes: list[str] | None = None,
 ) -> dict[str, object]:
     return {
         "phase": phase,
@@ -299,6 +303,8 @@ def make_window(
         "hand": hand or ["card-1"],
         "metadata": metadata or {"current_side": "Player", "round_number": 1},
         "enemies": enemies,
+        "rewards": rewards or [],
+        "map_nodes": map_nodes or [],
     }
 
 
@@ -355,8 +361,14 @@ class OrchestratorTests(unittest.TestCase):
                     phase="reward",
                     actions=[{"type": "skip_reward", "label": "Skip Reward"}],
                     metadata={},
+                    rewards=["Add a card"],
                 ),
-                make_window(phase="map", actions=[{"type": "choose_map_node", "label": "Choose node", "params": {"node": "Monster@3,1"}}], metadata={}),
+                make_window(
+                    phase="map",
+                    actions=[{"type": "choose_map_node", "label": "Choose node", "params": {"node": "Monster@3,1"}}],
+                    metadata={},
+                    map_nodes=["Monster@3,1"],
+                ),
             ]
         )
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -369,8 +381,9 @@ class OrchestratorTests(unittest.TestCase):
 
             self.assertTrue(summary.completed)
             self.assertFalse(summary.interrupted)
-            self.assertEqual(summary.ended_by, "reward_skipped")
+            self.assertEqual(summary.ended_by, "map_phase_reached")
             self.assertEqual(bridge.submissions, ["skip_reward"])
+            self.assertEqual(summary.reward_actions_taken, 1)
 
     def test_reward_mode_llm_can_choose_reward(self) -> None:
         bridge = SequencedCombatBridge(
@@ -382,6 +395,7 @@ class OrchestratorTests(unittest.TestCase):
                         {"type": "skip_reward", "label": "Skip Reward"},
                     ],
                     metadata={},
+                    rewards=["Gold"],
                 ),
                 make_window(phase="map", actions=[], metadata={}),
             ]
@@ -396,8 +410,158 @@ class OrchestratorTests(unittest.TestCase):
 
             self.assertTrue(summary.completed)
             self.assertFalse(summary.interrupted)
-            self.assertEqual(summary.ended_by, "reward_chosen")
+            self.assertEqual(summary.ended_by, "map_phase_reached")
             self.assertEqual(bridge.submissions, ["choose_reward"])
+            self.assertEqual(summary.reward_actions_taken, 1)
+
+    def test_battle_mode_can_continue_reward_to_map_to_next_combat(self) -> None:
+        bridge = SequencedCombatBridge(
+            [
+                make_window(
+                    phase="reward",
+                    actions=[{"type": "skip_reward", "label": "Skip Reward"}],
+                    metadata={"window_kind": "reward_choice", "reward_subphase": "reward_choice"},
+                    rewards=["Add a card"],
+                ),
+                make_window(
+                    phase="map",
+                    actions=[
+                        {"type": "choose_map_node", "label": "Choose Monster@1,2", "params": {"node": "Monster@1,2"}},
+                        {"type": "choose_map_node", "label": "Choose Elite@2,2", "params": {"node": "Elite@2,2"}},
+                    ],
+                    metadata={"window_kind": "map_ready"},
+                    map_nodes=["Monster@1,2", "Elite@2,2"],
+                ),
+                make_window(
+                    phase="combat",
+                    actions=[{"type": "end_turn", "label": "End Turn"}],
+                    hand=[],
+                    metadata={"current_side": "Player", "round_number": 1},
+                ),
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orchestrator = AutoplayOrchestrator(
+                bridge=bridge,
+                policy=FirstLegalActionPolicy(),
+                config=OrchestratorConfig(
+                    trace_dir=tmpdir,
+                    stop_after_player_turn=False,
+                    reward_mode="safe-default",
+                    map_mode="safe-default",
+                    stop_after_next_combat=True,
+                    max_steps=8,
+                ),
+            )
+            summary = orchestrator.run(scenario="live")
+
+            self.assertTrue(summary.completed)
+            self.assertFalse(summary.interrupted)
+            self.assertEqual(summary.ended_by, "next_combat_entered")
+            self.assertEqual(bridge.submissions, ["skip_reward", "choose_map_node"])
+            self.assertTrue(summary.next_combat_entered)
+            self.assertEqual(summary.reward_actions_taken, 1)
+            self.assertEqual(summary.map_actions_taken, 1)
+            records = [json.loads(line) for line in Path(summary.trace_path).read_text(encoding="utf-8").splitlines()]
+            self.assertIn("reward_choice", {record["step_kind"] for record in records})
+            self.assertIn("map", {record["step_kind"] for record in records})
+            self.assertEqual(records[-1]["step_kind"], "combat_resume")
+
+    def test_battle_mode_waits_for_transition_after_map_choice(self) -> None:
+        bridge = SequencedCombatBridge(
+            [
+                make_window(
+                    phase="map",
+                    actions=[{"type": "choose_map_node", "label": "Choose Monster@1,2", "params": {"node": "Monster@1,2"}}],
+                    metadata={"window_kind": "map_ready"},
+                    map_nodes=["Monster@1,2"],
+                ),
+                make_window(
+                    phase="map",
+                    actions=[],
+                    metadata={"window_kind": "map_transition"},
+                    map_nodes=[],
+                ),
+                make_window(
+                    phase="combat",
+                    actions=[{"type": "end_turn", "label": "End Turn"}],
+                    hand=[],
+                    metadata={"current_side": "Player", "round_number": 2},
+                ),
+            ],
+            advance_on_snapshot_reads={1: 4},
+        )
+        with tempfile.TemporaryDirectory() as tmpdir, patch("sts2_agent.orchestrator.time.sleep", return_value=None):
+            orchestrator = AutoplayOrchestrator(
+                bridge=bridge,
+                policy=FirstLegalActionPolicy(),
+                config=OrchestratorConfig(
+                    trace_dir=tmpdir,
+                    stop_after_player_turn=False,
+                    map_mode="safe-default",
+                    stop_after_next_combat=True,
+                    max_steps=8,
+                ),
+            )
+            summary = orchestrator.run(scenario="live")
+
+            self.assertTrue(summary.completed)
+            self.assertEqual(summary.ended_by, "next_combat_entered")
+            records = [json.loads(line) for line in Path(summary.trace_path).read_text(encoding="utf-8").splitlines()]
+            self.assertTrue(any(record["step_kind"] == "transition_wait" for record in records))
+
+    def test_battle_mode_stops_when_transition_wait_times_out(self) -> None:
+        bridge = SequencedCombatBridge(
+            [
+                make_window(
+                    phase="map",
+                    actions=[],
+                    metadata={"window_kind": "map_transition"},
+                ),
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmpdir, patch("sts2_agent.orchestrator.time.sleep", return_value=None), patch(
+            "sts2_agent.orchestrator.time.monotonic",
+            side_effect=[0.0, 0.0, 0.2, 0.2],
+        ):
+            orchestrator = AutoplayOrchestrator(
+                bridge=bridge,
+                policy=FirstLegalActionPolicy(),
+                config=OrchestratorConfig(
+                    trace_dir=tmpdir,
+                    stop_after_player_turn=False,
+                    map_mode="safe-default",
+                    transition_timeout_seconds=0.1,
+                    poll_interval_seconds=0.0,
+                    max_steps=4,
+                ),
+            )
+            summary = orchestrator.run(scenario="live")
+
+            self.assertFalse(summary.completed)
+            self.assertTrue(summary.interrupted)
+            self.assertEqual(summary.ended_by, "transition_timeout")
+            records = [json.loads(line) for line in Path(summary.trace_path).read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(records[-1]["step_kind"], "transition_wait")
+
+    def test_battle_mode_stops_on_unknown_window_after_fuse(self) -> None:
+        bridge = SequencedCombatBridge([make_window(phase="shop", actions=[], metadata={"window_kind": "shop"})])
+        with tempfile.TemporaryDirectory() as tmpdir, patch("sts2_agent.orchestrator.time.sleep", return_value=None):
+            orchestrator = AutoplayOrchestrator(
+                bridge=bridge,
+                policy=FirstLegalActionPolicy(),
+                config=OrchestratorConfig(
+                    trace_dir=tmpdir,
+                    stop_after_player_turn=False,
+                    unknown_window_fuse=1,
+                    max_steps=2,
+                ),
+            )
+            summary = orchestrator.run(scenario="live")
+
+            self.assertFalse(summary.completed)
+            self.assertTrue(summary.interrupted)
+            self.assertEqual(summary.ended_by, "unsupported_phase")
 
     def test_battle_mode_completes_when_no_enemies_remain_in_combat_snapshot(self) -> None:
         bridge = SequencedCombatBridge(
