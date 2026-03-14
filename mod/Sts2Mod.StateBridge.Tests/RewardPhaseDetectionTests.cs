@@ -155,6 +155,68 @@ public sealed class RewardPhaseDetectionTests
     }
 
     [Fact]
+    public void BuildRewardWindow_ExportsAdvanceActionWhenRewardScreenNeedsContinue()
+    {
+        var reader = CreateReader();
+        var rewardScreen = new FakeRewardScreen(isComplete: true, visible: true, advanceButton: new FakeAdvanceButton("前进"));
+        var runNode = new FakeRunNode(new FakeScreenTracker(rewardScreen: rewardScreen));
+        var runState = new FakeRunState(Array.Empty<FakeEnemy>());
+
+        var window = InvokeBuildRewardWindow(reader, runNode, runState);
+        var exported = new RewardWindowExtractor().Export(window, new BridgeSessionState(new BridgeOptions()));
+
+        Assert.Empty(window.Rewards);
+        Assert.Contains(window.Actions, action => action.Type == "advance_reward");
+        Assert.Equal("reward_advance", exported.Snapshot.Metadata["window_kind"]);
+        Assert.Equal("reward_advance", exported.Snapshot.Metadata["reward_subphase"]);
+        Assert.Equal(true, exported.Snapshot.Metadata["reward_advance_available"]);
+    }
+
+    [Fact]
+    public void ExecuteAdvanceReward_PrefersRewardScreenProceedHandler()
+    {
+        var reader = CreateReader();
+        var button = new FakeAdvanceButton("前进");
+        var rewardScreen = new FakeRewardScreen(isComplete: true, visible: true, advanceButton: button);
+        var runNode = new FakeRunNode(new FakeScreenTracker(rewardScreen: rewardScreen));
+        var action = new LegalAction(
+            "act-advance",
+            "advance_reward",
+            "前进",
+            new Dictionary<string, object?> { ["button_label"] = "前进" },
+            Array.Empty<string>(),
+            new Dictionary<string, object?>());
+        var request = new ActionRequest("dec-1", "act-advance", null, action.Params, Guid.NewGuid().ToString("N"));
+
+        var result = InvokeExecuteAdvanceReward(reader, runNode, request, action);
+        var accepted = (bool)result.GetType().GetProperty("Accepted")!.GetValue(result)!;
+        var metadata = (IReadOnlyDictionary<string, object?>)result.GetType().GetProperty("Metadata")!.GetValue(result)!;
+
+        Assert.True(accepted);
+        Assert.True(rewardScreen.ProceedPressed);
+        Assert.False(button.Clicked);
+        Assert.Equal("advance_reward", metadata["action_type"]);
+        Assert.Equal("map", metadata["next_window_expected"]);
+        Assert.Equal("reward_screen.OnProceedButtonPressed", metadata["runtime_handler"]);
+    }
+
+    [Fact]
+    public void BuildRewardWindow_UsesTransitionWindowWhenRewardIsCompleteButAdvanceButtonIsMissing()
+    {
+        var reader = CreateReader();
+        var rewardScreen = new FakeRewardScreen(isComplete: true, visible: true);
+        var runNode = new FakeRunNode(new FakeScreenTracker(rewardScreen: rewardScreen));
+        var runState = new FakeRunState(Array.Empty<FakeEnemy>());
+
+        var window = InvokeBuildRewardWindow(reader, runNode, runState);
+        var exported = new RewardWindowExtractor().Export(window, new BridgeSessionState(new BridgeOptions()));
+
+        Assert.Empty(window.Actions);
+        Assert.Equal("reward_transition", exported.Snapshot.Metadata["window_kind"]);
+        Assert.Equal("reward_transition", exported.Snapshot.Metadata["reward_subphase"]);
+    }
+
+    [Fact]
     public void BuildMapWindow_ExportsReadyMetadataAndChooseMapNodeActions()
     {
         var reader = CreateReader();
@@ -238,6 +300,12 @@ public sealed class RewardPhaseDetectionTests
         return (RuntimeWindowContext)method.Invoke(reader, new[] { runNode, runState })!;
     }
 
+    private static object InvokeExecuteAdvanceReward(Sts2RuntimeReflectionReader reader, object runNode, ActionRequest request, LegalAction action)
+    {
+        var method = typeof(Sts2RuntimeReflectionReader).GetMethod("ExecuteAdvanceReward", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        return method.Invoke(reader, new object[] { runNode, request, action })!;
+    }
+
     private sealed class FakeRunNode(FakeScreenTracker screenStateTracker, FakeGlobalUi? globalUi = null)
     {
         public FakeScreenTracker ScreenStateTracker { get; } = screenStateTracker;
@@ -266,11 +334,39 @@ public sealed class RewardPhaseDetectionTests
         public bool _rewardScreenVisible = rewardScreenVisible;
     }
 
-    private sealed class FakeRewardScreen(bool isComplete, bool visible, params FakeRewardButton[] buttons)
+    private sealed class FakeRewardScreen
     {
-        public bool IsComplete { get; } = isComplete;
-        public bool Visible { get; } = visible;
-        public List<FakeRewardButton> _rewardButtons { get; } = new(buttons);
+        public FakeRewardScreen(bool isComplete, bool visible, params FakeRewardButton[] buttons)
+        {
+            IsComplete = isComplete;
+            Visible = visible;
+            _rewardButtons = new List<FakeRewardButton>(buttons);
+        }
+
+        public FakeRewardScreen(bool isComplete, bool visible, FakeAdvanceButton advanceButton, params FakeRewardButton[] buttons)
+            : this(isComplete, visible, buttons)
+        {
+            AdvanceButton = advanceButton;
+        }
+
+        public bool IsComplete { get; }
+        public bool Visible { get; }
+        public List<FakeRewardButton> _rewardButtons { get; }
+        public FakeAdvanceButton? AdvanceButton { get; }
+        public bool ProceedPressed { get; private set; }
+
+        public IEnumerable<object> GetChildren()
+        {
+            if (AdvanceButton is not null)
+            {
+                yield return AdvanceButton;
+            }
+        }
+
+        public void OnProceedButtonPressed(FakeAdvanceButton _)
+        {
+            ProceedPressed = true;
+        }
     }
 
     private sealed class FakeRewardButton(FakeReward reward)
@@ -281,6 +377,19 @@ public sealed class RewardPhaseDetectionTests
     private sealed class FakeReward(string description)
     {
         public string Description { get; } = description;
+    }
+
+    private sealed class FakeAdvanceButton(string text)
+    {
+        public string Text { get; } = text;
+        public bool Visible { get; } = true;
+        public bool IsEnabled { get; } = true;
+        public bool Clicked { get; private set; }
+
+        public void Click()
+        {
+            Clicked = true;
+        }
     }
 
     private sealed class FakeCard(string title)

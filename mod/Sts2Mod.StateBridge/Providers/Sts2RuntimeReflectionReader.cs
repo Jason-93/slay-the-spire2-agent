@@ -33,6 +33,7 @@ internal sealed class Sts2RuntimeReflectionReader
     private const string RewardScreenTypeName = "MegaCrit.Sts2.Core.Nodes.Screens.NRewardsScreen";
     private const string PhaseMenu = DecisionPhase.Menu;
     private static readonly string[] MenuContinueLabelHints = { "continue", "resume", "继续", "继续游戏", "继续旅程" };
+    private static readonly string[] RewardAdvanceLabelHints = { "advance", "continue", "proceed", "next", "forward", "前进", "继续", "下一步" };
     private static readonly string[] MenuNewRunLabelHints = { "new run", "new game", "start new", "开始新", "新游戏", "新旅程" };
     private static readonly string[] MenuConfirmLabelHints = { "start", "begin", "confirm", "ok", "开始", "确认", "确定" };
     private static readonly string[] MenuDangerLabelHints = { "exit", "quit", "abandon", "delete", "退出", "放弃", "删除" };
@@ -118,6 +119,18 @@ internal sealed class Sts2RuntimeReflectionReader
         "OnCancel",
         "Close",
         "Dismiss",
+    };
+    private static readonly string[] RewardAdvanceMethodNames =
+    {
+        "Advance",
+        "Continue",
+        "Proceed",
+        "Next",
+        "GoNext",
+        "OnContinuePressed",
+        "OnContinueButtonPressed",
+        "OnProceedButtonPressed",
+        "OnProceedPressed",
     };
     private readonly BridgeOptions _options;
     private readonly InstallationProbeResult _probe;
@@ -212,6 +225,7 @@ internal sealed class Sts2RuntimeReflectionReader
             "end_turn" => ExecuteEndTurn(root.RunState, request),
             "choose_reward" => ExecuteChooseReward(root.RunNode, request, action),
             "skip_reward" => ExecuteSkipReward(root.RunNode, request),
+            "advance_reward" => ExecuteAdvanceReward(root.RunNode, request, action),
             "choose_map_node" => ExecuteChooseMapNode(request, action),
             _ => new RuntimeActionResult(false, $"Action type '{action.Type}' is not supported yet.", "unsupported_action"),
         };
@@ -1198,15 +1212,15 @@ internal sealed class Sts2RuntimeReflectionReader
         metadata["phase_detection"] = rewardAnalysis.ToMetadata();
         metadata["reward_subphase"] = rewardAnalysis.RewardSubphase;
         metadata["detection_source"] = rewardAnalysis.DetectionSource;
-        if (string.Equals(rewardAnalysis.RewardSubphase, "card_reward_selection", StringComparison.Ordinal))
+        metadata["window_kind"] = rewardAnalysis.RewardSubphase switch
         {
-            metadata["window_kind"] = "reward_card_selection";
-        }
-        else
-        {
-            metadata["window_kind"] = "reward_choice";
-        }
+            "card_reward_selection" => "reward_card_selection",
+            "reward_advance" => "reward_advance",
+            "reward_transition" => "reward_transition",
+            _ => "reward_choice",
+        };
         metadata["reward_count"] = rewards.Count;
+        metadata["reward_screen_complete"] = rewardAnalysis.RewardScreenComplete;
         var actions = rewards
             .Select((reward, index) =>
             {
@@ -1240,6 +1254,21 @@ internal sealed class Sts2RuntimeReflectionReader
             {
                 actions.Add(new RuntimeActionDefinition("skip_reward", "Skip Reward", new Dictionary<string, object?>()));
             }
+        }
+
+        if (rewardAnalysis.AdvanceButtonDetected &&
+            TryBuildRewardAdvanceAction(runNode, textDiagnostics, out var advanceAction, out var advanceMetadata))
+        {
+            actions.Add(advanceAction);
+            foreach (var pair in advanceMetadata)
+            {
+                metadata[pair.Key] = pair.Value;
+            }
+        }
+
+        if (actions.Count == 0 && rewards.Count == 0 && !metadata.ContainsKey("reward_advance_available"))
+        {
+            metadata["reward_advance_available"] = false;
         }
 
         metadata["text_diagnostics"] = textDiagnostics.ToMetadata();
@@ -1683,6 +1712,10 @@ internal sealed class Sts2RuntimeReflectionReader
         var rewardScreenVisible = hasRewardScreen && IsRewardScreenVisible(runNode, rewardScreen!);
         var hasLiveEnemies = BuildEnemies(runState, new TextDiagnosticsCollector()).Any(enemy => enemy.IsAlive);
         var cardRewardSelectionDetected = GetCardRewardSelectionScreen(runNode, rewardScreen) is not null;
+        var rewardAdvanceDetected = hasRewardScreen &&
+                                    rewardButtons.Length == 0 &&
+                                    rewardScreenVisible &&
+                                    TryFindRewardAdvanceButton(runNode, rewardScreen, textDiagnostics: null, out _, out _);
         var treatAsReward = hasRewardScreen &&
                             (!rewardScreenComplete ||
                              rewardButtons.Length > 0 ||
@@ -1693,11 +1726,26 @@ internal sealed class Sts2RuntimeReflectionReader
             treatAsReward = true;
         }
 
-        var rewardSubphase = cardRewardSelectionDetected
-            ? "card_reward_selection"
-            : hasRewardScreen ? "reward_choice" : "none";
+        var rewardSubphase = "none";
+        if (cardRewardSelectionDetected)
+        {
+            rewardSubphase = "card_reward_selection";
+        }
+        else if (rewardAdvanceDetected)
+        {
+            rewardSubphase = "reward_advance";
+        }
+        else if (hasRewardScreen && rewardButtons.Length == 0 && rewardScreenComplete && rewardScreenVisible)
+        {
+            rewardSubphase = "reward_transition";
+        }
+        else if (hasRewardScreen)
+        {
+            rewardSubphase = "reward_choice";
+        }
         var detectionSource = cardRewardSelectionDetected
             ? "overlay_stack.card_reward_selection"
+            : rewardAdvanceDetected ? "reward_screen.advance_button"
             : ResolveRewardScreenSource(runNode, rewardScreen);
 
         return new RewardPhaseAnalysis(
@@ -1709,6 +1757,7 @@ internal sealed class Sts2RuntimeReflectionReader
             HasLiveEnemies: hasLiveEnemies,
             RewardScreenSource: ResolveRewardScreenSource(runNode, rewardScreen),
             CardRewardSelectionDetected: cardRewardSelectionDetected,
+            AdvanceButtonDetected: rewardAdvanceDetected,
             RewardSubphase: rewardSubphase,
             DetectionSource: detectionSource,
             OverlayTopType: GetTypeName(GetOverlayTopScreen(runNode)));
@@ -1740,6 +1789,86 @@ internal sealed class Sts2RuntimeReflectionReader
         }
 
         return new RewardSkipAvailability(true, null);
+    }
+
+    private bool TryBuildRewardAdvanceAction(
+        object runNode,
+        TextDiagnosticsCollector textDiagnostics,
+        out RuntimeActionDefinition action,
+        out IReadOnlyDictionary<string, object?> metadata)
+    {
+        if (!TryFindRewardAdvanceButton(runNode, GetRewardScreen(runNode), textDiagnostics, out var buttonNode, out var buttonLabel))
+        {
+            action = default!;
+            metadata = new Dictionary<string, object?>
+            {
+                ["reward_advance_available"] = false,
+            };
+            return false;
+        }
+
+        action = new RuntimeActionDefinition(
+            "advance_reward",
+            buttonLabel,
+            new Dictionary<string, object?>
+            {
+                ["button_label"] = buttonLabel,
+            });
+        metadata = new Dictionary<string, object?>
+        {
+            ["reward_advance_available"] = true,
+            ["reward_advance_label"] = buttonLabel,
+            ["reward_advance_target_type"] = GetTypeName(buttonNode),
+        };
+        return true;
+    }
+
+    private bool TryFindRewardAdvanceButton(
+        object runNode,
+        object? rewardScreen,
+        TextDiagnosticsCollector? textDiagnostics,
+        out object buttonNode,
+        out string buttonLabel)
+    {
+        if (rewardScreen is null)
+        {
+            buttonNode = default!;
+            buttonLabel = string.Empty;
+            return false;
+        }
+
+        foreach (var candidate in EnumerateNodeDescendants(rewardScreen, maxDepth: 7).Prepend(rewardScreen))
+        {
+            if (!IsPotentialMenuButton(candidate))
+            {
+                continue;
+            }
+
+            if (!IsMenuNodeInteractable(candidate))
+            {
+                continue;
+            }
+
+            var label = GetMenuNodeLabel(candidate, textDiagnostics);
+            if (string.IsNullOrWhiteSpace(label) || !IsRewardAdvanceLabel(label))
+            {
+                continue;
+            }
+
+            buttonNode = candidate;
+            buttonLabel = label.Trim();
+            return true;
+        }
+
+        buttonNode = default!;
+        buttonLabel = string.Empty;
+        return false;
+    }
+
+    private static bool IsRewardAdvanceLabel(string label)
+    {
+        var normalized = NormalizeLabel(label);
+        return RewardAdvanceLabelHints.Any(hint => normalized.Contains(hint, StringComparison.OrdinalIgnoreCase));
     }
 
     private List<object> ExtractCardRewardChoiceItems(object cardRewardScreen)
@@ -2354,6 +2483,7 @@ internal sealed class Sts2RuntimeReflectionReader
         bool HasLiveEnemies,
         string RewardScreenSource,
         bool CardRewardSelectionDetected,
+        bool AdvanceButtonDetected,
         string RewardSubphase,
         string DetectionSource,
         string? OverlayTopType)
@@ -2370,6 +2500,7 @@ internal sealed class Sts2RuntimeReflectionReader
                 ["has_live_enemies"] = HasLiveEnemies,
                 ["reward_screen_source"] = RewardScreenSource,
                 ["card_reward_selection_detected"] = CardRewardSelectionDetected,
+                ["advance_button_detected"] = AdvanceButtonDetected,
                 ["reward_subphase"] = RewardSubphase,
                 ["detection_source"] = DetectionSource,
                 ["overlay_top_type"] = OverlayTopType,
@@ -2628,6 +2759,66 @@ internal sealed class Sts2RuntimeReflectionReader
         return new RuntimeActionResult(true, "Skipped current reward.", metadata: new Dictionary<string, object?>
         {
             ["action_type"] = "skip_reward",
+        });
+    }
+
+    private RuntimeActionResult ExecuteAdvanceReward(object runNode, ActionRequest request, LegalAction action)
+    {
+        var rewardScreen = GetRewardScreen(runNode);
+        if (rewardScreen is null)
+        {
+            return new RuntimeActionResult(false, "Rewards screen is not available.", "runtime_not_ready");
+        }
+
+        var requestedLabel = ConvertToText(GetDictionaryValue(action.Params, "button_label"));
+        var textDiagnostics = new TextDiagnosticsCollector();
+        if (!TryFindRewardAdvanceButton(runNode, rewardScreen, textDiagnostics, out var buttonNode, out var buttonLabel))
+        {
+            return new RuntimeActionResult(false, "Reward advance button is not currently available.", "stale_action", new Dictionary<string, object?>
+            {
+                ["action_type"] = "advance_reward",
+                ["button_label"] = requestedLabel,
+            });
+        }
+
+        if (!string.IsNullOrWhiteSpace(requestedLabel) &&
+            !string.Equals(buttonLabel, requestedLabel, StringComparison.OrdinalIgnoreCase))
+        {
+            return new RuntimeActionResult(false, "Reward advance button changed since the action was generated.", "stale_action", new Dictionary<string, object?>
+            {
+                ["action_type"] = "advance_reward",
+                ["button_label"] = requestedLabel,
+                ["resolved_button_label"] = buttonLabel,
+            });
+        }
+
+        if (TryInvokeFirstCompatibleMethod(rewardScreen, RewardAdvanceMethodNames, new[] { new object?[] { buttonNode }, Array.Empty<object?>() }, out var rewardScreenMethod))
+        {
+            return new RuntimeActionResult(true, "Advanced reward screen.", metadata: new Dictionary<string, object?>
+            {
+                ["action_type"] = "advance_reward",
+                ["button_label"] = buttonLabel,
+                ["runtime_handler"] = $"reward_screen.{rewardScreenMethod}",
+                ["next_window_expected"] = "map",
+            });
+        }
+
+        if (TryActivateMenuNode(buttonNode, out var buttonHandler))
+        {
+            return new RuntimeActionResult(true, "Advanced reward screen.", metadata: new Dictionary<string, object?>
+            {
+                ["action_type"] = "advance_reward",
+                ["button_label"] = buttonLabel,
+                ["runtime_handler"] = buttonHandler,
+                ["next_window_expected"] = "map",
+            });
+        }
+
+        return new RuntimeActionResult(false, "Reward advance button is not clickable.", "not_clickable", new Dictionary<string, object?>
+        {
+            ["action_type"] = "advance_reward",
+            ["button_label"] = buttonLabel,
+            ["target_type"] = GetTypeName(buttonNode),
         });
     }
 

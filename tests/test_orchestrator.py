@@ -467,6 +467,85 @@ class OrchestratorTests(unittest.TestCase):
             self.assertIn("map", {record["step_kind"] for record in records})
             self.assertEqual(records[-1]["step_kind"], "combat_resume")
 
+    def test_battle_mode_can_advance_reward_screen_to_map(self) -> None:
+        bridge = SequencedCombatBridge(
+            [
+                make_window(
+                    phase="reward",
+                    actions=[{"type": "advance_reward", "label": "前进", "params": {"button_label": "前进"}}],
+                    metadata={"window_kind": "reward_advance", "reward_subphase": "reward_advance", "reward_count": 0},
+                    rewards=[],
+                ),
+                make_window(
+                    phase="map",
+                    actions=[{"type": "choose_map_node", "label": "Choose Monster@1,2", "params": {"node": "Monster@1,2"}}],
+                    metadata={"window_kind": "map_ready"},
+                    map_nodes=["Monster@1,2"],
+                ),
+                make_window(
+                    phase="combat",
+                    actions=[{"type": "end_turn", "label": "End Turn"}],
+                    hand=[],
+                    metadata={"current_side": "Player", "round_number": 2},
+                ),
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orchestrator = AutoplayOrchestrator(
+                bridge=bridge,
+                policy=FirstLegalActionPolicy(),
+                config=OrchestratorConfig(
+                    trace_dir=tmpdir,
+                    stop_after_player_turn=False,
+                    reward_mode="safe-default",
+                    map_mode="safe-default",
+                    stop_after_next_combat=True,
+                    max_steps=8,
+                ),
+            )
+
+            summary = orchestrator.run(scenario="live")
+
+            self.assertTrue(summary.completed)
+            self.assertEqual(summary.ended_by, "next_combat_entered")
+            self.assertEqual(bridge.submissions, ["advance_reward", "choose_map_node"])
+            records = [json.loads(line) for line in Path(summary.trace_path).read_text(encoding="utf-8").splitlines()]
+            self.assertIn("reward_advance", {record["step_kind"] for record in records})
+
+    def test_reward_advance_without_actions_times_out_with_specific_reason(self) -> None:
+        bridge = SequencedCombatBridge(
+            [
+                make_window(
+                    phase="reward",
+                    actions=[],
+                    metadata={"window_kind": "reward_advance", "reward_subphase": "reward_advance", "reward_count": 0},
+                    rewards=[],
+                ),
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmpdir, patch("sts2_agent.orchestrator.time.sleep", return_value=None), patch(
+            "sts2_agent.orchestrator.time.monotonic",
+            side_effect=([0.0] * 8) + ([0.2] * 8),
+        ):
+            orchestrator = AutoplayOrchestrator(
+                bridge=bridge,
+                policy=FirstLegalActionPolicy(),
+                config=OrchestratorConfig(
+                    trace_dir=tmpdir,
+                    stop_after_player_turn=False,
+                    reward_mode="safe-default",
+                    transition_timeout_seconds=0.1,
+                    poll_interval_seconds=0.0,
+                    max_steps=4,
+                ),
+            )
+
+            summary = orchestrator.run(scenario="live")
+
+            self.assertFalse(summary.completed)
+            self.assertTrue(summary.interrupted)
+            self.assertEqual(summary.ended_by, "reward_advance_no_actions")
+
     def test_battle_mode_waits_for_transition_after_map_choice(self) -> None:
         bridge = SequencedCombatBridge(
             [

@@ -18,6 +18,7 @@ class ActionType(StrEnum):
     PLAY_CARD = "play_card"
     END_TURN = "end_turn"
     CHOOSE_REWARD = "choose_reward"
+    ADVANCE_REWARD = "advance_reward"
     CHOOSE_MAP_NODE = "choose_map_node"
     USE_POTION = "use_potion"
     SKIP_REWARD = "skip_reward"

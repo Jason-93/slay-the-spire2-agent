@@ -78,7 +78,14 @@ class AutoplayOrchestrator:
         previous_phase: str | None = None
         unknown_window_steps = 0
 
-        while step_index < self.config.max_steps:
+        while True:
+            if (
+                step_index >= self.config.max_steps
+                and transition_wait_since is None
+                and waiting_since is None
+                and pending_end_turn_transition is None
+            ):
+                break
             snapshot, legal_actions = self._read_consistent_state(session.session_id)
             legal_actions = self._effective_legal_actions(snapshot, legal_actions)
             if pending_end_turn_transition is not None:
@@ -227,6 +234,7 @@ class AutoplayOrchestrator:
                     turns_completed=turns_completed,
                     trace_path=trace_path,
                     session_id=session.session_id,
+                    transition_wait_since=transition_wait_since,
                 )
                 step_index = outcome["step_index"]
                 transition_wait_since = outcome.get("transition_wait_since", transition_wait_since)
@@ -502,6 +510,8 @@ class AutoplayOrchestrator:
         if phase == "reward":
             if reward_subphase == "card_reward_selection" or window_kind == "reward_card_selection":
                 return "card_reward_selection"
+            if reward_subphase == "reward_advance" or window_kind == "reward_advance":
+                return "reward_advance"
             if legal_actions:
                 return "reward_choice"
             return "transition_wait"
@@ -528,6 +538,7 @@ class AutoplayOrchestrator:
         return phase_kind in {
             "reward_choice",
             "card_reward_selection",
+            "reward_advance",
             "map",
             "transition_wait",
             "unknown_window",
@@ -602,6 +613,13 @@ class AutoplayOrchestrator:
                 )
 
         if not legal_actions:
+            wait_stop_reason = "transition_timeout"
+            wait_reason = "reward_transition_wait"
+            wait_step_kind = "transition_wait"
+            if phase_kind == "reward_advance":
+                wait_stop_reason = "reward_advance_no_actions"
+                wait_reason = "reward_advance_wait"
+                wait_step_kind = "reward_advance_wait"
             outcome = self._handle_transition_wait(
                 recorder=recorder,
                 snapshot=snapshot,
@@ -613,9 +631,9 @@ class AutoplayOrchestrator:
                 turns_completed=turns_completed,
                 trace_path=trace_path,
                 waiting_since=transition_wait_since,
-                stop_reason="transition_timeout",
-                wait_reason="reward_transition_wait",
-                step_kind="transition_wait",
+                stop_reason=wait_stop_reason,
+                wait_reason=wait_reason,
+                step_kind=wait_step_kind,
                 phase_kind=phase_kind,
             )
             return self._step_result(
@@ -2101,6 +2119,11 @@ class AutoplayOrchestrator:
         return f"{self._normalize_phase(getattr(snapshot, 'phase', ''))}_transition_wait"
 
     def _select_reward_action(self, snapshot, legal_actions, reward_mode: str):
+        metadata = getattr(snapshot, "metadata", {}) or {}
+        reward_subphase = str(metadata.get("reward_subphase") or "").strip().lower()
+        advance_action = next((action for action in legal_actions if action.type == "advance_reward"), None)
+        if advance_action is not None and reward_subphase == "reward_advance":
+            return advance_action
         if reward_mode not in {"skip", "skip-only", "safe-default"}:
             return None
         skip_action = next((action for action in legal_actions if action.type == "skip_reward"), None)
@@ -2115,8 +2138,6 @@ class AutoplayOrchestrator:
             label = str(action.label or action.params.get("reward") or "").lower()
             if "gold" in label or "金币" in label:
                 return action
-        metadata = getattr(snapshot, "metadata", {}) or {}
-        reward_subphase = str(metadata.get("reward_subphase") or "").strip().lower()
         if reward_subphase == "card_reward_selection":
             return reward_actions[0]
         return reward_actions[0]
