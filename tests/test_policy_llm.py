@@ -69,6 +69,45 @@ def build_snapshot() -> DecisionSnapshot:
                     keywords=["block"],
                 )
             ],
+            draw_pile=1,
+            discard_pile=1,
+            exhaust_pile=0,
+            draw_pile_cards=[
+                CardView(
+                    card_id="card-draw-1",
+                    name="抽牌攻击",
+                    cost=1,
+                    playable=False,
+                    canonical_card_id="pommel_strike",
+                    description="造成9点**伤害**，抽1张牌。",
+                    glossary=[GlossaryAnchor(glossary_id="damage", display_text="伤害", hint="会降低目标生命值。", source="description_text")],
+                    cost_for_turn=1,
+                    upgraded=False,
+                    target_type="AnyEnemy",
+                    card_type="Attack",
+                    rarity="Common",
+                    traits=["draw"],
+                    keywords=["damage", "draw"],
+                )
+            ],
+            discard_pile_cards=[
+                CardView(
+                    card_id="card-discard-1",
+                    name="打击",
+                    cost=1,
+                    playable=False,
+                    canonical_card_id="strike_red",
+                    description="造成6点**伤害**。",
+                    glossary=[GlossaryAnchor(glossary_id="damage", display_text="伤害", hint="会降低目标生命值。", source="description_text")],
+                    cost_for_turn=1,
+                    upgraded=False,
+                    target_type="AnyEnemy",
+                    card_type="Attack",
+                    rarity="Starter",
+                    traits=["starter"],
+                    keywords=["damage"],
+                )
+            ],
             relics=["燃烧之血"],
             potions=[],
             powers=[
@@ -288,6 +327,9 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
 
         self.assertEqual(payload["player"]["hand"][0]["description"], "获得5点**格挡**。")
         self.assertEqual(payload["player"]["hand"][0]["glossary"][0]["id"], "block")
+        self.assertEqual(payload["player"]["draw_pile_cards"][0]["canonical_card_id"], "pommel_strike")
+        self.assertEqual(payload["player"]["discard_pile_cards"][0]["name"], "打击")
+        self.assertEqual(payload["player"]["exhaust_pile_cards"], [])
         self.assertEqual(payload["player"]["powers"][0]["amount"], 3)
         self.assertEqual(payload["enemies"][0]["intent_damage"], 11)
         self.assertEqual(payload["enemies"][0]["powers"][0]["name"], "力量")
@@ -318,6 +360,7 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
 
         self.assertNotIn("run_state", payload)
         self.assertEqual(payload["player"]["hand"][0]["name"], "打击")
+        self.assertEqual(payload["player"]["draw_pile_cards"], [])
         self.assertEqual(payload["enemies"][0]["intent"], "attack")
 
 

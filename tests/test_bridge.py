@@ -32,6 +32,11 @@ class MockBridgeTests(unittest.TestCase):
         self.assertEqual({action.type for action in actions}, {"play_card", "use_potion", "end_turn"})
         self.assertTrue(any(card.description for card in snapshot.player.hand))
         self.assertTrue(all(not hasattr(card, "description_quality") for card in snapshot.player.hand))
+        self.assertEqual(snapshot.player.draw_pile, len(snapshot.player.draw_pile_cards))
+        self.assertEqual(snapshot.player.discard_pile, len(snapshot.player.discard_pile_cards))
+        self.assertEqual(snapshot.player.exhaust_pile, len(snapshot.player.exhaust_pile_cards))
+        self.assertTrue(snapshot.player.draw_pile_cards[0].description)
+        self.assertTrue(snapshot.player.discard_pile_cards[0].glossary)
 
     def test_bridge_rejects_stale_action_without_state_mutation(self) -> None:
         snapshot = self.bridge.get_snapshot(self.session.session_id)
@@ -275,6 +280,62 @@ class HttpBridgeTests(unittest.TestCase):
                         "keywords": ["damage"],
                     }
                 ],
+                "draw_pile_cards": [
+                    {
+                        "card_id": "pommel_strike#0",
+                        "name": "Pommel Strike",
+                        "cost": 1,
+                        "playable": False,
+                        "instance_card_id": "pommel_strike#0",
+                        "canonical_card_id": "pommel_strike",
+                        "description": "Deal 9 **damage**. Draw 1 card.",
+                        "glossary": [{"glossary_id": "damage", "display_text": "Damage", "hint": "Reduces HP.", "source": "description_text"}],
+                        "cost_for_turn": 1,
+                        "upgraded": False,
+                        "target_type": "AnyEnemy",
+                        "card_type": "Attack",
+                        "rarity": "Common",
+                        "traits": ["draw"],
+                        "keywords": ["damage", "draw"],
+                    }
+                ],
+                "discard_pile_cards": [
+                    {
+                        "card_id": "defend_red#discard",
+                        "name": "Defend",
+                        "cost": 1,
+                        "playable": False,
+                        "instance_card_id": "defend_red#discard",
+                        "canonical_card_id": "defend_red",
+                        "description": "Gain 5 **Block**.",
+                        "glossary": [{"glossary_id": "block", "display_text": "Block", "hint": "Prevents damage until next turn.", "source": "description_text"}],
+                        "cost_for_turn": 1,
+                        "upgraded": False,
+                        "target_type": "Self",
+                        "card_type": "Skill",
+                        "rarity": "Starter",
+                        "traits": ["starter"],
+                        "keywords": ["block"],
+                    },
+                    {
+                        "card_id": "anger#discard",
+                        "name": "Anger",
+                        "cost": 0,
+                        "playable": False,
+                        "instance_card_id": "anger#discard",
+                        "canonical_card_id": "anger",
+                        "description": "Deal 6 **damage**.",
+                        "glossary": [{"glossary_id": "damage", "display_text": "Damage", "hint": "Reduces HP.", "source": "description_text"}],
+                        "cost_for_turn": 0,
+                        "upgraded": False,
+                        "target_type": "AnyEnemy",
+                        "card_type": "Attack",
+                        "rarity": "Common",
+                        "traits": [],
+                        "keywords": ["damage"],
+                    }
+                ],
+                "exhaust_pile_cards": [],
             },
             "enemies": [
                 {
@@ -329,6 +390,10 @@ class HttpBridgeTests(unittest.TestCase):
         self.assertEqual(snapshot.player.hand[0].canonical_card_id, "strike_red")
         self.assertEqual(snapshot.player.hand[0].description, "Deal 6 **damage**.")
         self.assertEqual(snapshot.player.hand[0].glossary[0].glossary_id, "damage")
+        self.assertEqual(snapshot.player.draw_pile_cards[0].canonical_card_id, "pommel_strike")
+        self.assertEqual(snapshot.player.draw_pile_cards[0].description, "Deal 9 **damage**. Draw 1 card.")
+        self.assertEqual(snapshot.player.discard_pile_cards[0].glossary[0].glossary_id, "block")
+        self.assertEqual(snapshot.player.exhaust_pile_cards, [])
         self.assertEqual(snapshot.player.powers[0].name, "Metallicize")
         self.assertEqual(snapshot.enemies[0].intent_type, "attack")
         self.assertEqual(snapshot.enemies[0].powers[0].canonical_power_id, "strength")
@@ -357,6 +422,9 @@ class HttpBridgeTests(unittest.TestCase):
         self.assertEqual(snapshot.enemies[0].intent_damage, None)
         self.assertEqual(snapshot.enemies[0].powers, [])
         self.assertEqual(snapshot.player.hand, [])
+        self.assertEqual(snapshot.player.draw_pile_cards, [])
+        self.assertEqual(snapshot.player.discard_pile_cards, [])
+        self.assertEqual(snapshot.player.exhaust_pile_cards, [])
 
 
 if __name__ == "__main__":

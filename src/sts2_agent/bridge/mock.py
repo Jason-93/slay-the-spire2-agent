@@ -182,6 +182,21 @@ class MockGameBridge(GameBridge):
             relics=list(raw.get("relics") or []),
             potions=list(raw.get("potions") or []),
             powers=powers,
+            draw_pile_cards=[
+                MockGameBridge._build_card(card)
+                for card in raw.get("draw_pile_cards", [])
+                if isinstance(card, dict)
+            ],
+            discard_pile_cards=[
+                MockGameBridge._build_card(card)
+                for card in raw.get("discard_pile_cards", [])
+                if isinstance(card, dict)
+            ],
+            exhaust_pile_cards=[
+                MockGameBridge._build_card(card)
+                for card in raw.get("exhaust_pile_cards", [])
+                if isinstance(card, dict)
+            ],
         )
 
     @staticmethod

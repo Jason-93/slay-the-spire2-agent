@@ -236,20 +236,36 @@ def summarize_snapshot_schema(snapshot: dict[str, Any]) -> dict[str, Any]:
     player = snapshot.get("player")
     hand = player.get("hand") if isinstance(player, dict) else []
     hand = hand if isinstance(hand, list) else []
+    pile_fields = {
+        "hand": hand,
+        "draw_pile_cards": player.get("draw_pile_cards") if isinstance(player, dict) else [],
+        "discard_pile_cards": player.get("discard_pile_cards") if isinstance(player, dict) else [],
+        "exhaust_pile_cards": player.get("exhaust_pile_cards") if isinstance(player, dict) else [],
+    }
     cards_with_description = 0
     cards_with_glossary = 0
     cards_without_description_diagnostics = 0
-    for card in hand:
-        if not isinstance(card, dict):
-            continue
-        if card.get("description"):
-            cards_with_description += 1
-        if isinstance(card.get("glossary"), list) and card.get("glossary"):
-            cards_with_glossary += 1
-        if all(key not in card for key in ("description_quality", "description_source", "description_vars")):
-            cards_without_description_diagnostics += 1
+    pile_counts: dict[str, int] = {}
+    for pile_name, pile_cards in pile_fields.items():
+        pile_cards = pile_cards if isinstance(pile_cards, list) else []
+        pile_counts[pile_name] = len(pile_cards)
+        for card in pile_cards:
+            if not isinstance(card, dict):
+                continue
+            if card.get("description"):
+                cards_with_description += 1
+            if isinstance(card.get("glossary"), list) and card.get("glossary"):
+                cards_with_glossary += 1
+            if all(key not in card for key in ("description_quality", "description_source", "description_vars")):
+                cards_without_description_diagnostics += 1
     return {
         "hand_count": len(hand),
+        "draw_pile_count": int(player.get("draw_pile") or 0) if isinstance(player, dict) else 0,
+        "discard_pile_count": int(player.get("discard_pile") or 0) if isinstance(player, dict) else 0,
+        "exhaust_pile_count": int(player.get("exhaust_pile") or 0) if isinstance(player, dict) else 0,
+        "draw_pile_cards_count": pile_counts["draw_pile_cards"],
+        "discard_pile_cards_count": pile_counts["discard_pile_cards"],
+        "exhaust_pile_cards_count": pile_counts["exhaust_pile_cards"],
         "cards_with_description": cards_with_description,
         "cards_with_glossary": cards_with_glossary,
         "cards_without_description_diagnostics": cards_without_description_diagnostics,

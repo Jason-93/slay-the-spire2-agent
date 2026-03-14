@@ -195,6 +195,21 @@ class HttpGameBridge(GameBridge):
                 relics=list(player_payload.get("relics") or []),
                 potions=list(player_payload.get("potions") or []),
                 powers=powers,
+                draw_pile_cards=[
+                    HttpGameBridge._decode_card(item)
+                    for item in player_payload.get("draw_pile_cards", [])
+                    if isinstance(item, dict)
+                ],
+                discard_pile_cards=[
+                    HttpGameBridge._decode_card(item)
+                    for item in player_payload.get("discard_pile_cards", [])
+                    if isinstance(item, dict)
+                ],
+                exhaust_pile_cards=[
+                    HttpGameBridge._decode_card(item)
+                    for item in player_payload.get("exhaust_pile_cards", [])
+                    if isinstance(item, dict)
+                ],
             )
 
         enemies = []

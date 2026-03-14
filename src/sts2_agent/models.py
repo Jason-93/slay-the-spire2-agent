@@ -100,6 +100,9 @@ class PlayerState:
     relics: list[str] = field(default_factory=list)
     potions: list[str] = field(default_factory=list)
     powers: list[PowerView] = field(default_factory=list)
+    draw_pile_cards: list[CardView] = field(default_factory=list)
+    discard_pile_cards: list[CardView] = field(default_factory=list)
+    exhaust_pile_cards: list[CardView] = field(default_factory=list)
 
 
 @dataclass(slots=True)

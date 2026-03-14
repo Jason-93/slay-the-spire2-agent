@@ -6,7 +6,7 @@
     "block": 6,
     "energy": 3,
     "gold": 99,
-    "draw_pile": 12,
+    "draw_pile": 2,
     "discard_pile": 4,
     "exhaust_pile": 0,
     "relics": [
@@ -117,7 +117,190 @@
           "draw"
         ]
       }
-    ]
+    ],
+    "draw_pile_cards": [
+      {
+        "card_id": "card-draw-0",
+        "instance_card_id": "card-draw-0",
+        "canonical_card_id": "pommel_strike",
+        "name": "Pommel Strike",
+        "cost": 1,
+        "cost_for_turn": 1,
+        "playable": false,
+        "description": "Deal 9 **damage**. Draw 1 card.",
+        "glossary": [
+          {
+            "glossary_id": "damage",
+            "display_text": "Damage",
+            "hint": "Reduces HP.",
+            "source": "description_text"
+          },
+          {
+            "glossary_id": "draw",
+            "display_text": "Draw",
+            "hint": "Add cards from your draw pile to your hand.",
+            "source": "description_text"
+          }
+        ],
+        "upgraded": false,
+        "target_type": "AnyEnemy",
+        "card_type": "Attack",
+        "rarity": "Common",
+        "traits": [
+          "draw"
+        ],
+        "keywords": [
+          "damage",
+          "draw"
+        ]
+      },
+      {
+        "card_id": "card-draw-1",
+        "instance_card_id": "card-draw-1",
+        "canonical_card_id": "bash",
+        "name": "Bash",
+        "cost": 2,
+        "cost_for_turn": 2,
+        "playable": false,
+        "description": "Deal 8 **damage**. Apply 2 Vulnerable.",
+        "glossary": [
+          {
+            "glossary_id": "damage",
+            "display_text": "Damage",
+            "hint": "Reduces HP.",
+            "source": "description_text"
+          },
+          {
+            "glossary_id": "vulnerable",
+            "display_text": "Vulnerable",
+            "hint": "Receive more attack damage.",
+            "source": "description_text"
+          }
+        ],
+        "upgraded": false,
+        "target_type": "AnyEnemy",
+        "card_type": "Attack",
+        "rarity": "Starter",
+        "traits": [
+          "starter"
+        ],
+        "keywords": [
+          "damage",
+          "vulnerable"
+        ]
+      }
+    ],
+    "discard_pile_cards": [
+      {
+        "card_id": "card-discard-0",
+        "instance_card_id": "card-discard-0",
+        "canonical_card_id": "strike_red",
+        "name": "Strike",
+        "cost": 1,
+        "cost_for_turn": 1,
+        "playable": false,
+        "description": "Deal 6 **damage**.",
+        "glossary": [
+          {
+            "glossary_id": "damage",
+            "display_text": "Damage",
+            "hint": "Reduces HP.",
+            "source": "description_text"
+          }
+        ],
+        "upgraded": false,
+        "target_type": "AnyEnemy",
+        "card_type": "Attack",
+        "rarity": "Starter",
+        "traits": [
+          "starter"
+        ],
+        "keywords": [
+          "damage"
+        ]
+      },
+      {
+        "card_id": "card-discard-1",
+        "instance_card_id": "card-discard-1",
+        "canonical_card_id": "defend_red",
+        "name": "Defend",
+        "cost": 1,
+        "cost_for_turn": 1,
+        "playable": false,
+        "description": "Gain 5 **Block**.",
+        "glossary": [
+          {
+            "glossary_id": "block",
+            "display_text": "Block",
+            "hint": "Prevents damage until next turn.",
+            "source": "description_text"
+          }
+        ],
+        "upgraded": false,
+        "target_type": "Self",
+        "card_type": "Skill",
+        "rarity": "Starter",
+        "traits": [
+          "starter"
+        ],
+        "keywords": [
+          "block"
+        ]
+      },
+      {
+        "card_id": "card-discard-2",
+        "instance_card_id": "card-discard-2",
+        "canonical_card_id": "anger",
+        "name": "Anger",
+        "cost": 0,
+        "cost_for_turn": 0,
+        "playable": false,
+        "description": "Deal 6 **damage**. Shuffle a copy into your discard pile.",
+        "glossary": [
+          {
+            "glossary_id": "damage",
+            "display_text": "Damage",
+            "hint": "Reduces HP.",
+            "source": "description_text"
+          }
+        ],
+        "upgraded": false,
+        "target_type": "AnyEnemy",
+        "card_type": "Attack",
+        "rarity": "Common",
+        "traits": [],
+        "keywords": [
+          "damage"
+        ]
+      },
+      {
+        "card_id": "card-discard-3",
+        "instance_card_id": "card-discard-3",
+        "canonical_card_id": "flex",
+        "name": "Flex",
+        "cost": 0,
+        "cost_for_turn": 0,
+        "playable": false,
+        "description": "Gain 2 **Strength** this turn.",
+        "glossary": [
+          {
+            "glossary_id": "strength",
+            "display_text": "Strength",
+            "hint": "Increases attack damage.",
+            "source": "description_text"
+          }
+        ],
+        "upgraded": false,
+        "target_type": "Self",
+        "card_type": "Skill",
+        "rarity": "Common",
+        "traits": [],
+        "keywords": [
+          "strength"
+        ]
+      }
+    ],
+    "exhaust_pile_cards": []
   },
   "enemies": [
     {

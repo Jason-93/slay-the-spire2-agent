@@ -82,7 +82,10 @@ public sealed record PlayerState(
     int ExhaustPile,
     IReadOnlyList<string> Relics,
     IReadOnlyList<string> Potions,
-    IReadOnlyList<PowerView>? Powers = null);
+    IReadOnlyList<PowerView>? Powers = null,
+    IReadOnlyList<CardView>? DrawPileCards = null,
+    IReadOnlyList<CardView>? DiscardPileCards = null,
+    IReadOnlyList<CardView>? ExhaustPileCards = null);
 
 public sealed record EnemyState(
     string EnemyId,

@@ -1,4 +1,4 @@
-﻿{
+{
   "phase": "terminal",
   "player": {
     "hp": 63,
@@ -9,15 +9,23 @@
     "draw_pile": 0,
     "discard_pile": 0,
     "exhaust_pile": 0,
-    "relics": ["Burning Blood"],
+    "relics": [
+      "Burning Blood"
+    ],
     "potions": [],
-    "hand": []
+    "hand": [],
+    "draw_pile_cards": [],
+    "discard_pile_cards": [],
+    "exhaust_pile_cards": []
   },
   "enemies": [],
   "rewards": [],
   "map_nodes": [],
   "terminal": true,
-  "metadata": {"room_type": "victory", "result": "win"},
+  "metadata": {
+    "room_type": "victory",
+    "result": "win"
+  },
   "run_state": {
     "act": 1,
     "floor": 3,

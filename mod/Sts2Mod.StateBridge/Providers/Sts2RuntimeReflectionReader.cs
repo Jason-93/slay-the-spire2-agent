@@ -1192,9 +1192,14 @@ internal sealed class Sts2RuntimeReflectionReader
     private RuntimeWindowContext BuildCombatWindow(object runNode, object runState)
     {
         var textDiagnostics = new TextDiagnosticsCollector();
-        var player = BuildPlayerState(runState, textDiagnostics);
+        var playerBuild = BuildPlayerState(runState, textDiagnostics);
+        var player = playerBuild.Player;
         var enemies = BuildEnemies(runState, textDiagnostics);
         var metadata = CreateBaseMetadata(runNode, runState, DecisionPhase.Combat);
+        foreach (var pair in playerBuild.Diagnostics)
+        {
+            metadata[pair.Key] = pair.Value;
+        }
         var runStateSnapshot = BuildRunState(runState, textDiagnostics);
         var rewardAnalysis = AnalyzeRewardPhase(runNode, runState);
         metadata["phase_detection"] = rewardAnalysis.ToMetadata();
@@ -1278,8 +1283,13 @@ internal sealed class Sts2RuntimeReflectionReader
         var textDiagnostics = new TextDiagnosticsCollector();
         var rewardAnalysis = AnalyzeRewardPhase(runNode, runState);
         var rewards = ExtractRewards(runNode, textDiagnostics);
-        var player = BuildPlayerState(runState, textDiagnostics);
+        var playerBuild = BuildPlayerState(runState, textDiagnostics);
+        var player = playerBuild.Player;
         var metadata = CreateBaseMetadata(runNode, runState, DecisionPhase.Reward);
+        foreach (var pair in playerBuild.Diagnostics)
+        {
+            metadata[pair.Key] = pair.Value;
+        }
         var runStateSnapshot = BuildRunState(runState, textDiagnostics);
         metadata["phase_detection"] = rewardAnalysis.ToMetadata();
         metadata["reward_subphase"] = rewardAnalysis.RewardSubphase;
@@ -1361,8 +1371,13 @@ internal sealed class Sts2RuntimeReflectionReader
     {
         var textDiagnostics = new TextDiagnosticsCollector();
         var mapNodes = ExtractMapNodes(runState, textDiagnostics, out var mapNodeSource);
-        var player = BuildPlayerState(runState, textDiagnostics);
+        var playerBuild = BuildPlayerState(runState, textDiagnostics);
+        var player = playerBuild.Player;
         var metadata = CreateBaseMetadata(runNode, runState, DecisionPhase.Map);
+        foreach (var pair in playerBuild.Diagnostics)
+        {
+            metadata[pair.Key] = pair.Value;
+        }
         var runStateSnapshot = BuildRunState(runState, textDiagnostics, mapNodes, mapNodeSource);
         metadata["node_count"] = mapNodes.Count;
         metadata["window_kind"] = mapNodes.Count > 0 ? "map_ready" : "map_transition";
@@ -1392,8 +1407,13 @@ internal sealed class Sts2RuntimeReflectionReader
     private RuntimeWindowContext BuildTerminalWindow(object runNode, object runState)
     {
         var textDiagnostics = new TextDiagnosticsCollector();
-        var player = BuildPlayerState(runState, textDiagnostics);
+        var playerBuild = BuildPlayerState(runState, textDiagnostics);
+        var player = playerBuild.Player;
         var metadata = CreateBaseMetadata(runNode, runState, DecisionPhase.Terminal);
+        foreach (var pair in playerBuild.Diagnostics)
+        {
+            metadata[pair.Key] = pair.Value;
+        }
         var runStateSnapshot = BuildRunState(runState, textDiagnostics);
         metadata["result"] = GetBoolean(runState, "IsGameOver") ? "game_over" : "terminal";
         LogTextDiagnostics("terminal", textDiagnostics);
@@ -1503,34 +1523,97 @@ internal sealed class Sts2RuntimeReflectionReader
         return TryInvokeParameterlessMethod(overlayStack, "Peek");
     }
 
-    private RuntimePlayerState? BuildPlayerState(object runState, TextDiagnosticsCollector textDiagnostics)
+    private PlayerBuildResult BuildPlayerState(object runState, TextDiagnosticsCollector textDiagnostics)
     {
         var player = GetPlayers(runState).FirstOrDefault();
         if (player is null)
         {
-            return null;
+            return new PlayerBuildResult(null, new Dictionary<string, object?>());
         }
 
         var creature = GetMemberValue(player, "Creature");
         var playerCombatState = GetMemberValue(player, "PlayerCombatState");
+        var drawPile = GetMemberValue(playerCombatState, "DrawPile");
+        var discardPile = GetMemberValue(playerCombatState, "DiscardPile");
+        var exhaustPile = GetMemberValue(playerCombatState, "ExhaustPile");
         var handCards = ExtractCards(GetMemberValue(playerCombatState, "Hand"), "player.hand", textDiagnostics);
+        var drawPileCount = CountCards(drawPile);
+        var discardPileCount = CountCards(discardPile);
+        var exhaustPileCount = CountCards(exhaustPile);
+        var drawPileCards = ExtractCardsWithSource(drawPile, "player.draw_pile_cards", textDiagnostics, "draw_pile", drawPileCount);
+        var discardPileCards = ExtractCardsWithSource(discardPile, "player.discard_pile_cards", textDiagnostics, "discard_pile", discardPileCount);
+        var exhaustPileCards = ExtractCardsWithSource(exhaustPile, "player.exhaust_pile_cards", textDiagnostics, "exhaust_pile", exhaustPileCount);
         var relics = ExtractLabels(GetMemberValue(player, "Relics"), "player.relics", textDiagnostics);
         var potions = ExtractLabels(GetMemberValue(player, "PotionSlots"), "player.potions", textDiagnostics);
         var powers = ExtractPowers(creature ?? player, "player.powers", textDiagnostics);
+        var diagnostics = new Dictionary<string, object?>
+        {
+            ["pile_export"] = new Dictionary<string, object?>
+            {
+                ["draw_pile"] = CreatePileDiagnostics(drawPileCards),
+                ["discard_pile"] = CreatePileDiagnostics(discardPileCards),
+                ["exhaust_pile"] = CreatePileDiagnostics(exhaustPileCards),
+            }
+        };
 
-        return new RuntimePlayerState(
+        return new PlayerBuildResult(new RuntimePlayerState(
             Hp: GetNullableInt(creature, "CurrentHp") ?? 0,
             MaxHp: GetNullableInt(creature, "MaxHp") ?? 0,
             Block: GetNullableInt(creature, "Block") ?? 0,
             Energy: GetNullableInt(playerCombatState, "Energy") ?? 0,
             Gold: GetNullableInt(player, "Gold") ?? 0,
             Hand: handCards,
-            DrawPile: CountCards(GetMemberValue(playerCombatState, "DrawPile")),
-            DiscardPile: CountCards(GetMemberValue(playerCombatState, "DiscardPile")),
-            ExhaustPile: CountCards(GetMemberValue(playerCombatState, "ExhaustPile")),
+            DrawPile: drawPileCount,
+            DiscardPile: discardPileCount,
+            ExhaustPile: exhaustPileCount,
             Relics: relics,
             Potions: potions,
-            Powers: powers);
+            Powers: powers,
+            DrawPileCards: drawPileCards.Cards,
+            DiscardPileCards: discardPileCards.Cards,
+            ExhaustPileCards: exhaustPileCards.Cards), diagnostics);
+    }
+
+    private IReadOnlyDictionary<string, object?> CreatePileDiagnostics(PileCardExtraction extraction)
+    {
+        var diagnostics = new Dictionary<string, object?>
+        {
+            ["source"] = extraction.Source,
+            ["expected_count"] = extraction.ExpectedCount,
+            ["exported_count"] = extraction.Cards.Count,
+            ["degraded"] = extraction.IsDegraded,
+        };
+
+        if (!string.IsNullOrWhiteSpace(extraction.FallbackReason))
+        {
+            diagnostics["fallback_reason"] = extraction.FallbackReason;
+        }
+
+        return diagnostics;
+    }
+
+    private PileCardExtraction ExtractCardsWithSource(object? pile, string path, TextDiagnosticsCollector textDiagnostics, string pileName, int expectedCount)
+    {
+        if (pile is null)
+        {
+            return new PileCardExtraction(Array.Empty<RuntimeCard>(), $"{pileName}_missing", expectedCount, "pile_missing");
+        }
+
+        var cards = GetMemberValue(pile, "Cards");
+        if (cards is null)
+        {
+            return new PileCardExtraction(Array.Empty<RuntimeCard>(), $"{pileName}_cards_missing", expectedCount, "cards_collection_missing");
+        }
+
+        try
+        {
+            return new PileCardExtraction(ExtractCards(pile, path, textDiagnostics), $"{pileName}_cards", expectedCount);
+        }
+        catch (Exception ex)
+        {
+            _logger?.Warn($"Pile extraction degraded for {pileName}: {ex.GetBaseException().Message}");
+            return new PileCardExtraction(Array.Empty<RuntimeCard>(), $"{pileName}_extract_failed", expectedCount, "pile_extract_failed");
+        }
     }
 
     private IReadOnlyList<RuntimeEnemyState> BuildEnemies(object runState, TextDiagnosticsCollector textDiagnostics)
@@ -1607,37 +1690,73 @@ internal sealed class Sts2RuntimeReflectionReader
 
     private IReadOnlyList<RuntimeCard> ExtractCards(object? pile, string path, TextDiagnosticsCollector textDiagnostics)
     {
-        return EnumerateObjects(GetMemberValue(pile, "Cards"))
-            .Select((card, index) =>
+        var results = new List<RuntimeCard>();
+        foreach (var (card, index) in EnumerateObjects(GetMemberValue(pile, "Cards")).Select((card, index) => (card, index)))
+        {
+            try
             {
-                var traits = ExtractTextList(
-                    GetMemberValue(card, "Traits") ?? GetMemberValue(card, "Tags"),
-                    $"{path}[{index}].traits",
-                    textDiagnostics);
-                var keywords = ExtractTextList(
-                    GetMemberValue(card, "Keywords") ?? GetMemberValue(card, "KeywordIds"),
-                    $"{path}[{index}].keywords",
-                    textDiagnostics);
-                var description = ResolveCardDescription(card, $"{path}[{index}].description", textDiagnostics, traits, keywords);
-                return new RuntimeCard(
-                    CardId: RuntimeCardIdentity.CreateCardId(card, index),
-                    Name: ConvertToText(GetMemberValue(card, "Title") ?? GetMemberValue(card, "Name") ?? card, $"{path}[{index}].name", textDiagnostics, "Title", "Name")
-                          ?? $"card_{index}",
-                    Cost: ResolveCardCost(card),
-                    Playable: GetBoolean(card, "IsPlayable", defaultValue: true),
-                    InstanceCardId: RuntimeCardIdentity.CreateCardId(card, index),
-                    CanonicalCardId: ResolveCardCanonicalId(card),
-                    Description: description.Description,
-                    CostForTurn: ResolveCardCostForTurn(card),
-                    Upgraded: ResolveCardUpgraded(card),
-                    TargetType: ConvertToText(GetMemberValue(card, "TargetType"), $"{path}[{index}].target_type", textDiagnostics),
-                    CardType: ConvertToText(GetMemberValue(card, "CardType") ?? GetMemberValue(card, "Type"), $"{path}[{index}].card_type", textDiagnostics),
-                    Rarity: ConvertToText(GetMemberValue(card, "Rarity") ?? GetMemberValue(card, "CardRarity"), $"{path}[{index}].rarity", textDiagnostics),
-                    Traits: traits,
-                    Keywords: keywords,
-                    Glossary: description.Glossary);
-            })
-            .ToArray();
+                results.Add(BuildRuntimeCard(card, index, path, textDiagnostics));
+            }
+            catch (Exception ex)
+            {
+                _logger?.Warn($"Card extraction degraded for {path}[{index}]: {ex.GetBaseException().Message}");
+                results.Add(BuildFallbackRuntimeCard(card, index));
+            }
+        }
+
+        return results;
+    }
+
+    private RuntimeCard BuildRuntimeCard(object card, int index, string path, TextDiagnosticsCollector textDiagnostics)
+    {
+        var traits = ExtractTextList(
+            GetMemberValue(card, "Traits") ?? GetMemberValue(card, "Tags"),
+            $"{path}[{index}].traits",
+            textDiagnostics);
+        var keywords = ExtractTextList(
+            GetMemberValue(card, "Keywords") ?? GetMemberValue(card, "KeywordIds"),
+            $"{path}[{index}].keywords",
+            textDiagnostics);
+        var description = ResolveCardDescription(card, $"{path}[{index}].description", textDiagnostics, traits, keywords);
+        var instanceCardId = RuntimeCardIdentity.CreateCardId(card, index);
+        return new RuntimeCard(
+            CardId: instanceCardId,
+            Name: ConvertToText(GetMemberValue(card, "Title") ?? GetMemberValue(card, "Name") ?? card, $"{path}[{index}].name", textDiagnostics, "Title", "Name")
+                  ?? $"card_{index}",
+            Cost: ResolveCardCost(card),
+            Playable: GetBoolean(card, "IsPlayable", defaultValue: true),
+            InstanceCardId: instanceCardId,
+            CanonicalCardId: ResolveCardCanonicalId(card),
+            Description: description.Description,
+            CostForTurn: ResolveCardCostForTurn(card),
+            Upgraded: ResolveCardUpgraded(card),
+            TargetType: ConvertToText(GetMemberValue(card, "TargetType"), $"{path}[{index}].target_type", textDiagnostics),
+            CardType: ConvertToText(GetMemberValue(card, "CardType") ?? GetMemberValue(card, "Type"), $"{path}[{index}].card_type", textDiagnostics),
+            Rarity: ConvertToText(GetMemberValue(card, "Rarity") ?? GetMemberValue(card, "CardRarity"), $"{path}[{index}].rarity", textDiagnostics),
+            Traits: traits,
+            Keywords: keywords,
+            Glossary: description.Glossary);
+    }
+
+    private RuntimeCard BuildFallbackRuntimeCard(object? card, int index)
+    {
+        var instanceCardId = RuntimeCardIdentity.CreateCardId(card, index);
+        return new RuntimeCard(
+            CardId: instanceCardId,
+            Name: ConvertToText(GetMemberValue(card, "Title") ?? GetMemberValue(card, "Name") ?? card) ?? $"card_{index}",
+            Cost: ResolveCardCost(card),
+            Playable: GetBoolean(card, "IsPlayable", defaultValue: true),
+            InstanceCardId: instanceCardId,
+            CanonicalCardId: ResolveCardCanonicalId(card),
+            Description: null,
+            CostForTurn: ResolveCardCostForTurn(card),
+            Upgraded: ResolveCardUpgraded(card),
+            TargetType: ConvertToText(GetMemberValue(card, "TargetType")),
+            CardType: ConvertToText(GetMemberValue(card, "CardType") ?? GetMemberValue(card, "Type")),
+            Rarity: ConvertToText(GetMemberValue(card, "Rarity") ?? GetMemberValue(card, "CardRarity")),
+            Traits: Array.Empty<string>(),
+            Keywords: Array.Empty<string>(),
+            Glossary: Array.Empty<GlossaryAnchor>());
     }
 
     private int CountCards(object? pile)
@@ -3844,6 +3963,19 @@ internal sealed class Sts2RuntimeReflectionReader
         }
 
         return type.Name;
+    }
+
+    private readonly record struct PlayerBuildResult(
+        RuntimePlayerState? Player,
+        IReadOnlyDictionary<string, object?> Diagnostics);
+
+    private readonly record struct PileCardExtraction(
+        IReadOnlyList<RuntimeCard> Cards,
+        string Source,
+        int ExpectedCount,
+        string? FallbackReason = null)
+    {
+        public bool IsDegraded => !string.IsNullOrWhiteSpace(FallbackReason) || Cards.Count != ExpectedCount;
     }
 
     private readonly record struct RuntimeRoot(object GameInstance, object? RunNode, object? RunState);

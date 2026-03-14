@@ -107,6 +107,14 @@ def main() -> int:
         assert "description_quality" not in combat_snapshot["player"]["hand"][0]
         assert "description_source" not in combat_snapshot["player"]["hand"][0]
         assert "description_vars" not in combat_snapshot["player"]["hand"][0]
+        assert isinstance(combat_snapshot["player"]["draw_pile_cards"], list)
+        assert isinstance(combat_snapshot["player"]["discard_pile_cards"], list)
+        assert isinstance(combat_snapshot["player"]["exhaust_pile_cards"], list)
+        assert combat_snapshot["player"]["draw_pile"] == len(combat_snapshot["player"]["draw_pile_cards"])
+        assert combat_snapshot["player"]["discard_pile"] == len(combat_snapshot["player"]["discard_pile_cards"])
+        assert combat_snapshot["player"]["exhaust_pile"] == len(combat_snapshot["player"]["exhaust_pile_cards"])
+        assert combat_snapshot["player"]["draw_pile_cards"][0]["description"]
+        assert combat_snapshot["player"]["discard_pile_cards"][0]["glossary"]
         assert combat_snapshot["player"]["powers"][0]["name"]
         assert "description_vars" not in combat_snapshot["player"]["powers"][0]
         assert combat_snapshot["enemies"][0]["intent_type"]
@@ -128,6 +136,8 @@ def main() -> int:
         assert apply_response["status"] == "accepted"
         reward_snapshot = fetch(base_url, "/snapshot")
         assert reward_snapshot["phase"] == "reward"
+        assert isinstance(reward_snapshot["player"]["draw_pile_cards"], list)
+        assert isinstance(reward_snapshot["player"]["discard_pile_cards"], list)
 
         # Simulate reward chain: choose a reward, then select a concrete card reward.
         reward_actions = fetch(base_url, "/actions")
@@ -165,6 +175,8 @@ def main() -> int:
         assert apply_response["status"] == "accepted"
         map_snapshot = fetch(base_url, "/snapshot")
         assert map_snapshot["phase"] == "map"
+        assert isinstance(map_snapshot["player"]["draw_pile_cards"], list)
+        assert isinstance(map_snapshot["player"]["discard_pile_cards"], list)
 
         status_code, stale_response = post_json(
             base_url,

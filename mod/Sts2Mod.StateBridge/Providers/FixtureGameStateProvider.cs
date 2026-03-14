@@ -208,6 +208,8 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
 
     private static Dictionary<string, RuntimeWindowContext> CreateWindows()
     {
+        var drawPileCards = CreateFixtureDrawPileCards();
+        var discardPileCards = CreateFixtureDiscardPileCards();
         return new Dictionary<string, RuntimeWindowContext>(StringComparer.OrdinalIgnoreCase)
         {
             [DecisionPhase.Combat] = new RuntimeWindowContext(
@@ -269,7 +271,7 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                             Keywords: new[] { "draw" },
                             Glossary: new[] { new GlossaryAnchor("draw", "Draw", "Add cards from your draw pile to your hand.", "description_text") }),
                     },
-                    DrawPile: 12,
+                    DrawPile: 2,
                     DiscardPile: 4,
                     ExhaustPile: 0,
                     Relics: new[] { "Burning Blood" },
@@ -287,7 +289,10 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                                 new GlossaryAnchor("metallicize", "Metallicize", "Gain Block at end of turn.", "canonical_id"),
                                 new GlossaryAnchor("block", "Block", "Prevents damage until next turn.", "description_text"),
                             }),
-                    }),
+                    },
+                    DrawPileCards: drawPileCards,
+                    DiscardPileCards: discardPileCards,
+                    ExhaustPileCards: Array.Empty<RuntimeCard>()),
                 new[]
                 {
                     new RuntimeEnemyState(
@@ -349,7 +354,7 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                     0,
                     116,
                     Array.Empty<RuntimeCard>(),
-                    12,
+                    2,
                     4,
                     0,
                     new[] { "Burning Blood" },
@@ -363,7 +368,10 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                             "At the end of your turn, gain 3 **Block**.",
                             "metallicize",
                             Glossary: new[] { new GlossaryAnchor("block", "Block", "Prevents damage until next turn.", "description_text") }),
-                    }),
+                    },
+                    DrawPileCards: drawPileCards,
+                    DiscardPileCards: discardPileCards,
+                    ExhaustPileCards: Array.Empty<RuntimeCard>()),
                 Array.Empty<RuntimeEnemyState>(),
                 Array.Empty<string>(),
                 new[] { "monster_left", "elite_center", "question_right" },
@@ -389,7 +397,21 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                         Source: "fixture"))),
             [DecisionPhase.Terminal] = new RuntimeWindowContext(
                 DecisionPhase.Terminal,
-                new RuntimePlayerState(63, 80, 0, 0, 116, Array.Empty<RuntimeCard>(), 0, 0, 0, new[] { "Burning Blood" }, Array.Empty<string>()),
+                new RuntimePlayerState(
+                    63,
+                    80,
+                    0,
+                    0,
+                    116,
+                    Array.Empty<RuntimeCard>(),
+                    0,
+                    0,
+                    0,
+                    new[] { "Burning Blood" },
+                    Array.Empty<string>(),
+                    DrawPileCards: Array.Empty<RuntimeCard>(),
+                    DiscardPileCards: Array.Empty<RuntimeCard>(),
+                    ExhaustPileCards: Array.Empty<RuntimeCard>()),
                 Array.Empty<RuntimeEnemyState>(),
                 Array.Empty<string>(),
                 Array.Empty<string>(),
@@ -462,6 +484,8 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
 
     private static Dictionary<string, RuntimeWindowContext> CreateRewardWindows()
     {
+        var drawPileCards = CreateFixtureDrawPileCards();
+        var discardPileCards = CreateFixtureDiscardPileCards();
         var player = new RuntimePlayerState(
             70,
             80,
@@ -469,7 +493,7 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
             0,
             116,
             Array.Empty<RuntimeCard>(),
-            12,
+            2,
             4,
             0,
             new[] { "Burning Blood" },
@@ -483,7 +507,10 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                     "At the end of your turn, gain 3 **Block**.",
                     "metallicize",
                     Glossary: new[] { new GlossaryAnchor("block", "Block", "Prevents damage until next turn.", "description_text") }),
-            });
+            },
+            DrawPileCards: drawPileCards,
+            DiscardPileCards: discardPileCards,
+            ExhaustPileCards: Array.Empty<RuntimeCard>());
 
         var rewardChoiceLabels = new[]
         {
@@ -577,5 +604,146 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                         ReachableNodes: new[] { "monster_left", "elite_center", "question_right" },
                         Source: "fixture"))),
         };
+    }
+
+    private static RuntimeCard[] CreateFixtureDrawPileCards()
+    {
+        return new[]
+        {
+            CreateFixtureCard(
+                "card-draw-0",
+                "pommel_strike",
+                "Pommel Strike",
+                1,
+                "Deal 9 **damage**. Draw 1 card.",
+                targetType: "AnyEnemy",
+                cardType: "Attack",
+                rarity: "Common",
+                traits: new[] { "draw" },
+                keywords: new[] { "damage", "draw" }),
+            CreateFixtureCard(
+                "card-draw-1",
+                "bash",
+                "Bash",
+                2,
+                "Deal 8 **damage**. Apply 2 Vulnerable.",
+                targetType: "AnyEnemy",
+                cardType: "Attack",
+                rarity: "Starter",
+                traits: new[] { "starter" },
+                keywords: new[] { "damage", "vulnerable" }),
+        };
+    }
+
+    private static RuntimeCard[] CreateFixtureDiscardPileCards()
+    {
+        return new[]
+        {
+            CreateFixtureCard(
+                "card-discard-0",
+                "strike_red",
+                "Strike",
+                1,
+                "Deal 6 **damage**.",
+                targetType: "AnyEnemy",
+                cardType: "Attack",
+                rarity: "Starter",
+                traits: new[] { "starter" },
+                keywords: new[] { "damage" }),
+            CreateFixtureCard(
+                "card-discard-1",
+                "defend_red",
+                "Defend",
+                1,
+                "Gain 5 **Block**.",
+                targetType: "Self",
+                cardType: "Skill",
+                rarity: "Starter",
+                traits: new[] { "starter" },
+                keywords: new[] { "block" }),
+            CreateFixtureCard(
+                "card-discard-2",
+                "anger",
+                "Anger",
+                0,
+                "Deal 6 **damage**. Shuffle a copy into your discard pile.",
+                targetType: "AnyEnemy",
+                cardType: "Attack",
+                rarity: "Common",
+                keywords: new[] { "damage" }),
+            CreateFixtureCard(
+                "card-discard-3",
+                "flex",
+                "Flex",
+                0,
+                "Gain 2 **Strength** this turn.",
+                targetType: "Self",
+                cardType: "Skill",
+                rarity: "Common",
+                keywords: new[] { "strength" }),
+        };
+    }
+
+    private static RuntimeCard CreateFixtureCard(
+        string instanceCardId,
+        string canonicalCardId,
+        string name,
+        int cost,
+        string description,
+        string targetType,
+        string cardType,
+        string rarity,
+        IReadOnlyList<string>? traits = null,
+        IReadOnlyList<string>? keywords = null)
+    {
+        return new RuntimeCard(
+            CardId: instanceCardId,
+            Name: name,
+            Cost: cost,
+            Playable: false,
+            InstanceCardId: instanceCardId,
+            CanonicalCardId: canonicalCardId,
+            Description: description,
+            CostForTurn: cost,
+            Upgraded: false,
+            TargetType: targetType,
+            CardType: cardType,
+            Rarity: rarity,
+            Traits: traits ?? Array.Empty<string>(),
+            Keywords: keywords ?? Array.Empty<string>(),
+            Glossary: CreateFixtureGlossary(keywords));
+    }
+
+    private static IReadOnlyList<GlossaryAnchor> CreateFixtureGlossary(IReadOnlyList<string>? keywords)
+    {
+        if (keywords is null || keywords.Count == 0)
+        {
+            return Array.Empty<GlossaryAnchor>();
+        }
+
+        var glossary = new List<GlossaryAnchor>();
+        foreach (var keyword in keywords)
+        {
+            switch (keyword)
+            {
+                case "damage":
+                    glossary.Add(new GlossaryAnchor("damage", "Damage", "Reduces HP.", "description_text"));
+                    break;
+                case "block":
+                    glossary.Add(new GlossaryAnchor("block", "Block", "Prevents damage until next turn.", "description_text"));
+                    break;
+                case "draw":
+                    glossary.Add(new GlossaryAnchor("draw", "Draw", "Add cards from your draw pile to your hand.", "description_text"));
+                    break;
+                case "vulnerable":
+                    glossary.Add(new GlossaryAnchor("vulnerable", "Vulnerable", "Receive more attack damage.", "description_text"));
+                    break;
+                case "strength":
+                    glossary.Add(new GlossaryAnchor("strength", "Strength", "Increases attack damage.", "description_text"));
+                    break;
+            }
+        }
+
+        return glossary;
     }
 }

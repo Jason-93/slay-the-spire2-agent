@@ -52,7 +52,10 @@ public sealed record RuntimePlayerState(
     int ExhaustPile,
     IReadOnlyList<string> Relics,
     IReadOnlyList<string> Potions,
-    IReadOnlyList<RuntimePowerState>? Powers = null);
+    IReadOnlyList<RuntimePowerState>? Powers = null,
+    IReadOnlyList<RuntimeCard>? DrawPileCards = null,
+    IReadOnlyList<RuntimeCard>? DiscardPileCards = null,
+    IReadOnlyList<RuntimeCard>? ExhaustPileCards = null);
 
 public sealed record RuntimeEnemyState(
     string EnemyId,

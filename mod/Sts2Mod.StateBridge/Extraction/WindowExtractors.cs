@@ -58,6 +58,60 @@ public abstract class WindowExtractorBase : IWindowExtractor
                     context.Player.DrawPile,
                     context.Player.DiscardPile,
                     context.Player.ExhaustPile,
+                    DrawPileCards = context.Player.DrawPileCards?.Select(card => new
+                    {
+                        card.CardId,
+                        card.Name,
+                        card.Cost,
+                        card.Playable,
+                        card.InstanceCardId,
+                        card.CanonicalCardId,
+                        card.Description,
+                        card.CostForTurn,
+                        card.Upgraded,
+                        card.TargetType,
+                        card.CardType,
+                        card.Rarity,
+                        Traits = card.Traits?.ToArray() ?? Array.Empty<string>(),
+                        Keywords = card.Keywords?.ToArray() ?? Array.Empty<string>(),
+                        Glossary = card.Glossary?.ToArray() ?? Array.Empty<GlossaryAnchor>(),
+                    }).ToArray() ?? Array.Empty<object>(),
+                    DiscardPileCards = context.Player.DiscardPileCards?.Select(card => new
+                    {
+                        card.CardId,
+                        card.Name,
+                        card.Cost,
+                        card.Playable,
+                        card.InstanceCardId,
+                        card.CanonicalCardId,
+                        card.Description,
+                        card.CostForTurn,
+                        card.Upgraded,
+                        card.TargetType,
+                        card.CardType,
+                        card.Rarity,
+                        Traits = card.Traits?.ToArray() ?? Array.Empty<string>(),
+                        Keywords = card.Keywords?.ToArray() ?? Array.Empty<string>(),
+                        Glossary = card.Glossary?.ToArray() ?? Array.Empty<GlossaryAnchor>(),
+                    }).ToArray() ?? Array.Empty<object>(),
+                    ExhaustPileCards = context.Player.ExhaustPileCards?.Select(card => new
+                    {
+                        card.CardId,
+                        card.Name,
+                        card.Cost,
+                        card.Playable,
+                        card.InstanceCardId,
+                        card.CanonicalCardId,
+                        card.Description,
+                        card.CostForTurn,
+                        card.Upgraded,
+                        card.TargetType,
+                        card.CardType,
+                        card.Rarity,
+                        Traits = card.Traits?.ToArray() ?? Array.Empty<string>(),
+                        Keywords = card.Keywords?.ToArray() ?? Array.Empty<string>(),
+                        Glossary = card.Glossary?.ToArray() ?? Array.Empty<GlossaryAnchor>(),
+                    }).ToArray() ?? Array.Empty<object>(),
                     Relics = context.Player.Relics.ToArray(),
                     Potions = context.Player.Potions.ToArray(),
                     Powers = context.Player.Powers?.Select(power => new
@@ -182,7 +236,10 @@ public abstract class WindowExtractorBase : IWindowExtractor
             player.ExhaustPile,
             player.Relics.ToArray(),
             player.Potions.ToArray(),
-            Convert(player.Powers));
+            Convert(player.Powers),
+            player.DrawPileCards?.Select(Convert).ToArray() ?? Array.Empty<CardView>(),
+            player.DiscardPileCards?.Select(Convert).ToArray() ?? Array.Empty<CardView>(),
+            player.ExhaustPileCards?.Select(Convert).ToArray() ?? Array.Empty<CardView>());
     }
 
     protected static EnemyState Convert(RuntimeEnemyState enemy)

@@ -97,6 +97,34 @@ public sealed class RewardPhaseDetectionTests
                     Traits = new[] { "starter" },
                     Keywords = new[] { "damage" },
                 },
+            },
+            drawPile: new[]
+            {
+                new FakeCard("Pommel Strike")
+                {
+                    CardId = "pommel_strike",
+                    Description = "Deal {Damage:diff()} [gold]damage[/gold]. Draw 1 card.",
+                    RenderedDescription = "Deal 9 damage. Draw 1 card.",
+                    Damage = 9,
+                    TargetType = "AnyEnemy",
+                    CardType = "Attack",
+                    Rarity = "Common",
+                    Keywords = new[] { "damage", "draw" },
+                },
+            },
+            discardPile: new[]
+            {
+                new FakeCard("Defend")
+                {
+                    CardId = "defend_red",
+                    Description = "Gain {Block:diff()} [gold]Block[/gold].",
+                    RenderedDescription = "Gain 5 Block.",
+                    Block = 5,
+                    TargetType = "Self",
+                    CardType = "Skill",
+                    Rarity = "Starter",
+                    Keywords = new[] { "block" },
+                },
             });
 
         var window = InvokeBuildCombatWindow(reader, runNode, runState);
@@ -110,6 +138,16 @@ public sealed class RewardPhaseDetectionTests
         Assert.Contains(card.Glossary ?? Array.Empty<GlossaryAnchor>(), anchor => anchor.GlossaryId == "damage");
         Assert.Equal("AnyEnemy", card.TargetType);
         Assert.Contains("starter", card.Traits ?? Array.Empty<string>());
+        var drawPileCard = Assert.Single(player.DrawPileCards ?? Array.Empty<CardView>());
+        Assert.Equal("pommel_strike", drawPileCard.CanonicalCardId);
+        Assert.Contains(drawPileCard.Glossary ?? Array.Empty<GlossaryAnchor>(), anchor => anchor.GlossaryId == "damage");
+        Assert.Equal(1, player.DrawPile);
+        var discardPileCard = Assert.Single(player.DiscardPileCards ?? Array.Empty<CardView>());
+        Assert.Equal("defend_red", discardPileCard.CanonicalCardId);
+        Assert.Contains(discardPileCard.Glossary ?? Array.Empty<GlossaryAnchor>(), anchor => anchor.GlossaryId == "block");
+        Assert.Equal(1, player.DiscardPile);
+        Assert.Empty(player.ExhaustPileCards ?? Array.Empty<CardView>());
+        Assert.Equal(0, player.ExhaustPile);
         Assert.Contains("Metallicize", player.Powers?.Select(power => power.Name) ?? Array.Empty<string>());
         var playerPower = Assert.Single(player.Powers ?? Array.Empty<PowerView>());
         Assert.Equal("Gain 3 Block at end of turn.", playerPower.Description);
@@ -131,6 +169,66 @@ public sealed class RewardPhaseDetectionTests
         Assert.Equal("FakeCombatRoom", runStateSnapshot.CurrentRoomType);
         Assert.Equal("1,1", runStateSnapshot.Map?.CurrentCoord);
         Assert.Contains("Elite@2,2", runStateSnapshot.Map?.ReachableNodes ?? Array.Empty<string>());
+
+        var pileExport = Assert.IsAssignableFrom<IReadOnlyDictionary<string, object?>>(exported.Snapshot.Metadata["pile_export"]);
+        var drawPileExport = Assert.IsAssignableFrom<IReadOnlyDictionary<string, object?>>(pileExport["draw_pile"]);
+        Assert.Equal(1, drawPileExport["expected_count"]);
+        Assert.Equal(1, drawPileExport["exported_count"]);
+        Assert.Equal(false, drawPileExport["degraded"]);
+        var discardPileExport = Assert.IsAssignableFrom<IReadOnlyDictionary<string, object?>>(pileExport["discard_pile"]);
+        Assert.Equal(1, discardPileExport["expected_count"]);
+        Assert.Equal(1, discardPileExport["exported_count"]);
+        Assert.Equal(false, discardPileExport["degraded"]);
+    }
+
+    [Fact]
+    public void BuildCombatWindow_DegradesMissingPileWithoutFailingSnapshot()
+    {
+        var reader = CreateReader();
+        var runNode = new FakeRunNode(new FakeScreenTracker());
+        var runState = new FakeRunState(
+            new[] { new FakeEnemy("enemy-1", true) },
+            hand: new[]
+            {
+                new FakeCard("Strike")
+                {
+                    CardId = "strike_red",
+                    Description = "Deal {Damage:diff()} [gold]damage[/gold].",
+                    RenderedDescription = "Deal 6 damage.",
+                    Damage = 6,
+                    TargetType = "AnyEnemy",
+                    CardType = "Attack",
+                    Keywords = new[] { "damage" },
+                },
+            },
+            drawPileObject: new FakeBrokenPile(),
+            discardPile: new[]
+            {
+                new FakeCard("Defend")
+                {
+                    CardId = "defend_red",
+                    Description = "Gain {Block:diff()} [gold]Block[/gold].",
+                    Block = 5,
+                    TargetType = "Self",
+                    CardType = "Skill",
+                    Keywords = new[] { "block" },
+                },
+            });
+
+        var window = InvokeBuildCombatWindow(reader, runNode, runState);
+        var exported = new CombatWindowExtractor().Export(window, new BridgeSessionState(new BridgeOptions()));
+        var player = Assert.IsType<PlayerState>(exported.Snapshot.Player);
+
+        Assert.Empty(player.DrawPileCards ?? Array.Empty<CardView>());
+        Assert.Equal(0, player.DrawPile);
+        Assert.Single(player.DiscardPileCards ?? Array.Empty<CardView>());
+
+        var pileExport = Assert.IsAssignableFrom<IReadOnlyDictionary<string, object?>>(exported.Snapshot.Metadata["pile_export"]);
+        var drawPileExport = Assert.IsAssignableFrom<IReadOnlyDictionary<string, object?>>(pileExport["draw_pile"]);
+        Assert.Equal(true, drawPileExport["degraded"]);
+        Assert.Equal("cards_collection_missing", drawPileExport["fallback_reason"]);
+        Assert.Equal(0, drawPileExport["expected_count"]);
+        Assert.Equal(0, drawPileExport["exported_count"]);
     }
 
     [Fact]
@@ -604,14 +702,28 @@ public sealed class RewardPhaseDetectionTests
         object? currentRoom = null,
         FakeMapPoint? currentMapPoint = null,
         FakeMap? map = null,
-        IReadOnlyList<FakeCard>? hand = null)
+        IReadOnlyList<FakeCard>? hand = null,
+        IReadOnlyList<FakeCard>? drawPile = null,
+        IReadOnlyList<FakeCard>? discardPile = null,
+        IReadOnlyList<FakeCard>? exhaustPile = null,
+        object? drawPileObject = null,
+        object? discardPileObject = null,
+        object? exhaustPileObject = null)
     {
         public object CurrentRoom { get; } = currentRoom ?? new FakeCombatRoom();
         public object CurrentLocation { get; } = "Act1";
         public int ActFloor { get; } = 1;
         public int CurrentActIndex { get; } = 0;
         public int AscensionLevel { get; } = 0;
-        public List<FakePlayer> Players { get; } = new() { new FakePlayer(enemies.ToArray(), hand?.ToArray() ?? Array.Empty<FakeCard>()) };
+        public List<FakePlayer> Players { get; } = new()
+        {
+            new FakePlayer(
+                enemies.ToArray(),
+                hand?.ToArray() ?? Array.Empty<FakeCard>(),
+                drawPileObject ?? new FakePile(drawPile?.ToArray() ?? Array.Empty<FakeCard>()),
+                discardPileObject ?? new FakePile(discardPile?.ToArray() ?? Array.Empty<FakeCard>()),
+                exhaustPileObject ?? new FakePile(exhaustPile?.ToArray() ?? Array.Empty<FakeCard>())),
+        };
         public FakeMapPoint? CurrentMapPoint { get; } = currentMapPoint;
         public FakeMap? Map { get; } = map;
     }
@@ -637,11 +749,16 @@ public sealed class RewardPhaseDetectionTests
         public int row { get; } = row;
     }
 
-    private sealed class FakePlayer(FakeEnemy[] enemies, params FakeCard[] handCards)
+    private sealed class FakePlayer(
+        FakeEnemy[] enemies,
+        FakeCard[] handCards,
+        object drawPile,
+        object discardPile,
+        object exhaustPile)
     {
         public int Gold { get; } = 99;
         public FakeCreature Creature { get; } = new(enemies);
-        public FakePlayerCombatState PlayerCombatState { get; } = new(handCards);
+        public FakePlayerCombatState PlayerCombatState { get; } = new(handCards, drawPile, discardPile, exhaustPile);
         public List<object> Relics { get; } = new();
         public List<object> PotionSlots { get; } = new();
     }
@@ -678,21 +795,27 @@ public sealed class RewardPhaseDetectionTests
         public List<FakePower> Powers { get; } = new() { new FakePower("vulnerable", "Vulnerable", 1, "Receive more attack damage.") };
     }
 
-    private sealed class FakePlayerCombatState(params FakeCard[] cards)
+    private sealed class FakePlayerCombatState(
+        FakeCard[] handCards,
+        object drawPile,
+        object discardPile,
+        object exhaustPile)
     {
         public int Energy { get; } = 3;
         public int Stars { get; } = 0;
         public int MaxEnergy { get; } = 3;
-        public FakePile Hand { get; } = new(cards);
-        public FakePile DrawPile { get; } = new();
-        public FakePile DiscardPile { get; } = new();
-        public FakePile ExhaustPile { get; } = new();
+        public FakePile Hand { get; } = new(handCards);
+        public object DrawPile { get; } = drawPile;
+        public object DiscardPile { get; } = discardPile;
+        public object ExhaustPile { get; } = exhaustPile;
     }
 
-    private sealed class FakePile(params object[] cards)
+    private sealed class FakePile(IEnumerable<object> cards)
     {
         public List<object> Cards { get; } = new(cards);
     }
+
+    private sealed class FakeBrokenPile;
 
     private sealed class FakePower(string id, string name, int amount, string description)
     {
