@@ -21,7 +21,6 @@ from sts2_agent.models import (
     ActionSubmission,
     CardView,
     DecisionSnapshot,
-    DescriptionVariable,
     EnemyState,
     GlossaryAnchor,
     LegalAction,
@@ -202,9 +201,6 @@ class MockGameBridge(GameBridge):
             rarity=raw.get("rarity"),
             traits=list(raw.get("traits") or []),
             keywords=list(raw.get("keywords") or []),
-            description_quality=MockGameBridge._optional_str(raw.get("description_quality")),
-            description_source=MockGameBridge._optional_str(raw.get("description_source")),
-            description_vars=MockGameBridge._build_description_vars(raw.get("description_vars")),
             glossary=MockGameBridge._build_glossary(raw.get("glossary")),
         )
 
@@ -216,9 +212,6 @@ class MockGameBridge(GameBridge):
             amount=MockGameBridge._optional_int(raw.get("amount")),
             description=MockGameBridge._optional_str(raw.get("description")),
             canonical_power_id=raw.get("canonical_power_id"),
-            description_quality=MockGameBridge._optional_str(raw.get("description_quality")),
-            description_source=MockGameBridge._optional_str(raw.get("description_source")),
-            description_vars=MockGameBridge._build_description_vars(raw.get("description_vars")),
             glossary=MockGameBridge._build_glossary(raw.get("glossary")),
         )
 
@@ -279,28 +272,6 @@ class MockGameBridge(GameBridge):
     def _optional_str(value: Any) -> str | None:
         return value if isinstance(value, str) and value else None
 
-    @staticmethod
-    def _build_description_vars(raw: Any) -> list[DescriptionVariable]:
-        if not isinstance(raw, list):
-            return []
-        variables: list[DescriptionVariable] = []
-        for item in raw:
-            if not isinstance(item, dict):
-                continue
-            key = item.get("key")
-            if not isinstance(key, str) or not key:
-                continue
-            variables.append(
-                DescriptionVariable(
-                    key=key,
-                    value=MockGameBridge._optional_int(item.get("value")),
-                    source=MockGameBridge._optional_str(item.get("source")),
-                    placeholder=MockGameBridge._optional_str(item.get("placeholder")),
-                )
-            )
-        return variables
-
-    @staticmethod
     def _build_glossary(raw: Any) -> list[GlossaryAnchor]:
         if not isinstance(raw, list):
             return []

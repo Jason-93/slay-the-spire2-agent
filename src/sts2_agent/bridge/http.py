@@ -20,7 +20,6 @@ from sts2_agent.models import (
     ActionSubmission,
     CardView,
     DecisionSnapshot,
-    DescriptionVariable,
     EnemyState,
     GlossaryAnchor,
     LegalAction,
@@ -241,9 +240,6 @@ class HttpGameBridge(GameBridge):
             rarity=payload.get("rarity"),
             traits=list(payload.get("traits") or []),
             keywords=list(payload.get("keywords") or []),
-            description_quality=HttpGameBridge._as_optional_str(payload.get("description_quality")),
-            description_source=HttpGameBridge._as_optional_str(payload.get("description_source")),
-            description_vars=HttpGameBridge._decode_description_vars(payload.get("description_vars")),
             glossary=HttpGameBridge._decode_glossary(payload.get("glossary")),
         )
 
@@ -255,9 +251,6 @@ class HttpGameBridge(GameBridge):
             amount=HttpGameBridge._as_optional_int(payload.get("amount")),
             description=HttpGameBridge._as_optional_str(payload.get("description")),
             canonical_power_id=payload.get("canonical_power_id"),
-            description_quality=HttpGameBridge._as_optional_str(payload.get("description_quality")),
-            description_source=HttpGameBridge._as_optional_str(payload.get("description_source")),
-            description_vars=HttpGameBridge._decode_description_vars(payload.get("description_vars")),
             glossary=HttpGameBridge._decode_glossary(payload.get("glossary")),
         )
 
@@ -322,28 +315,6 @@ class HttpGameBridge(GameBridge):
     def _as_optional_str(value: Any) -> str | None:
         return value if isinstance(value, str) and value else None
 
-    @staticmethod
-    def _decode_description_vars(payload: Any) -> list[DescriptionVariable]:
-        if not isinstance(payload, list):
-            return []
-        variables: list[DescriptionVariable] = []
-        for item in payload:
-            if not isinstance(item, dict):
-                continue
-            key = item.get("key")
-            if not isinstance(key, str) or not key:
-                continue
-            variables.append(
-                DescriptionVariable(
-                    key=key,
-                    value=HttpGameBridge._as_optional_int(item.get("value")),
-                    source=HttpGameBridge._as_optional_str(item.get("source")),
-                    placeholder=HttpGameBridge._as_optional_str(item.get("placeholder")),
-                )
-            )
-        return variables
-
-    @staticmethod
     def _decode_glossary(payload: Any) -> list[GlossaryAnchor]:
         if not isinstance(payload, list):
             return []

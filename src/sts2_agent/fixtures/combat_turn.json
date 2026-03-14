@@ -21,16 +21,6 @@
         "name": "Metallicize",
         "amount": 3,
         "description": "At end of turn gain 3 **Block**.",
-        "description_quality": "resolved",
-        "description_source": "runtime_rendered_with_markdown_glossary",
-        "description_vars": [
-          {
-            "key": "amount",
-            "value": 3,
-            "source": "member_alias",
-            "placeholder": "Amount"
-          }
-        ],
         "glossary": [
           {
             "glossary_id": "block",
@@ -52,16 +42,6 @@
         "cost_for_turn": 1,
         "playable": true,
         "description": "Deal 6 **damage**.",
-        "description_quality": "resolved",
-        "description_source": "runtime_rendered_with_markdown_glossary",
-        "description_vars": [
-          {
-            "key": "damage",
-            "value": 6,
-            "source": "description_placeholder",
-            "placeholder": "Damage"
-          }
-        ],
         "glossary": [
           {
             "glossary_id": "damage",
@@ -90,16 +70,6 @@
         "cost_for_turn": 1,
         "playable": true,
         "description": "Gain 5 **Block**.",
-        "description_quality": "resolved",
-        "description_source": "rendered_from_vars",
-        "description_vars": [
-          {
-            "key": "block",
-            "value": 5,
-            "source": "description_placeholder",
-            "placeholder": "Block"
-          }
-        ],
         "glossary": [
           {
             "glossary_id": "block",
@@ -128,16 +98,6 @@
         "cost_for_turn": 0,
         "playable": true,
         "description": "Draw {Draw:diff()} cards.",
-        "description_quality": "template_fallback",
-        "description_source": "raw_template",
-        "description_vars": [
-          {
-            "key": "draw",
-            "value": null,
-            "source": "description_placeholder",
-            "placeholder": "Draw"
-          }
-        ],
         "glossary": [
           {
             "glossary_id": "draw",
@@ -181,15 +141,6 @@
           "name": "Strength",
           "amount": 3,
           "description": "Increase attack damage.",
-          "description_quality": "resolved",
-          "description_source": "runtime_rendered",
-          "description_vars": [
-            {
-              "key": "strength",
-              "value": 3,
-              "source": "power_id"
-            }
-          ],
           "glossary": [
             {
               "glossary_id": "strength",

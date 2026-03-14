@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Sts2Mod.StateBridge.Configuration;
 using Sts2Mod.StateBridge.Contracts;
+using Sts2Mod.StateBridge.Logging;
 
 namespace Sts2Mod.StateBridge.Providers;
 
@@ -198,11 +199,13 @@ internal sealed class Sts2RuntimeReflectionReader
         };
     private readonly BridgeOptions _options;
     private readonly InstallationProbeResult _probe;
+    private readonly IBridgeLogger? _logger;
 
-    public Sts2RuntimeReflectionReader(BridgeOptions options, InstallationProbeResult probe)
+    public Sts2RuntimeReflectionReader(BridgeOptions options, InstallationProbeResult probe, IBridgeLogger? logger = null)
     {
         _options = options;
         _probe = probe;
+        _logger = logger;
     }
 
     public RuntimeStatusReport GetStatusReport()
@@ -300,7 +303,7 @@ internal sealed class Sts2RuntimeReflectionReader
         var textDiagnostics = new TextDiagnosticsCollector();
         var metadata = CreateMenuMetadata(gameInstance);
         var buttons = DiscoverMenuButtons(gameInstance, textDiagnostics, metadata);
-        metadata["text_diagnostics"] = textDiagnostics.ToMetadata();
+        LogTextDiagnostics("menu", textDiagnostics);
 
         var actions = new List<RuntimeActionDefinition>();
         foreach (var candidate in buttons)
@@ -1202,7 +1205,7 @@ internal sealed class Sts2RuntimeReflectionReader
             metadata["window_kind"] = "combat_transition";
             metadata["reward_pending"] = true;
             metadata["transition_kind"] = "combat_reward_transition";
-            metadata["text_diagnostics"] = textDiagnostics.ToMetadata();
+            LogTextDiagnostics("combat_transition", textDiagnostics);
             return new RuntimeWindowContext(
                 DecisionPhase.Combat,
                 player,
@@ -1257,7 +1260,7 @@ internal sealed class Sts2RuntimeReflectionReader
         }
 
         actions.Add(new RuntimeActionDefinition("end_turn", "End Turn", new Dictionary<string, object?>()));
-        metadata["text_diagnostics"] = textDiagnostics.ToMetadata();
+        LogTextDiagnostics("combat", textDiagnostics);
         return new RuntimeWindowContext(
             DecisionPhase.Combat,
             player,
@@ -1340,7 +1343,7 @@ internal sealed class Sts2RuntimeReflectionReader
             metadata["reward_advance_available"] = false;
         }
 
-        metadata["text_diagnostics"] = textDiagnostics.ToMetadata();
+        LogTextDiagnostics("reward", textDiagnostics);
 
         return new RuntimeWindowContext(
             DecisionPhase.Reward,
@@ -1366,7 +1369,7 @@ internal sealed class Sts2RuntimeReflectionReader
         metadata["map_ready"] = mapNodes.Count > 0;
         metadata["map_node_source"] = mapNodeSource;
         metadata["no_reachable_nodes"] = mapNodes.Count == 0;
-        metadata["text_diagnostics"] = textDiagnostics.ToMetadata();
+        LogTextDiagnostics("map", textDiagnostics);
         var actions = mapNodes
             .Select(node => new RuntimeActionDefinition(
                 "choose_map_node",
@@ -1393,7 +1396,7 @@ internal sealed class Sts2RuntimeReflectionReader
         var metadata = CreateBaseMetadata(runNode, runState, DecisionPhase.Terminal);
         var runStateSnapshot = BuildRunState(runState, textDiagnostics);
         metadata["result"] = GetBoolean(runState, "IsGameOver") ? "game_over" : "terminal";
-        metadata["text_diagnostics"] = textDiagnostics.ToMetadata();
+        LogTextDiagnostics("terminal", textDiagnostics);
         return new RuntimeWindowContext(
             DecisionPhase.Terminal,
             player,
@@ -1594,9 +1597,6 @@ internal sealed class Sts2RuntimeReflectionReader
                     GetBoolean(card, "IsPlayable", defaultValue: true),
                     ResolveCardCanonicalId(card),
                     description.Description,
-                    description.Quality,
-                    description.Source,
-                    description.Vars,
                     description.Glossary,
                     ResolveCardUpgraded(card),
                     traits,
@@ -1635,9 +1635,6 @@ internal sealed class Sts2RuntimeReflectionReader
                     Rarity: ConvertToText(GetMemberValue(card, "Rarity") ?? GetMemberValue(card, "CardRarity"), $"{path}[{index}].rarity", textDiagnostics),
                     Traits: traits,
                     Keywords: keywords,
-                    DescriptionQuality: description.Quality,
-                    DescriptionSource: description.Source,
-                    DescriptionVars: description.Vars,
                     Glossary: description.Glossary);
             })
             .ToArray();
@@ -2476,7 +2473,7 @@ internal sealed class Sts2RuntimeReflectionReader
                ?? ConvertToText(GetMemberValue(card, "InternalName"));
     }
 
-    private static DescriptionExtraction ResolveCardDescription(
+    private DescriptionExtraction ResolveCardDescription(
         object? card,
         string path,
         TextDiagnosticsCollector textDiagnostics,
@@ -2543,6 +2540,16 @@ internal sealed class Sts2RuntimeReflectionReader
             keywords: keywords,
             traits: traits);
         var canonicalDescription = ChooseCanonicalDescription(renderOutcome.Text, raw);
+        LogDescriptionDiagnostics(
+            kind: "card",
+            identifier: ResolveCardCanonicalId(card) ?? ConvertToText(GetMemberValue(card, "Title") ?? GetMemberValue(card, "Name") ?? card) ?? path,
+            path: path,
+            raw: raw,
+            rendered: renderOutcome.Text,
+            quality: renderOutcome.Quality,
+            source: renderOutcome.Source,
+            variables: vars,
+            glossary: glossary);
         return new DescriptionExtraction(raw, renderOutcome.Text, canonicalDescription, renderOutcome.Quality, renderOutcome.Source, vars, glossary);
     }
 
@@ -2864,6 +2871,16 @@ internal sealed class Sts2RuntimeReflectionReader
             new[] { renderOutcome.Text, raw },
             keywords: null,
             traits: null);
+        LogDescriptionDiagnostics(
+            kind: "power",
+            identifier: canonicalPowerId ?? name,
+            path: path,
+            raw: raw,
+            rendered: ChooseCanonicalDescription(renderOutcome.Text, raw),
+            quality: renderOutcome.Quality,
+            source: renderOutcome.Source,
+            variables: vars,
+            glossary: glossary);
 
         return new RuntimePowerState(
             PowerId: canonicalPowerId ?? name,
@@ -2873,9 +2890,6 @@ internal sealed class Sts2RuntimeReflectionReader
                     ?? GetNullableInt(power, "Value"),
             Description: ChooseCanonicalDescription(renderOutcome.Text, raw),
             CanonicalPowerId: canonicalPowerId,
-            DescriptionQuality: renderOutcome.Quality,
-            DescriptionSource: renderOutcome.Source,
-            DescriptionVars: vars,
             Glossary: glossary);
     }
 
@@ -3533,9 +3547,6 @@ internal sealed class Sts2RuntimeReflectionReader
             ["target_type"] = card.TargetType,
             ["canonical_card_id"] = card.CanonicalCardId,
             ["description"] = card.Description,
-            ["description_quality"] = card.DescriptionQuality,
-            ["description_source"] = card.DescriptionSource,
-            ["description_vars"] = card.DescriptionVars,
             ["glossary"] = card.Glossary,
             ["upgraded"] = card.Upgraded,
             ["traits"] = card.Traits,
@@ -3546,6 +3557,88 @@ internal sealed class Sts2RuntimeReflectionReader
                            (!(pair.Value is string text) || !string.IsNullOrWhiteSpace(text)) &&
                            (!(pair.Value is IReadOnlyCollection<string> values) || values.Count > 0))
             .ToDictionary(pair => pair.Key, pair => pair.Value);
+    }
+
+    private void LogTextDiagnostics(string windowKind, TextDiagnosticsCollector collector)
+    {
+        var metadata = collector.ToMetadata();
+        var resolved = Convert.ToInt32(metadata["resolved"]);
+        var fallback = Convert.ToInt32(metadata["fallback"]);
+        var unresolved = Convert.ToInt32(metadata["unresolved"]);
+        if (fallback == 0 && unresolved == 0)
+        {
+            if (_options.LogDescriptionSuccesses && resolved > 0)
+            {
+                _logger?.Info($"Text resolution window={windowKind} resolved={resolved} fallback=0 unresolved=0");
+            }
+
+            return;
+        }
+
+        var entries = metadata.TryGetValue("entries", out var rawEntries) && rawEntries is IReadOnlyCollection<IReadOnlyDictionary<string, object?>> diagnostics
+            ? diagnostics.Take(5).Select(FormatTextDiagnosticEntry).ToArray()
+            : Array.Empty<string>();
+        var entrySummary = entries.Length == 0 ? "none" : string.Join(" | ", entries);
+        _logger?.Warn($"Text resolution issues window={windowKind} resolved={resolved} fallback={fallback} unresolved={unresolved} entries={entrySummary}");
+    }
+
+    private void LogDescriptionDiagnostics(
+        string kind,
+        string identifier,
+        string path,
+        string? raw,
+        string? rendered,
+        string? quality,
+        string? source,
+        IReadOnlyList<DescriptionVariable> variables,
+        IReadOnlyList<GlossaryAnchor> glossary)
+    {
+        var unresolvedVariables = variables.Where(variable => variable.Value is null).Select(variable => variable.Key).Distinct(StringComparer.Ordinal).ToArray();
+        var expectedGlossaryNormalization = !string.IsNullOrWhiteSpace(raw) && RichTextPairRegex.IsMatch(raw);
+        var glossaryNormalizationMissing = expectedGlossaryNormalization &&
+                                          (!string.IsNullOrWhiteSpace(rendered) && rendered.Contains('[', StringComparison.Ordinal));
+        var requiresWarning =
+            string.Equals(quality, "template_fallback", StringComparison.Ordinal) ||
+            unresolvedVariables.Length > 0 ||
+            glossaryNormalizationMissing;
+
+        if (!requiresWarning && !_options.LogDescriptionSuccesses)
+        {
+            return;
+        }
+
+        var message =
+            $"Description {kind}={identifier} path={path} quality={quality ?? "unknown"} source={source ?? "unknown"} " +
+            $"unresolved_vars={(unresolvedVariables.Length == 0 ? "-" : string.Join(",", unresolvedVariables))} " +
+            $"glossary={glossary.Count} raw=\"{AbbreviateForLog(raw)}\" rendered=\"{AbbreviateForLog(rendered)}\"";
+        if (requiresWarning)
+        {
+            _logger?.Warn(message);
+            return;
+        }
+
+        _logger?.Info(message);
+    }
+
+    private static string FormatTextDiagnosticEntry(IReadOnlyDictionary<string, object?> entry)
+    {
+        var path = ConvertToText(GetDictionaryValue(entry, "path")) ?? "?";
+        var status = ConvertToText(GetDictionaryValue(entry, "status")) ?? "?";
+        var source = ConvertToText(GetDictionaryValue(entry, "source")) ?? "?";
+        return $"{path}:{status}:{source}";
+    }
+
+    private static string AbbreviateForLog(string? text, int maxLength = 160)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return string.Empty;
+        }
+
+        var normalized = text.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        return normalized.Length <= maxLength
+            ? normalized
+            : normalized[..maxLength] + "...";
     }
 
     private static List<string> ExtractLabels(object? collection, string path, TextDiagnosticsCollector textDiagnostics)
@@ -3758,9 +3851,6 @@ internal sealed class Sts2RuntimeReflectionReader
         bool Playable,
         string? CanonicalCardId,
         string? Description,
-        string? DescriptionQuality,
-        string? DescriptionSource,
-        IReadOnlyList<DescriptionVariable> DescriptionVars,
         IReadOnlyList<GlossaryAnchor> Glossary,
         bool? Upgraded,
         IReadOnlyList<string> Traits,

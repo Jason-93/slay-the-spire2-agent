@@ -107,16 +107,12 @@ public sealed class RewardPhaseDetectionTests
         var card = Assert.Single(player.Hand);
         Assert.Equal("strike_red", card.CanonicalCardId);
         Assert.Equal("Deal 6 **damage**.", card.Description);
-        Assert.Equal("resolved", card.DescriptionQuality);
-        Assert.Equal("runtime_rendered_with_markdown_glossary", card.DescriptionSource);
-        Assert.Equal("damage", Assert.Single(card.DescriptionVars ?? Array.Empty<DescriptionVariable>()).Key);
         Assert.Contains(card.Glossary ?? Array.Empty<GlossaryAnchor>(), anchor => anchor.GlossaryId == "damage");
         Assert.Equal("AnyEnemy", card.TargetType);
         Assert.Contains("starter", card.Traits ?? Array.Empty<string>());
         Assert.Contains("Metallicize", player.Powers?.Select(power => power.Name) ?? Array.Empty<string>());
         var playerPower = Assert.Single(player.Powers ?? Array.Empty<PowerView>());
         Assert.Equal("Gain 3 Block at end of turn.", playerPower.Description);
-        Assert.Equal("amount", Assert.Single(playerPower.DescriptionVars ?? Array.Empty<DescriptionVariable>()).Key);
         Assert.Contains(playerPower.Glossary ?? Array.Empty<GlossaryAnchor>(), anchor => anchor.GlossaryId == "metallicize");
         Assert.Contains(playerPower.Glossary ?? Array.Empty<GlossaryAnchor>(), anchor => anchor.GlossaryId == "block");
 
@@ -164,9 +160,6 @@ public sealed class RewardPhaseDetectionTests
         var card = Assert.Single(player.Hand);
 
         Assert.Equal("Gain 5 **Block**.", card.Description);
-        Assert.Equal("resolved", card.DescriptionQuality);
-        Assert.Equal("rendered_from_vars", card.DescriptionSource);
-        Assert.Equal("block", Assert.Single(card.DescriptionVars ?? Array.Empty<DescriptionVariable>()).Key);
         Assert.Contains(card.Glossary ?? Array.Empty<GlossaryAnchor>(), anchor => anchor.GlossaryId == "block");
     }
 
@@ -198,14 +191,9 @@ public sealed class RewardPhaseDetectionTests
         var player = exported.Snapshot.Player;
         Assert.NotNull(player);
         var card = Assert.Single(player.Hand);
-        var variable = Assert.Single(card.DescriptionVars ?? Array.Empty<DescriptionVariable>());
 
         Assert.Equal("Deal 6 **damage**.", card.Description);
-        Assert.Equal("resolved", card.DescriptionQuality);
-        Assert.Equal("rendered_from_vars", card.DescriptionSource);
-        Assert.Equal("damage", variable.Key);
-        Assert.Equal(6, variable.Value);
-        Assert.Contains("DynamicVars", variable.Source ?? string.Empty);
+        Assert.Contains(card.Glossary ?? Array.Empty<GlossaryAnchor>(), anchor => anchor.GlossaryId == "damage");
     }
 
     [Fact]
@@ -232,13 +220,8 @@ public sealed class RewardPhaseDetectionTests
         var player = exported.Snapshot.Player;
         Assert.NotNull(player);
         var card = Assert.Single(player.Hand);
-        var variable = Assert.Single(card.DescriptionVars ?? Array.Empty<DescriptionVariable>());
 
         Assert.Equal("Draw {Draw:diff()} cards.", card.Description);
-        Assert.Equal("template_fallback", card.DescriptionQuality);
-        Assert.Equal("raw_template", card.DescriptionSource);
-        Assert.Equal("draw", variable.Key);
-        Assert.Null(variable.Value);
         Assert.Contains(card.Glossary ?? Array.Empty<GlossaryAnchor>(), anchor => anchor.GlossaryId == "draw");
     }
 

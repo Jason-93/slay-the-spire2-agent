@@ -109,6 +109,10 @@ public sealed class Sts2InGameModEntryPoint
             PreferRuntimeProvider = true,
             AllowDebugPhaseOverride = false,
             ReadOnly = !writesEnabled,
+            LogDescriptionSuccesses = string.Equals(
+                System.Environment.GetEnvironmentVariable("STS2_BRIDGE_LOG_DESCRIPTION_SUCCESSES"),
+                "true",
+                StringComparison.OrdinalIgnoreCase),
         };
     }
 

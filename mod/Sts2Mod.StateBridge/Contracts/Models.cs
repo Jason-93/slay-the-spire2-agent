@@ -36,9 +36,6 @@ public sealed record PowerView(
     int? Amount = null,
     string? Description = null,
     string? CanonicalPowerId = null,
-    string? DescriptionQuality = null,
-    string? DescriptionSource = null,
-    IReadOnlyList<DescriptionVariable>? DescriptionVars = null,
     IReadOnlyList<GlossaryAnchor>? Glossary = null);
 
 public sealed record RunMapState(
@@ -71,9 +68,6 @@ public sealed record CardView(
     string? Rarity = null,
     IReadOnlyList<string>? Traits = null,
     IReadOnlyList<string>? Keywords = null,
-    string? DescriptionQuality = null,
-    string? DescriptionSource = null,
-    IReadOnlyList<DescriptionVariable>? DescriptionVars = null,
     IReadOnlyList<GlossaryAnchor>? Glossary = null);
 
 public sealed record PlayerState(

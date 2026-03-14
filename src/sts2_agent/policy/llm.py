@@ -292,9 +292,6 @@ class ChatCompletionsPolicy:
         optional_values = {
             "canonical_card_id": card.canonical_card_id,
             "description": ChatCompletionsPolicy._preferred_description_text(card),
-            "description_quality": getattr(card, "description_quality", None),
-            "description_source": getattr(card, "description_source", None),
-            "description_vars": ChatCompletionsPolicy._summarize_description_vars(getattr(card, "description_vars", [])),
             "glossary": ChatCompletionsPolicy._summarize_glossary(getattr(card, "glossary", [])),
             "cost_for_turn": card.cost_for_turn,
             "upgraded": card.upgraded,
@@ -320,15 +317,6 @@ class ChatCompletionsPolicy:
             payload["amount"] = power.amount
         if preferred_description:
             payload["description"] = preferred_description
-        quality = getattr(power, "description_quality", None)
-        if quality:
-            payload["description_quality"] = quality
-        source = getattr(power, "description_source", None)
-        if source:
-            payload["description_source"] = source
-        description_vars = ChatCompletionsPolicy._summarize_description_vars(getattr(power, "description_vars", []))
-        if description_vars:
-            payload["description_vars"] = description_vars
         glossary = ChatCompletionsPolicy._summarize_glossary(getattr(power, "glossary", []))
         if glossary:
             payload["glossary"] = glossary
@@ -395,22 +383,6 @@ class ChatCompletionsPolicy:
         if isinstance(description, str) and description:
             return description
         return None
-
-    @staticmethod
-    def _is_template_text(text: str) -> bool:
-        return "{" in text or "}" in text or "[" in text or "]" in text
-
-    @staticmethod
-    def _summarize_description_vars(variables: Any) -> dict[str, int]:
-        if not isinstance(variables, list):
-            return {}
-        payload: dict[str, int] = {}
-        for item in variables:
-            key = getattr(item, "key", None)
-            value = getattr(item, "value", None)
-            if isinstance(key, str) and key and isinstance(value, int):
-                payload[key] = value
-        return payload
 
     @staticmethod
     def _summarize_glossary(glossary: Any) -> list[dict[str, str]]:

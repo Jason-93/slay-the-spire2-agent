@@ -25,6 +25,7 @@ public static class ProviderFactory
             PreferRuntimeProvider = options.PreferRuntimeProvider,
             AllowDebugPhaseOverride = options.AllowDebugPhaseOverride,
             ReadOnly = options.ReadOnly,
+            LogDescriptionSuccesses = options.LogDescriptionSuccesses,
         };
 
         foreach (var note in probe.Notes)
@@ -35,7 +36,7 @@ public static class ProviderFactory
         if (probe.RuntimeAvailable && options.PreferRuntimeProvider)
         {
             logger.Info($"Using runtime provider with managed dir: {probe.ManagedDir}");
-            return (new Sts2RuntimeStateProvider(effectiveOptions, probe), effectiveOptions);
+            return (new Sts2RuntimeStateProvider(effectiveOptions, probe, logger), effectiveOptions);
         }
 
         logger.Info("Using fixture provider");

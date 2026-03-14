@@ -13,6 +13,7 @@ public sealed class BridgeOptions
     public bool PreferRuntimeProvider { get; init; }
     public bool AllowDebugPhaseOverride { get; init; } = true;
     public bool ReadOnly { get; init; } = true;
+    public bool LogDescriptionSuccesses { get; init; }
 
     public string Prefix => $"http://{Host}:{Port}/";
 }

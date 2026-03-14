@@ -8,7 +8,6 @@ from urllib.error import URLError
 from sts2_agent.models import (
     CardView,
     DecisionSnapshot,
-    DescriptionVariable,
     EnemyState,
     GlossaryAnchor,
     LegalAction,
@@ -60,9 +59,6 @@ def build_snapshot() -> DecisionSnapshot:
                     playable=True,
                     canonical_card_id="defend_red",
                     description="获得5点**格挡**。",
-                    description_quality="resolved",
-                    description_source="rendered_from_vars",
-                    description_vars=[DescriptionVariable(key="block", value=5, source="description_placeholder", placeholder="Block")],
                     glossary=[GlossaryAnchor(glossary_id="block", display_text="格挡", hint="在下个回合前，阻挡伤害。", source="description_text")],
                     cost_for_turn=1,
                     upgraded=False,
@@ -81,9 +77,6 @@ def build_snapshot() -> DecisionSnapshot:
                     name="金属化",
                     amount=3,
                     description="回合结束时获得3点**格挡**。",
-                    description_quality="resolved",
-                    description_source="runtime_rendered_with_markdown_glossary",
-                    description_vars=[DescriptionVariable(key="amount", value=3, source="member_alias", placeholder="Amount")],
                     glossary=[GlossaryAnchor(glossary_id="block", display_text="格挡", hint="在下个回合前，阻挡伤害。", source="description_text")],
                 )
             ],
@@ -107,9 +100,6 @@ def build_snapshot() -> DecisionSnapshot:
                         name="力量",
                         amount=3,
                         description="增加攻击伤害。",
-                        description_quality="resolved",
-                        description_source="runtime_rendered",
-                        description_vars=[DescriptionVariable(key="strength", value=3, source="power_id")],
                         glossary=[GlossaryAnchor(glossary_id="strength", display_text="力量", hint="使攻击造成更多伤害。", source="canonical_id")],
                     )
                 ],
@@ -297,12 +287,8 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
         payload = self.policy._summarize_snapshot(build_snapshot())
 
         self.assertEqual(payload["player"]["hand"][0]["description"], "获得5点**格挡**。")
-        self.assertEqual(payload["player"]["hand"][0]["description_quality"], "resolved")
-        self.assertEqual(payload["player"]["hand"][0]["description_vars"]["block"], 5)
         self.assertEqual(payload["player"]["hand"][0]["glossary"][0]["id"], "block")
         self.assertEqual(payload["player"]["powers"][0]["amount"], 3)
-        self.assertEqual(payload["player"]["powers"][0]["description_source"], "runtime_rendered_with_markdown_glossary")
-        self.assertEqual(payload["player"]["powers"][0]["description_vars"]["amount"], 3)
         self.assertEqual(payload["enemies"][0]["intent_damage"], 11)
         self.assertEqual(payload["enemies"][0]["powers"][0]["name"], "力量")
         self.assertEqual(payload["run_state"]["map"]["current_coord"], "1,2")
@@ -313,7 +299,6 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
             name="打击",
             cost=1,
             description="造成{Damage:diff()}点伤害。",
-            description_quality="template_fallback",
         )
 
         self.assertEqual(self.policy._preferred_description_text(card), "造成{Damage:diff()}点伤害。")

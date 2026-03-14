@@ -103,12 +103,12 @@ def main() -> int:
                 assert len(actions) >= 1
         combat_snapshot = fetch(base_url, "/snapshot?phase=combat")
         assert combat_snapshot["player"]["hand"][0]["description"]
-        assert combat_snapshot["player"]["hand"][0]["description_quality"]
-        assert combat_snapshot["player"]["hand"][0]["description_vars"]
         assert combat_snapshot["player"]["hand"][0]["glossary"]
-        assert any(card.get("description_quality") == "template_fallback" for card in combat_snapshot["player"]["hand"])
+        assert "description_quality" not in combat_snapshot["player"]["hand"][0]
+        assert "description_source" not in combat_snapshot["player"]["hand"][0]
+        assert "description_vars" not in combat_snapshot["player"]["hand"][0]
         assert combat_snapshot["player"]["powers"][0]["name"]
-        assert combat_snapshot["player"]["powers"][0]["description_vars"]
+        assert "description_vars" not in combat_snapshot["player"]["powers"][0]
         assert combat_snapshot["enemies"][0]["intent_type"]
         assert combat_snapshot["enemies"][0]["powers"][0]["name"]
         assert combat_snapshot["enemies"][0]["powers"][0]["glossary"]

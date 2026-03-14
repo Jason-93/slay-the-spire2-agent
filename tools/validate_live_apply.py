@@ -232,30 +232,52 @@ def detect_progress(
     return evidence
 
 
-def summarize_description_quality(snapshot: dict[str, Any]) -> dict[str, Any]:
+def summarize_snapshot_schema(snapshot: dict[str, Any]) -> dict[str, Any]:
     player = snapshot.get("player")
     hand = player.get("hand") if isinstance(player, dict) else []
     hand = hand if isinstance(hand, list) else []
-    qualities: dict[str, int] = {}
-    resolved_vars = 0
-    unresolved_vars = 0
+    cards_with_description = 0
+    cards_with_glossary = 0
+    cards_without_description_diagnostics = 0
     for card in hand:
         if not isinstance(card, dict):
             continue
-        quality = str(card.get("description_quality") or "missing")
-        qualities[quality] = qualities.get(quality, 0) + 1
-        for variable in card.get("description_vars") or []:
-            if not isinstance(variable, dict):
-                continue
-            if variable.get("value") is None:
-                unresolved_vars += 1
-            else:
-                resolved_vars += 1
+        if card.get("description"):
+            cards_with_description += 1
+        if isinstance(card.get("glossary"), list) and card.get("glossary"):
+            cards_with_glossary += 1
+        if all(key not in card for key in ("description_quality", "description_source", "description_vars")):
+            cards_without_description_diagnostics += 1
     return {
         "hand_count": len(hand),
-        "description_quality_counts": qualities,
-        "resolved_description_vars": resolved_vars,
-        "unresolved_description_vars": unresolved_vars,
+        "cards_with_description": cards_with_description,
+        "cards_with_glossary": cards_with_glossary,
+        "cards_without_description_diagnostics": cards_without_description_diagnostics,
+    }
+
+
+def discover_runtime_log() -> Path | None:
+    log_dir = ROOT / "tmp" / "sts2-debug"
+    candidates = sorted(log_dir.glob("sts2-runtime-*.log"), key=lambda path: path.stat().st_mtime, reverse=True)
+    return candidates[0] if candidates else None
+
+
+def summarize_runtime_log(log_path: Path | None) -> dict[str, Any] | None:
+    if log_path is None or not log_path.exists():
+        return None
+    try:
+        lines = log_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return None
+    interesting = [
+        line.strip()
+        for line in lines
+        if "Description " in line or "Text resolution issues" in line
+    ]
+    return {
+        "path": str(log_path),
+        "interesting_line_count": len(interesting),
+        "interesting_lines_tail": interesting[-20:],
     }
 
 
@@ -303,9 +325,10 @@ def build_result(
     http_status: int | None = None,
     progress_evidence: list[str] | None = None,
     launched_pid: int | None = None,
-    snapshot_description_summary: dict[str, Any] | None = None,
-    before_description_summary: dict[str, Any] | None = None,
-    after_description_summary: dict[str, Any] | None = None,
+    snapshot_schema_summary: dict[str, Any] | None = None,
+    before_schema_summary: dict[str, Any] | None = None,
+    after_schema_summary: dict[str, Any] | None = None,
+    runtime_log_summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "mode": mode,
@@ -319,9 +342,10 @@ def build_result(
         "candidate_reason": candidate.reason,
         "candidate_notes": candidate.notes,
         "candidate_action": candidate.action,
-        "snapshot_description_summary": snapshot_description_summary,
-        "before_description_summary": before_description_summary,
-        "after_description_summary": after_description_summary,
+        "snapshot_schema_summary": snapshot_schema_summary,
+        "before_schema_summary": before_schema_summary,
+        "after_schema_summary": after_schema_summary,
+        "runtime_log_summary": runtime_log_summary,
         "verdict": verdict,
         "summary": summary,
         "http_status": http_status,
@@ -392,8 +416,11 @@ def run_validation(args: argparse.Namespace) -> int:
 
     write_json(artifact_dir / "before_snapshot.json", snapshot)
     write_json(artifact_dir / "before_actions.json", actions)
-    before_description_summary = summarize_description_quality(snapshot)
-    write_json(artifact_dir / "before_description_summary.json", before_description_summary)
+    before_schema_summary = summarize_snapshot_schema(snapshot)
+    write_json(artifact_dir / "before_schema_summary.json", before_schema_summary)
+    runtime_log_summary = summarize_runtime_log(discover_runtime_log())
+    if runtime_log_summary is not None:
+        write_json(artifact_dir / "runtime_log_summary.json", runtime_log_summary)
 
     candidate = select_candidate(snapshot, actions, args.action_id)
     write_json(
@@ -416,8 +443,9 @@ def run_validation(args: argparse.Namespace) -> int:
             artifact_dir=artifact_dir,
             apply_requested=args.apply,
             launched_pid=launched_pid,
-            snapshot_description_summary=before_description_summary,
-            before_description_summary=before_description_summary,
+            snapshot_schema_summary=before_schema_summary,
+            before_schema_summary=before_schema_summary,
+            runtime_log_summary=runtime_log_summary,
         )
         write_json(artifact_dir / "result.json", result)
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -433,8 +461,9 @@ def run_validation(args: argparse.Namespace) -> int:
             artifact_dir=artifact_dir,
             apply_requested=args.apply,
             launched_pid=launched_pid,
-            snapshot_description_summary=before_description_summary,
-            before_description_summary=before_description_summary,
+            snapshot_schema_summary=before_schema_summary,
+            before_schema_summary=before_schema_summary,
+            runtime_log_summary=runtime_log_summary,
         )
         write_json(artifact_dir / "result.json", result)
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -450,8 +479,9 @@ def run_validation(args: argparse.Namespace) -> int:
             artifact_dir=artifact_dir,
             apply_requested=False,
             launched_pid=launched_pid,
-            snapshot_description_summary=before_description_summary,
-            before_description_summary=before_description_summary,
+            snapshot_schema_summary=before_schema_summary,
+            before_schema_summary=before_schema_summary,
+            runtime_log_summary=runtime_log_summary,
         )
         write_json(artifact_dir / "result.json", result)
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -467,8 +497,9 @@ def run_validation(args: argparse.Namespace) -> int:
             artifact_dir=artifact_dir,
             apply_requested=True,
             launched_pid=launched_pid,
-            snapshot_description_summary=before_description_summary,
-            before_description_summary=before_description_summary,
+            snapshot_schema_summary=before_schema_summary,
+            before_schema_summary=before_schema_summary,
+            runtime_log_summary=runtime_log_summary,
         )
         write_json(artifact_dir / "result.json", result)
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -484,8 +515,9 @@ def run_validation(args: argparse.Namespace) -> int:
             artifact_dir=artifact_dir,
             apply_requested=True,
             launched_pid=launched_pid,
-            snapshot_description_summary=before_description_summary,
-            before_description_summary=before_description_summary,
+            snapshot_schema_summary=before_schema_summary,
+            before_schema_summary=before_schema_summary,
+            runtime_log_summary=runtime_log_summary,
         )
         write_json(artifact_dir / "result.json", result)
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -501,8 +533,9 @@ def run_validation(args: argparse.Namespace) -> int:
             artifact_dir=artifact_dir,
             apply_requested=True,
             launched_pid=launched_pid,
-            snapshot_description_summary=before_description_summary,
-            before_description_summary=before_description_summary,
+            snapshot_schema_summary=before_schema_summary,
+            before_schema_summary=before_schema_summary,
+            runtime_log_summary=runtime_log_summary,
         )
         write_json(artifact_dir / "result.json", result)
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -536,8 +569,11 @@ def run_validation(args: argparse.Namespace) -> int:
 
     write_json(artifact_dir / "after_snapshot.json", after_snapshot)
     write_json(artifact_dir / "after_actions.json", after_actions)
-    after_description_summary = summarize_description_quality(after_snapshot)
-    write_json(artifact_dir / "after_description_summary.json", after_description_summary)
+    after_schema_summary = summarize_snapshot_schema(after_snapshot)
+    write_json(artifact_dir / "after_schema_summary.json", after_schema_summary)
+    runtime_log_summary = summarize_runtime_log(discover_runtime_log())
+    if runtime_log_summary is not None:
+        write_json(artifact_dir / "runtime_log_summary.json", runtime_log_summary)
 
     if apply_response.get("status") != "accepted" or http_status >= 400:
         verdict = "rejected"
@@ -565,9 +601,10 @@ def run_validation(args: argparse.Namespace) -> int:
         http_status=http_status,
         progress_evidence=progress_evidence,
         launched_pid=launched_pid,
-        snapshot_description_summary=after_description_summary,
-        before_description_summary=before_description_summary,
-        after_description_summary=after_description_summary,
+        snapshot_schema_summary=after_schema_summary,
+        before_schema_summary=before_schema_summary,
+        after_schema_summary=after_schema_summary,
+        runtime_log_summary=runtime_log_summary,
     )
     write_json(artifact_dir / "result.json", result)
     print(json.dumps(result, ensure_ascii=False, indent=2))

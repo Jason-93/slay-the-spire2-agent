@@ -53,9 +53,6 @@ public abstract class WindowExtractorBase : IWindowExtractor
                         card.Rarity,
                         Traits = card.Traits?.ToArray() ?? Array.Empty<string>(),
                         Keywords = card.Keywords?.ToArray() ?? Array.Empty<string>(),
-                        card.DescriptionQuality,
-                        card.DescriptionSource,
-                        DescriptionVars = card.DescriptionVars?.ToArray() ?? Array.Empty<DescriptionVariable>(),
                         Glossary = card.Glossary?.ToArray() ?? Array.Empty<GlossaryAnchor>(),
                     }).ToArray(),
                     context.Player.DrawPile,
@@ -70,9 +67,6 @@ public abstract class WindowExtractorBase : IWindowExtractor
                         power.Amount,
                         power.Description,
                         power.CanonicalPowerId,
-                        power.DescriptionQuality,
-                        power.DescriptionSource,
-                        DescriptionVars = power.DescriptionVars?.ToArray() ?? Array.Empty<DescriptionVariable>(),
                         Glossary = power.Glossary?.ToArray() ?? Array.Empty<GlossaryAnchor>(),
                     }).ToArray() ?? Array.Empty<object>(),
                 },
@@ -100,9 +94,6 @@ public abstract class WindowExtractorBase : IWindowExtractor
                     power.Amount,
                     power.Description,
                     power.CanonicalPowerId,
-                    power.DescriptionQuality,
-                    power.DescriptionSource,
-                    DescriptionVars = power.DescriptionVars?.ToArray() ?? Array.Empty<DescriptionVariable>(),
                     Glossary = power.Glossary?.ToArray() ?? Array.Empty<GlossaryAnchor>(),
                 }).ToArray() ?? Array.Empty<object>(),
             }).ToArray(),
@@ -232,9 +223,6 @@ public abstract class WindowExtractorBase : IWindowExtractor
             card.Rarity,
             card.Traits?.ToArray() ?? Array.Empty<string>(),
             card.Keywords?.ToArray() ?? Array.Empty<string>(),
-            card.DescriptionQuality,
-            card.DescriptionSource,
-            card.DescriptionVars?.ToArray() ?? Array.Empty<DescriptionVariable>(),
             card.Glossary?.ToArray() ?? Array.Empty<GlossaryAnchor>());
     }
 
@@ -251,9 +239,6 @@ public abstract class WindowExtractorBase : IWindowExtractor
             power.Amount,
             power.Description,
             power.CanonicalPowerId,
-            power.DescriptionQuality,
-            power.DescriptionSource,
-            power.DescriptionVars?.ToArray() ?? Array.Empty<DescriptionVariable>(),
             power.Glossary?.ToArray() ?? Array.Empty<GlossaryAnchor>());
     }
 

@@ -2,6 +2,7 @@ using Sts2Mod.StateBridge.Configuration;
 using Sts2Mod.StateBridge.Contracts;
 using Sts2Mod.StateBridge.Core;
 using Sts2Mod.StateBridge.Extraction;
+using Sts2Mod.StateBridge.Logging;
 
 namespace Sts2Mod.StateBridge.Providers;
 
@@ -12,10 +13,10 @@ public sealed class Sts2RuntimeStateProvider : IGameStateProvider
     private readonly BridgeSessionState _sessionState;
     private readonly Dictionary<string, IWindowExtractor> _extractors;
 
-    public Sts2RuntimeStateProvider(BridgeOptions options, InstallationProbeResult probe)
+    public Sts2RuntimeStateProvider(BridgeOptions options, InstallationProbeResult probe, IBridgeLogger? logger = null)
     {
         _options = options;
-        _reader = new Sts2RuntimeReflectionReader(options, probe);
+        _reader = new Sts2RuntimeReflectionReader(options, probe, logger);
         _sessionState = new BridgeSessionState(options);
         _extractors = new IWindowExtractor[]
         {

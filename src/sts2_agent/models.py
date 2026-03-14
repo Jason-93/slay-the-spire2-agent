@@ -31,14 +31,6 @@ class ActionStatus(StrEnum):
 
 
 @dataclass(slots=True)
-class DescriptionVariable:
-    key: str
-    value: int | None = None
-    source: str | None = None
-    placeholder: str | None = None
-
-
-@dataclass(slots=True)
 class GlossaryAnchor:
     glossary_id: str
     display_text: str
@@ -62,9 +54,6 @@ class CardView:
     rarity: str | None = None
     traits: list[str] = field(default_factory=list)
     keywords: list[str] = field(default_factory=list)
-    description_quality: str | None = None
-    description_source: str | None = None
-    description_vars: list[DescriptionVariable] = field(default_factory=list)
     glossary: list[GlossaryAnchor] = field(default_factory=list)
 
 
@@ -75,9 +64,6 @@ class PowerView:
     amount: int | None = None
     description: str | None = None
     canonical_power_id: str | None = None
-    description_quality: str | None = None
-    description_source: str | None = None
-    description_vars: list[DescriptionVariable] = field(default_factory=list)
     glossary: list[GlossaryAnchor] = field(default_factory=list)
 
 
