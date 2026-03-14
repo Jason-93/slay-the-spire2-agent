@@ -16,6 +16,9 @@ class LiveAutoplayConfig:
     api_key: str | None = None
     trace_dir: str = "traces/live_llm"
     max_steps: int = 32
+    max_actions_per_turn: int | None = None
+    stop_after_player_turn: bool = True
+    auto_end_turn_when_only_end_turn: bool = True
     policy_timeout_seconds: float = 20.0
     temperature: float = 0.2
     max_tokens: int = 256
@@ -47,6 +50,9 @@ def run_live_autoplay(config: LiveAutoplayConfig) -> RunSummary:
         config=OrchestratorConfig(
             timeout_seconds=config.policy_timeout_seconds,
             max_steps=config.max_steps,
+            max_actions_per_turn=config.max_actions_per_turn,
+            stop_after_player_turn=config.stop_after_player_turn,
+            auto_end_turn_when_only_end_turn=config.auto_end_turn_when_only_end_turn,
             trace_dir=config.trace_dir,
             dry_run=config.dry_run,
         ),

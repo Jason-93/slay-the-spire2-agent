@@ -117,31 +117,48 @@ python tools/run_llm_autoplay.py \
   --dry-run
 ```
 
-### Live autoplay
+### Live autoplay（完整玩家回合）
 
-进入一场真实战斗并确认 bridge 允许写入后，可执行：
+进入一场真实战斗并确认 bridge 允许写入后，可执行一整回合的连续自动打牌：
 
 ```bash
 python tools/run_llm_autoplay.py \
   --bridge-base-url "http://127.0.0.1:17654" \
   --base-url "http://127.0.0.1:8080/v1" \
-  --model "Qwen3.5-9B-Q5_K_M.gguf"
+  --model "Qwen3.5-9B-Q5_K_M.gguf" \
+  --max-actions-per-turn 12
 ```
 
 常用参数：
 
 - `--dry-run`：只做模型决策，不发送 `/apply`
 - `--trace-dir`：指定 trace 输出目录
-- `--max-steps`：限制自动打牌步数
+- `--max-steps`：限制整次 runner 的最大决策步数
+- `--max-actions-per-turn`：限制当前玩家回合内最多执行多少个动作
+- `--no-auto-end-turn-when-only-end-turn`：只剩 `end_turn` 时不自动点回合结束，而是直接停止
+- `--no-stop-after-player-turn`：关闭“打完整个玩家回合就退出”，继续沿用旧的跨窗口调试流程
 - `--policy-timeout-seconds`：限制单步模型调用超时
 
-每次运行都会输出 `RunSummary`，并在 `trace_dir` 下保存 JSONL trace。单步 trace 至少包含：
+每次运行都会输出 `RunSummary`，并在 `trace_dir` 下保存 JSONL trace。回合级结果重点看：
+
+- `turn_completed`：是否正常打到本回合停止边界
+- `actions_this_turn`：本回合已执行动作数
+- `ended_by`：最终停止原因，如 `auto_end_turn`、`phase_changed`、`max_actions_per_turn`
+
+单步 trace 至少包含：
 
 - 当前 `snapshot`
 - 当前 `legal_actions`
 - 模型输出的 `action_id` / `reason` / `halt`
 - 原始模型响应文本 `raw_response_text`
 - bridge 回执或 dry-run 结果
+
+多步回合模式下，每条 trace 还会额外记录：
+
+- `step_index`
+- `actions_this_turn`
+- `is_final_step`
+- `stop_reason`
 
 ## 当前进度
 

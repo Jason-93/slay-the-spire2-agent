@@ -125,6 +125,10 @@ class TraceEntry:
     observation: dict[str, Any]
     policy_output: dict[str, Any]
     bridge_result: dict[str, Any]
+    step_index: int = 0
+    actions_this_turn: int = 0
+    is_final_step: bool = False
+    stop_reason: str = ""
     interrupted: bool = False
     timestamp: str = ""
 
@@ -137,6 +141,9 @@ class RunSummary:
     decisions: int
     trace_path: str | None = None
     reason: str = ""
+    turn_completed: bool = False
+    actions_this_turn: int = 0
+    ended_by: str = ""
 
 
 def to_dict(value: Any) -> Any:
