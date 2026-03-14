@@ -126,9 +126,13 @@ class TraceEntry:
     policy_output: dict[str, Any]
     bridge_result: dict[str, Any]
     step_index: int = 0
+    current_turn_index: int = 0
     actions_this_turn: int = 0
+    total_actions: int = 0
+    waiting_for_player_turn: bool = False
     is_final_step: bool = False
     stop_reason: str = ""
+    battle_stop_reason: str = ""
     interrupted: bool = False
     timestamp: str = ""
 
@@ -143,6 +147,10 @@ class RunSummary:
     reason: str = ""
     turn_completed: bool = False
     actions_this_turn: int = 0
+    battle_completed: bool = False
+    turns_completed: int = 0
+    total_actions: int = 0
+    current_turn_index: int = 0
     ended_by: str = ""
 
 

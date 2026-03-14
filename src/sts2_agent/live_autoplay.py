@@ -17,8 +17,14 @@ class LiveAutoplayConfig:
     trace_dir: str = "traces/live_llm"
     max_steps: int = 32
     max_actions_per_turn: int | None = None
+    battle_mode: bool = False
     stop_after_player_turn: bool = True
     auto_end_turn_when_only_end_turn: bool = True
+    max_turns_per_battle: int | None = None
+    max_total_actions: int | None = None
+    max_consecutive_failures: int = 6
+    wait_for_next_player_turn_seconds: float = 30.0
+    poll_interval_seconds: float = 0.5
     policy_timeout_seconds: float = 20.0
     temperature: float = 0.2
     max_tokens: int = 256
@@ -27,6 +33,7 @@ class LiveAutoplayConfig:
 
 
 def run_live_autoplay(config: LiveAutoplayConfig) -> RunSummary:
+    stop_after_player_turn = False if config.battle_mode else config.stop_after_player_turn
     bridge = HttpGameBridge(
         HttpGameBridgeConfig(
             base_url=config.bridge_base_url,
@@ -51,8 +58,13 @@ def run_live_autoplay(config: LiveAutoplayConfig) -> RunSummary:
             timeout_seconds=config.policy_timeout_seconds,
             max_steps=config.max_steps,
             max_actions_per_turn=config.max_actions_per_turn,
-            stop_after_player_turn=config.stop_after_player_turn,
+            stop_after_player_turn=stop_after_player_turn,
             auto_end_turn_when_only_end_turn=config.auto_end_turn_when_only_end_turn,
+            max_turns_per_battle=config.max_turns_per_battle,
+            max_total_actions=config.max_total_actions,
+            max_consecutive_failures=config.max_consecutive_failures,
+            wait_for_next_player_turn_seconds=config.wait_for_next_player_turn_seconds,
+            poll_interval_seconds=config.poll_interval_seconds,
             trace_dir=config.trace_dir,
             dry_run=config.dry_run,
         ),

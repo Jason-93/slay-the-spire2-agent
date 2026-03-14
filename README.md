@@ -139,11 +139,49 @@ python tools/run_llm_autoplay.py \
 - `--no-stop-after-player-turn`：关闭“打完整个玩家回合就退出”，继续沿用旧的跨窗口调试流程
 - `--policy-timeout-seconds`：限制单步模型调用超时
 
+### Live autoplay（整场战斗）
+
+如需从当前玩家回合一路打到战斗结束并进入奖励窗口，可显式启用 battle 模式：
+
+```bash
+python tools/run_llm_autoplay.py \
+  --bridge-base-url "http://127.0.0.1:17654" \
+  --base-url "http://127.0.0.1:8080/v1" \
+  --model "Qwen3.5-9B-Q5_K_M.gguf" \
+  --battle-mode \
+  --max-turns-per-battle 12 \
+  --max-total-actions 48 \
+  --wait-for-next-player-turn-seconds 30
+```
+
+battle 模式下，runner 会在敌方回合和动画窗口持续轮询，直到：
+
+- 观察到 `reward` 等非 `combat` 窗口，正常结束
+- 命中 `max_turns_per_battle`、`max_total_actions`
+- 等待下一玩家回合超时
+- 模型或 bridge 失败中断
+
+新增常用参数：
+
+- `--battle-mode`：启用整场战斗模式，等价于关闭 `stop_after_player_turn`
+- `--max-turns-per-battle`：限制整场战斗最多完成多少个玩家回合
+- `--max-total-actions`：限制整场战斗最多提交多少个动作
+- `--max-consecutive-failures`：限制连续失败预算
+- `--wait-for-next-player-turn-seconds`：等待下一玩家回合的超时
+- `--poll-interval-seconds`：敌方回合 / 动画窗口的轮询间隔
+
 每次运行都会输出 `RunSummary`，并在 `trace_dir` 下保存 JSONL trace。回合级结果重点看：
 
 - `turn_completed`：是否正常打到本回合停止边界
 - `actions_this_turn`：本回合已执行动作数
 - `ended_by`：最终停止原因，如 `auto_end_turn`、`phase_changed`、`max_actions_per_turn`
+
+battle 模式下再重点看：
+
+- `battle_completed`：是否真正打完当前战斗
+- `turns_completed`：已经完成的玩家回合数
+- `total_actions`：整场战斗累计提交动作数
+- `current_turn_index`：当前观测到的玩家回合索引
 
 单步 trace 至少包含：
 

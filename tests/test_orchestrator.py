@@ -1,9 +1,10 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from sts2_agent.bridge import BridgeSession, InvalidPayloadError, MockGameBridge, StaleActionError
 from sts2_agent.models import (
@@ -54,10 +55,11 @@ class CapturingBridge:
                 block=0,
                 energy=3,
                 gold=99,
-                hand=[CardView(card_id="card-1", name="打击", cost=1, playable=True)],
+                hand=[CardView(card_id="card-1", name="Strike", cost=1, playable=True)],
             ),
-            enemies=[EnemyState(enemy_id="1", name="小啃兽", hp=20, max_hp=20, block=0, intent="unknown")],
+            enemies=[EnemyState(enemy_id="1", name="Louse", hp=20, max_hp=20, block=0, intent="unknown")],
             terminal=False,
+            metadata={"current_side": "Player", "round_number": 1},
         )
 
     def get_legal_actions(self, session_id: str) -> list[LegalAction]:
@@ -65,7 +67,7 @@ class CapturingBridge:
             LegalAction(
                 action_id="act-targeted",
                 type="play_card",
-                label="Play 打击",
+                label="Play Strike",
                 params={"card_id": "card-1", "target_type": "AnyEnemy"},
                 target_constraints=["1"],
                 metadata={},
@@ -93,17 +95,27 @@ class CapturingBridge:
 
 
 class SequencedCombatBridge:
-    def __init__(self, windows: list[dict[str, object]]) -> None:
+    def __init__(self, windows: list[dict[str, object]], advance_on_snapshot_reads: dict[int, int] | None = None) -> None:
         self.windows = windows
+        self.advance_on_snapshot_reads = advance_on_snapshot_reads or {}
         self.index = 0
         self.submissions: list[str] = []
+        self.snapshot_reads: dict[int, int] = {}
 
     def attach_or_start(self, scenario: str = "live") -> BridgeSession:
         self.index = 0
+        self.snapshot_reads = {}
+        self.submissions = []
         return BridgeSession(session_id="sess-seq1234", scenario=scenario)
 
     def get_snapshot(self, session_id: str) -> DecisionSnapshot:
+        self.snapshot_reads[self.index] = self.snapshot_reads.get(self.index, 0) + 1
+        threshold = self.advance_on_snapshot_reads.get(self.index)
+        if threshold is not None and self.snapshot_reads[self.index] >= threshold and self.index < len(self.windows) - 1:
+            self.index += 1
+            self.snapshot_reads[self.index] = self.snapshot_reads.get(self.index, 0)
         window = self.windows[self.index]
+        metadata = dict(window.get("metadata", {}))
         return DecisionSnapshot(
             session_id=session_id,
             decision_id=f"dec-{self.index}",
@@ -120,8 +132,9 @@ class SequencedCombatBridge:
                     for card_id in window.get("hand", ["card-1"])
                 ],
             ),
-            enemies=[EnemyState(enemy_id="1", name="小啃兽", hp=20, max_hp=20, block=0, intent="unknown")],
+            enemies=[EnemyState(enemy_id="1", name="Louse", hp=20, max_hp=20, block=0, intent="unknown")],
             terminal=bool(window.get("terminal", False)),
+            metadata=metadata,
         )
 
     def get_legal_actions(self, session_id: str) -> list[LegalAction]:
@@ -214,6 +227,7 @@ def make_window(
     terminal: bool = False,
     energy: int = 3,
     hand: list[str] | None = None,
+    metadata: dict[str, object] | None = None,
 ) -> dict[str, object]:
     return {
         "phase": phase,
@@ -221,11 +235,12 @@ def make_window(
         "terminal": terminal,
         "energy": energy,
         "hand": hand or ["card-1"],
+        "metadata": metadata or {"current_side": "Player", "round_number": 1},
     }
 
 
 class OrchestratorTests(unittest.TestCase):
-    def test_autoplay_reaches_terminal_and_persists_trace_when_turn_stop_disabled(self) -> None:
+    def test_battle_mode_completes_on_reward_window(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             orchestrator = AutoplayOrchestrator(
                 bridge=MockGameBridge(),
@@ -236,14 +251,14 @@ class OrchestratorTests(unittest.TestCase):
 
             self.assertTrue(summary.completed)
             self.assertFalse(summary.interrupted)
-            self.assertEqual(summary.decisions, 3)
-            self.assertEqual(summary.actions_this_turn, 1)
-            self.assertEqual(summary.ended_by, "terminal_action_accepted")
-            trace_path = Path(summary.trace_path)
-            records = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
-            self.assertEqual(len(records), 3)
-            self.assertEqual(records[0]["phase"], "combat")
-            self.assertEqual(records[-1]["bridge_result"]["metadata"]["phase"], "terminal")
+            self.assertTrue(summary.battle_completed)
+            self.assertEqual(summary.decisions, 1)
+            self.assertEqual(summary.total_actions, 1)
+            self.assertEqual(summary.turns_completed, 1)
+            self.assertEqual(summary.current_turn_index, 1)
+            self.assertEqual(summary.ended_by, "battle_completed")
+            records = Path(summary.trace_path).read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(records), 1)
 
     def test_invalid_policy_action_interrupts_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -341,11 +356,7 @@ class OrchestratorTests(unittest.TestCase):
                     energy=2,
                     hand=["card-2"],
                 ),
-                make_window(
-                    actions=[{"type": "end_turn", "label": "End Turn"}],
-                    energy=0,
-                    hand=[],
-                ),
+                make_window(actions=[{"type": "end_turn", "label": "End Turn"}], energy=0, hand=[]),
                 make_window(phase="reward", actions=[]),
             ]
         )
@@ -369,6 +380,7 @@ class OrchestratorTests(unittest.TestCase):
             self.assertEqual(records[-1]["stop_reason"], "auto_end_turn")
             self.assertTrue(records[-1]["is_final_step"])
             self.assertEqual(records[-1]["actions_this_turn"], 3)
+            self.assertEqual(records[-1]["current_turn_index"], 1)
 
     def test_orchestrator_can_stop_cleanly_when_only_end_turn_remains(self) -> None:
         bridge = SequencedCombatBridge([make_window(actions=[{"type": "end_turn", "label": "End Turn"}], hand=[])])
@@ -391,7 +403,7 @@ class OrchestratorTests(unittest.TestCase):
         bridge = SequencedCombatBridge(
             [
                 make_window(actions=[{"type": "play_card", "label": "Strike", "params": {"card_id": "card-1"}}]),
-                make_window(phase="reward", actions=[{"type": "choose_reward", "label": "Take Reward"}]),
+                make_window(phase="reward", actions=[{"type": "choose_reward", "label": "Take Reward"}], metadata={}),
             ]
         )
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -413,7 +425,7 @@ class OrchestratorTests(unittest.TestCase):
         bridge = SequencedCombatBridge(
             [
                 make_window(actions=[{"type": "play_card", "label": "Strike", "params": {"card_id": "card-1"}}]),
-                make_window(actions=[{"type": "play_card", "label": "Defend", "params": {"card_id": "card-2"}}]),
+                make_window(actions=[{"type": "play_card", "label": "Defend", "params": {"card_id": "card-2"}}], hand=["card-2"]),
             ]
         )
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -491,6 +503,146 @@ class OrchestratorTests(unittest.TestCase):
             self.assertFalse(summary.interrupted)
             self.assertEqual(summary.ended_by, "auto_end_turn")
             self.assertEqual(bridge.submissions, ["end_turn"])
+
+    def test_battle_mode_waits_for_enemy_turn_then_resumes(self) -> None:
+        bridge = SequencedCombatBridge(
+            [
+                make_window(
+                    actions=[
+                        {"type": "play_card", "label": "Strike", "params": {"card_id": "card-1"}},
+                        {"type": "end_turn", "label": "End Turn"},
+                    ],
+                    metadata={"current_side": "Player", "round_number": 1},
+                ),
+                make_window(
+                    actions=[{"type": "end_turn", "label": "End Turn"}],
+                    energy=0,
+                    hand=[],
+                    metadata={"current_side": "Player", "round_number": 1},
+                ),
+                make_window(
+                    actions=[],
+                    hand=[],
+                    metadata={"current_side": "Enemy", "round_number": 1},
+                ),
+                make_window(
+                    actions=[
+                        {"type": "play_card", "label": "Strike+", "params": {"card_id": "card-2"}},
+                        {"type": "end_turn", "label": "End Turn"},
+                    ],
+                    hand=["card-2"],
+                    metadata={"current_side": "Player", "round_number": 2},
+                ),
+                make_window(
+                    actions=[{"type": "end_turn", "label": "End Turn"}],
+                    energy=0,
+                    hand=[],
+                    metadata={"current_side": "Player", "round_number": 2},
+                ),
+                make_window(phase="reward", actions=[], metadata={}),
+            ],
+            advance_on_snapshot_reads={2: 4},
+        )
+        with tempfile.TemporaryDirectory() as tmpdir, patch("sts2_agent.orchestrator.time.sleep", return_value=None):
+            orchestrator = AutoplayOrchestrator(
+                bridge=bridge,
+                policy=FirstLegalActionPolicy(),
+                config=OrchestratorConfig(trace_dir=tmpdir, stop_after_player_turn=False, max_steps=16),
+            )
+            summary = orchestrator.run(scenario="live")
+
+            self.assertTrue(summary.completed)
+            self.assertFalse(summary.interrupted)
+            self.assertTrue(summary.battle_completed)
+            self.assertEqual(summary.turns_completed, 2)
+            self.assertEqual(summary.total_actions, 4)
+            self.assertEqual(summary.current_turn_index, 2)
+            self.assertEqual(bridge.submissions, ["play_card", "end_turn", "play_card", "end_turn"])
+            records = [json.loads(line) for line in Path(summary.trace_path).read_text(encoding="utf-8").splitlines()]
+            self.assertTrue(any(record["waiting_for_player_turn"] for record in records))
+            self.assertTrue(any(record["current_turn_index"] == 2 for record in records))
+
+    def test_battle_mode_stops_when_waiting_for_next_turn_times_out(self) -> None:
+        bridge = SequencedCombatBridge(
+            [
+                make_window(actions=[{"type": "end_turn", "label": "End Turn"}], hand=[], metadata={"current_side": "Player", "round_number": 1}),
+                make_window(actions=[], hand=[], metadata={"current_side": "Enemy", "round_number": 1}),
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmpdir, patch("sts2_agent.orchestrator.time.sleep", return_value=None), patch(
+            "sts2_agent.orchestrator.time.monotonic",
+            side_effect=[0.0, 0.0, 0.2, 0.2],
+        ):
+            orchestrator = AutoplayOrchestrator(
+                bridge=bridge,
+                policy=FirstLegalActionPolicy(),
+                config=OrchestratorConfig(
+                    trace_dir=tmpdir,
+                    stop_after_player_turn=False,
+                    wait_for_next_player_turn_seconds=0.1,
+                    poll_interval_seconds=0.0,
+                    max_steps=6,
+                ),
+            )
+            summary = orchestrator.run(scenario="live")
+
+            self.assertFalse(summary.completed)
+            self.assertTrue(summary.interrupted)
+            self.assertEqual(summary.ended_by, "next_player_turn_timeout")
+            self.assertTrue(summary.turn_completed)
+            records = [json.loads(line) for line in Path(summary.trace_path).read_text(encoding="utf-8").splitlines()]
+            self.assertTrue(records[-1]["waiting_for_player_turn"])
+            self.assertEqual(records[-1]["battle_stop_reason"], "next_player_turn_timeout")
+
+    def test_battle_mode_respects_max_turns_per_battle(self) -> None:
+        bridge = SequencedCombatBridge(
+            [
+                make_window(actions=[{"type": "end_turn", "label": "End Turn"}], hand=[], metadata={"current_side": "Player", "round_number": 1}),
+                make_window(actions=[], hand=[], metadata={"current_side": "Enemy", "round_number": 1}),
+                make_window(actions=[{"type": "end_turn", "label": "End Turn"}], hand=[], metadata={"current_side": "Player", "round_number": 2}),
+            ],
+            advance_on_snapshot_reads={1: 4},
+        )
+        with tempfile.TemporaryDirectory() as tmpdir, patch("sts2_agent.orchestrator.time.sleep", return_value=None):
+            orchestrator = AutoplayOrchestrator(
+                bridge=bridge,
+                policy=FirstLegalActionPolicy(),
+                config=OrchestratorConfig(trace_dir=tmpdir, stop_after_player_turn=False, max_turns_per_battle=1, max_steps=8),
+            )
+            summary = orchestrator.run(scenario="live")
+
+            self.assertFalse(summary.completed)
+            self.assertTrue(summary.interrupted)
+            self.assertEqual(summary.ended_by, "max_turns_per_battle")
+            self.assertEqual(summary.turns_completed, 1)
+            self.assertEqual(summary.total_actions, 1)
+
+    def test_battle_mode_respects_max_total_actions(self) -> None:
+        bridge = SequencedCombatBridge(
+            [
+                make_window(
+                    actions=[
+                        {"type": "play_card", "label": "Strike", "params": {"card_id": "card-1"}},
+                        {"type": "end_turn", "label": "End Turn"},
+                    ],
+                    metadata={"current_side": "Player", "round_number": 1},
+                ),
+                make_window(actions=[{"type": "end_turn", "label": "End Turn"}], hand=[], metadata={"current_side": "Player", "round_number": 1}),
+                make_window(actions=[], hand=[], metadata={"current_side": "Enemy", "round_number": 1}),
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmpdir, patch("sts2_agent.orchestrator.time.sleep", return_value=None):
+            orchestrator = AutoplayOrchestrator(
+                bridge=bridge,
+                policy=FirstLegalActionPolicy(),
+                config=OrchestratorConfig(trace_dir=tmpdir, stop_after_player_turn=False, max_total_actions=2, max_steps=8),
+            )
+            summary = orchestrator.run(scenario="live")
+
+            self.assertFalse(summary.completed)
+            self.assertTrue(summary.interrupted)
+            self.assertEqual(summary.ended_by, "max_total_actions")
+            self.assertEqual(summary.total_actions, 2)
 
 
 if __name__ == "__main__":

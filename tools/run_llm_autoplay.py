@@ -23,14 +23,30 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--trace-dir", default=os.environ.get("STS2_TRACE_DIR", "traces/live_llm"))
     parser.add_argument("--max-steps", type=int, default=int(os.environ.get("STS2_MAX_STEPS", "32")))
     parser.add_argument("--max-actions-per-turn", type=int, default=_read_optional_int("STS2_MAX_ACTIONS_PER_TURN"))
+    parser.add_argument("--max-turns-per-battle", type=int, default=_read_optional_int("STS2_MAX_TURNS_PER_BATTLE"))
+    parser.add_argument("--max-total-actions", type=int, default=_read_optional_int("STS2_MAX_TOTAL_ACTIONS"))
+    parser.add_argument("--max-consecutive-failures", type=int, default=int(os.environ.get("STS2_MAX_CONSECUTIVE_FAILURES", "6")))
+    parser.add_argument(
+        "--wait-for-next-player-turn-seconds",
+        type=float,
+        default=float(os.environ.get("STS2_WAIT_FOR_NEXT_PLAYER_TURN_SECONDS", "30")),
+    )
+    parser.add_argument(
+        "--poll-interval-seconds",
+        type=float,
+        default=float(os.environ.get("STS2_POLL_INTERVAL_SECONDS", "0.5")),
+    )
     parser.add_argument("--policy-timeout-seconds", type=float, default=float(os.environ.get("STS2_POLICY_TIMEOUT_SECONDS", "20")))
     parser.add_argument("--temperature", type=float, default=float(os.environ.get("STS2_LLM_TEMPERATURE", "0.2")))
     parser.add_argument("--max-tokens", type=int, default=int(os.environ.get("STS2_LLM_MAX_TOKENS", "256")))
     parser.add_argument("--dry-run", action="store_true")
     parser.set_defaults(
+        battle_mode=_read_optional_bool("STS2_BATTLE_MODE", False),
         stop_after_player_turn=_read_optional_bool("STS2_STOP_AFTER_PLAYER_TURN", True),
         auto_end_turn_when_only_end_turn=_read_optional_bool("STS2_AUTO_END_TURN_WHEN_ONLY_END_TURN", True),
     )
+    parser.add_argument("--battle-mode", dest="battle_mode", action="store_true")
+    parser.add_argument("--turn-mode", dest="battle_mode", action="store_false")
     parser.add_argument("--stop-after-player-turn", dest="stop_after_player_turn", action="store_true")
     parser.add_argument("--no-stop-after-player-turn", dest="stop_after_player_turn", action="store_false")
     parser.add_argument("--auto-end-turn-when-only-end-turn", dest="auto_end_turn_when_only_end_turn", action="store_true")
@@ -63,8 +79,14 @@ def main(argv: list[str] | None = None) -> int:
             trace_dir=args.trace_dir,
             max_steps=args.max_steps,
             max_actions_per_turn=args.max_actions_per_turn,
+            battle_mode=args.battle_mode,
             stop_after_player_turn=args.stop_after_player_turn,
             auto_end_turn_when_only_end_turn=args.auto_end_turn_when_only_end_turn,
+            max_turns_per_battle=args.max_turns_per_battle,
+            max_total_actions=args.max_total_actions,
+            max_consecutive_failures=args.max_consecutive_failures,
+            wait_for_next_player_turn_seconds=args.wait_for_next_player_turn_seconds,
+            poll_interval_seconds=args.poll_interval_seconds,
             policy_timeout_seconds=args.policy_timeout_seconds,
             temperature=args.temperature,
             max_tokens=args.max_tokens,
