@@ -177,6 +177,22 @@ public sealed class MapWindowExtractor : WindowExtractorBase
     }
 }
 
+public sealed class MenuWindowExtractor : WindowExtractorBase
+{
+    public override string Phase => DecisionPhase.Menu;
+
+    protected override IReadOnlyDictionary<string, object?> BuildMetadata(RuntimeWindowContext context)
+    {
+        var metadata = new Dictionary<string, object?>(context.Metadata);
+        if (!metadata.ContainsKey("window_kind"))
+        {
+            metadata["window_kind"] = "main_menu";
+        }
+        metadata["supports_targeting"] = false;
+        return metadata;
+    }
+}
+
 public sealed class TerminalWindowExtractor : WindowExtractorBase
 {
     public override string Phase => DecisionPhase.Terminal;

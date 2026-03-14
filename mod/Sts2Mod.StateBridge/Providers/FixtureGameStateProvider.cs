@@ -11,9 +11,11 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
     private readonly BridgeSessionState _sessionState;
     private readonly Dictionary<string, RuntimeWindowContext> _windows;
     private readonly Dictionary<string, RuntimeWindowContext> _rewardWindows;
+    private readonly Dictionary<string, RuntimeWindowContext> _menuWindows;
     private readonly Dictionary<string, IWindowExtractor> _extractors;
     private string _currentPhase = DecisionPhase.Combat;
     private int _rewardStage;
+    private int _menuStage;
 
     public FixtureGameStateProvider(BridgeOptions options)
     {
@@ -24,10 +26,12 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
             new CombatWindowExtractor(),
             new RewardWindowExtractor(),
             new MapWindowExtractor(),
+            new MenuWindowExtractor(),
             new TerminalWindowExtractor(),
         }.ToDictionary(extractor => extractor.Phase, StringComparer.OrdinalIgnoreCase);
         _windows = CreateWindows();
         _rewardWindows = CreateRewardWindows();
+        _menuWindows = CreateMenuWindows();
     }
 
     public HealthResponse GetHealth()
@@ -73,6 +77,24 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
 
         switch (action.Type)
         {
+            case "continue_run":
+                _menuStage = 0;
+                _rewardStage = 0;
+                _currentPhase = DecisionPhase.Map;
+                break;
+            case "start_new_run":
+                _menuStage = 1;
+                _rewardStage = 0;
+                _currentPhase = DecisionPhase.Menu;
+                break;
+            case "select_character":
+                _menuStage = 1;
+                _currentPhase = DecisionPhase.Menu;
+                break;
+            case "confirm_start_run":
+                _menuStage = 0;
+                _currentPhase = DecisionPhase.Map;
+                break;
             case "play_card":
             case "end_turn":
                 _currentPhase = DecisionPhase.Reward;
@@ -114,9 +136,14 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
     {
         var phase = ResolvePhase(requestedPhase);
         _currentPhase = phase;
-        var context = phase == DecisionPhase.Reward
-            ? (_rewardStage == 0 ? _rewardWindows["reward_choice"] : _rewardWindows["reward_card_selection"])
-            : _windows[phase];
+        var context = phase switch
+        {
+            var value when string.Equals(value, DecisionPhase.Reward, StringComparison.OrdinalIgnoreCase)
+                => _rewardStage == 0 ? _rewardWindows["reward_choice"] : _rewardWindows["reward_card_selection"],
+            var value when string.Equals(value, DecisionPhase.Menu, StringComparison.OrdinalIgnoreCase)
+                => _menuStage == 0 ? _menuWindows["main_menu"] : _menuWindows["new_run_setup"],
+            _ => _windows[phase],
+        };
         return _extractors[phase].Export(context, _sessionState);
     }
 
@@ -173,6 +200,7 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
             "combat" => DecisionPhase.Combat,
             "reward" => DecisionPhase.Reward,
             "map" => DecisionPhase.Map,
+            "menu" => DecisionPhase.Menu,
             "terminal" => DecisionPhase.Terminal,
             _ => _currentPhase,
         };
@@ -235,6 +263,59 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                 Terminal: true,
                 Metadata: new Dictionary<string, object?> { ["room_type"] = "victory", ["result"] = "win" },
                 Actions: Array.Empty<RuntimeActionDefinition>())
+        };
+    }
+
+    private static Dictionary<string, RuntimeWindowContext> CreateMenuWindows()
+    {
+        return new Dictionary<string, RuntimeWindowContext>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["main_menu"] = new RuntimeWindowContext(
+                DecisionPhase.Menu,
+                Player: null,
+                Enemies: Array.Empty<RuntimeEnemyState>(),
+                Rewards: Array.Empty<string>(),
+                MapNodes: Array.Empty<string>(),
+                Terminal: false,
+                Metadata: new Dictionary<string, object?>
+                {
+                    ["room_type"] = "menu",
+                    ["window_kind"] = "main_menu",
+                    ["menu_detection_source"] = "fixture",
+                },
+                Actions: new[]
+                {
+                    new RuntimeActionDefinition("continue_run", "Continue", new Dictionary<string, object?> { ["button_label"] = "Continue" }),
+                    new RuntimeActionDefinition("start_new_run", "New Run", new Dictionary<string, object?> { ["button_label"] = "New Run" }),
+                }),
+            ["new_run_setup"] = new RuntimeWindowContext(
+                DecisionPhase.Menu,
+                Player: null,
+                Enemies: Array.Empty<RuntimeEnemyState>(),
+                Rewards: Array.Empty<string>(),
+                MapNodes: Array.Empty<string>(),
+                Terminal: false,
+                Metadata: new Dictionary<string, object?>
+                {
+                    ["room_type"] = "menu",
+                    ["window_kind"] = "new_run_setup",
+                    ["menu_detection_source"] = "fixture",
+                },
+                Actions: new[]
+                {
+                    new RuntimeActionDefinition(
+                        "select_character",
+                        "Select Ironclad",
+                        new Dictionary<string, object?> { ["character_id"] = "ironclad", ["character_label"] = "Ironclad" }),
+                    new RuntimeActionDefinition(
+                        "select_character",
+                        "Select Silent",
+                        new Dictionary<string, object?> { ["character_id"] = "silent", ["character_label"] = "Silent" }),
+                    new RuntimeActionDefinition(
+                        "confirm_start_run",
+                        "Start",
+                        new Dictionary<string, object?> { ["button_label"] = "Start" }),
+                }),
         };
     }
 

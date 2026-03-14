@@ -31,6 +31,17 @@ internal sealed class Sts2RuntimeReflectionReader
     private const string NRunTypeName = "MegaCrit.Sts2.Core.Nodes.NRun";
     private const string OverlayStackTypeName = "MegaCrit.Sts2.Core.Nodes.Screens.Overlays.NOverlayStack";
     private const string RewardScreenTypeName = "MegaCrit.Sts2.Core.Nodes.Screens.NRewardsScreen";
+    private const string PhaseMenu = DecisionPhase.Menu;
+    private static readonly string[] MenuContinueLabelHints = { "continue", "resume", "继续", "继续游戏", "继续旅程" };
+    private static readonly string[] MenuNewRunLabelHints = { "new run", "new game", "start new", "开始新", "新游戏", "新旅程" };
+    private static readonly string[] MenuConfirmLabelHints = { "start", "begin", "confirm", "ok", "开始", "确认", "确定" };
+    private static readonly string[] MenuDangerLabelHints = { "exit", "quit", "abandon", "delete", "退出", "放弃", "删除" };
+    private static readonly string[] MenuCharacterLabelHints =
+    {
+        // Keep this list conservative; only emit select_character when we are fairly confident.
+        "ironclad", "silent", "defect", "watcher",
+        "铁甲", "静默", "机器人", "观者",
+    };
     private static readonly string[] CardRewardSelectionTypeHints =
     {
         "CardReward",
@@ -122,7 +133,9 @@ internal sealed class Sts2RuntimeReflectionReader
             return new RuntimeStatusReport(healthy: true, status: status);
         }
 
-        var phase = DetectPhase(root.RunNode, root.RunState);
+        var phase = root.RunNode is not null && root.RunState is not null
+            ? DetectPhase(root.RunNode, root.RunState)
+            : PhaseMenu;
         return new RuntimeStatusReport(
             healthy: true,
             status: $"live runtime attached; phase={phase}; game_version={_probe.GameVersion ?? _options.GameVersion}");
@@ -141,6 +154,11 @@ internal sealed class Sts2RuntimeReflectionReader
         if (!TryGetRuntimeRoot(assembly, out var root, out var status))
         {
             throw new InvalidOperationException(status);
+        }
+
+        if (root.RunNode is null || root.RunState is null)
+        {
+            return BuildMenuWindow(root.GameInstance);
         }
 
         var phase = DetectPhase(root.RunNode, root.RunState);
@@ -166,6 +184,18 @@ internal sealed class Sts2RuntimeReflectionReader
             return new RuntimeActionResult(false, status, "runtime_not_ready");
         }
 
+        if (root.RunNode is null || root.RunState is null)
+        {
+            return action.Type switch
+            {
+                "continue_run" => ExecuteMenuAction(root.GameInstance, request, action, "continue_run"),
+                "start_new_run" => ExecuteMenuAction(root.GameInstance, request, action, "start_new_run"),
+                "select_character" => ExecuteMenuAction(root.GameInstance, request, action, "select_character"),
+                "confirm_start_run" => ExecuteMenuAction(root.GameInstance, request, action, "confirm_start_run"),
+                _ => new RuntimeActionResult(false, "No active run is available yet.", "runtime_not_ready"),
+            };
+        }
+
         return action.Type switch
         {
             "play_card" => ExecutePlayCard(root.RunState, request, action),
@@ -175,6 +205,507 @@ internal sealed class Sts2RuntimeReflectionReader
             "choose_map_node" => ExecuteChooseMapNode(request, action),
             _ => new RuntimeActionResult(false, $"Action type '{action.Type}' is not supported yet.", "unsupported_action"),
         };
+    }
+
+    private RuntimeWindowContext BuildMenuWindow(object gameInstance)
+    {
+        var textDiagnostics = new TextDiagnosticsCollector();
+        var metadata = CreateMenuMetadata(gameInstance);
+        var buttons = DiscoverMenuButtons(gameInstance, textDiagnostics, metadata);
+        metadata["text_diagnostics"] = textDiagnostics.ToMetadata();
+
+        var actions = new List<RuntimeActionDefinition>();
+        foreach (var candidate in buttons)
+        {
+            var parameters = new Dictionary<string, object?>();
+            if (!string.IsNullOrWhiteSpace(candidate.Label))
+            {
+                parameters["button_label"] = candidate.Label;
+            }
+
+            if (string.Equals(candidate.Kind, "select_character", StringComparison.Ordinal) && !string.IsNullOrWhiteSpace(candidate.CharacterId))
+            {
+                parameters["character_id"] = candidate.CharacterId;
+                parameters["character_label"] = candidate.Label;
+            }
+
+            actions.Add(new RuntimeActionDefinition(
+                candidate.Kind,
+                candidate.Label,
+                parameters,
+                Metadata: candidate.Diagnostics));
+        }
+
+        if (actions.Count == 0)
+        {
+            metadata["menu_action_suppressed"] = true;
+            metadata["menu_action_suppressed_reason"] = metadata.TryGetValue("menu_action_suppressed_reason", out var reason)
+                ? reason
+                : "no_safe_menu_actions_detected";
+        }
+
+        return new RuntimeWindowContext(
+            DecisionPhase.Menu,
+            Player: null,
+            Enemies: Array.Empty<RuntimeEnemyState>(),
+            Rewards: Array.Empty<string>(),
+            MapNodes: Array.Empty<string>(),
+            Terminal: false,
+            Metadata: metadata,
+            Actions: actions);
+    }
+
+    private sealed record MenuActionCandidate(
+        string Kind,
+        string Label,
+        string? CharacterId,
+        IReadOnlyDictionary<string, object?> Diagnostics);
+
+    private List<MenuActionCandidate> DiscoverMenuButtons(object gameInstance, TextDiagnosticsCollector textDiagnostics, Dictionary<string, object?> metadata)
+    {
+        var roots = EnumerateMenuRoots(gameInstance).ToList();
+        metadata["menu_root_count"] = roots.Count;
+
+        var discovered = new List<(object Node, string Label, string Source)>();
+        foreach (var root in roots)
+        {
+            var rootNode = root.Node;
+            if (rootNode is null)
+            {
+                continue;
+            }
+
+            var rootType = GetTypeName(rootNode) ?? string.Empty;
+            foreach (var node in EnumerateNodeDescendants(rootNode, maxDepth: 7).Prepend(rootNode))
+            {
+                if (!IsPotentialMenuButton(node))
+                {
+                    continue;
+                }
+
+                var label = ConvertToText(
+                    GetMemberValue(node, "Text") ?? GetMemberValue(node, "Label") ?? GetMemberValue(node, "Title") ?? GetMemberValue(node, "Name") ?? node,
+                    $"menu.button.label",
+                    textDiagnostics,
+                    "Text",
+                    "Label",
+                    "Title",
+                    "Name");
+                label = string.IsNullOrWhiteSpace(label) ? null : label.Trim();
+                if (string.IsNullOrWhiteSpace(label))
+                {
+                    continue;
+                }
+
+                if (IsDangerLabel(label))
+                {
+                    continue;
+                }
+
+                discovered.Add((node, label!, root.Source));
+                if (discovered.Count >= 128)
+                {
+                    break;
+                }
+            }
+
+            if (discovered.Count >= 128)
+            {
+                metadata["menu_scan_truncated"] = true;
+                metadata["menu_scan_truncated_root_type"] = rootType;
+                break;
+            }
+        }
+
+        metadata["menu_button_candidate_count"] = discovered.Count;
+
+        // Classify actions conservatively.
+        var actions = new List<MenuActionCandidate>();
+        var windowKind = "main_menu";
+
+        var continueButton = discovered.FirstOrDefault(item => IsContinueLabel(item.Label));
+        if (continueButton.Node is not null)
+        {
+            actions.Add(new MenuActionCandidate(
+                Kind: "continue_run",
+                Label: continueButton.Label,
+                CharacterId: null,
+                Diagnostics: new Dictionary<string, object?>
+                {
+                    ["menu_detection_source"] = continueButton.Source,
+                    ["menu_target_type"] = GetTypeName(continueButton.Node),
+                }));
+        }
+
+        var newRunButton = discovered.FirstOrDefault(item => IsNewRunLabel(item.Label));
+        if (newRunButton.Node is not null)
+        {
+            actions.Add(new MenuActionCandidate(
+                Kind: "start_new_run",
+                Label: newRunButton.Label,
+                CharacterId: null,
+                Diagnostics: new Dictionary<string, object?>
+                {
+                    ["menu_detection_source"] = newRunButton.Source,
+                    ["menu_target_type"] = GetTypeName(newRunButton.Node),
+                }));
+        }
+
+        // Only attempt character/confirm actions when the UI looks like a new run setup flow.
+        var characterButtons = discovered
+            .Where(item => IsCharacterLabel(item.Label) || IsCharacterNode(item.Node))
+            .Select(item => new
+            {
+                item.Node,
+                item.Label,
+                item.Source,
+                CharacterId = NormalizeCharacterId(item.Node, item.Label),
+            })
+            .Where(item => !string.IsNullOrWhiteSpace(item.CharacterId))
+            .Take(8)
+            .ToList();
+
+        if (characterButtons.Count > 0)
+        {
+            windowKind = "new_run_setup";
+            foreach (var button in characterButtons)
+            {
+                actions.Add(new MenuActionCandidate(
+                    Kind: "select_character",
+                    Label: button.Label,
+                    CharacterId: button.CharacterId,
+                    Diagnostics: new Dictionary<string, object?>
+                    {
+                        ["menu_detection_source"] = button.Source,
+                        ["menu_target_type"] = GetTypeName(button.Node),
+                    }));
+            }
+
+            var confirm = discovered.FirstOrDefault(item => IsConfirmLabel(item.Label));
+            if (confirm.Node is not null)
+            {
+                actions.Add(new MenuActionCandidate(
+                    Kind: "confirm_start_run",
+                    Label: confirm.Label,
+                    CharacterId: null,
+                    Diagnostics: new Dictionary<string, object?>
+                    {
+                        ["menu_detection_source"] = confirm.Source,
+                        ["menu_target_type"] = GetTypeName(confirm.Node),
+                    }));
+            }
+        }
+
+        metadata["window_kind"] = windowKind;
+
+        // If we found a lot of buttons but none classified as safe actions, explain why.
+        if (discovered.Count > 0 && actions.Count == 0)
+        {
+            metadata["menu_action_suppressed_reason"] = "candidates_found_but_no_safe_classification";
+        }
+
+        return actions;
+    }
+
+    private IEnumerable<(object? Node, string Source)> EnumerateMenuRoots(object gameInstance)
+    {
+        // Prefer overlay stack (works even when runNode is not available).
+        var overlayStack = GetMemberValue(GetOverlayStackType(), "Instance");
+        var overlayTop = TryInvokeParameterlessMethod(overlayStack, "Peek");
+        if (overlayTop is not null)
+        {
+            yield return (overlayTop, "overlay_stack.peek");
+        }
+
+        // Commonly useful roots on NGame.Instance.
+        foreach (var member in new[] { "GlobalUi", "UI", "Ui", "MainMenu", "_mainMenu", "Menu", "Menus", "Screen", "Screens", "Root" })
+        {
+            var candidate = GetMemberValue(gameInstance, member);
+            if (candidate is not null)
+            {
+                yield return (candidate, $"game_instance.{member}");
+            }
+        }
+
+        yield return (gameInstance, "game_instance");
+    }
+
+    private static bool IsPotentialMenuButton(object node)
+    {
+        var typeName = GetTypeName(node) ?? string.Empty;
+        if (typeName.Contains("Button", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var type = node.GetType();
+        return type.GetMethod("EmitSignal", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance) is not null &&
+               (type.GetProperty("Text", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance) is not null ||
+                type.GetProperty("Label", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance) is not null);
+    }
+
+    private static bool IsDangerLabel(string label)
+    {
+        var normalized = NormalizeLabel(label);
+        return MenuDangerLabelHints.Any(hint => normalized.Contains(hint, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsContinueLabel(string label)
+    {
+        var normalized = NormalizeLabel(label);
+        return MenuContinueLabelHints.Any(hint => normalized.Contains(hint, StringComparison.OrdinalIgnoreCase)) &&
+               !IsNewRunLabel(label);
+    }
+
+    private static bool IsNewRunLabel(string label)
+    {
+        var normalized = NormalizeLabel(label);
+        if (MenuNewRunLabelHints.Any(hint => normalized.Contains(hint, StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+
+        // "Start" is ambiguous; only treat it as new-run when paired with "new"/"run"/"game"/"新".
+        if (normalized.Contains("start", StringComparison.OrdinalIgnoreCase) || normalized.Contains("开始", StringComparison.OrdinalIgnoreCase))
+        {
+            return normalized.Contains("new", StringComparison.OrdinalIgnoreCase) ||
+                   normalized.Contains("run", StringComparison.OrdinalIgnoreCase) ||
+                   normalized.Contains("game", StringComparison.OrdinalIgnoreCase) ||
+                   normalized.Contains("新", StringComparison.OrdinalIgnoreCase);
+        }
+
+        return false;
+    }
+
+    private static bool IsConfirmLabel(string label)
+    {
+        var normalized = NormalizeLabel(label);
+        return MenuConfirmLabelHints.Any(hint => normalized.Contains(hint, StringComparison.OrdinalIgnoreCase)) &&
+               !IsDangerLabel(label);
+    }
+
+    private static bool IsCharacterLabel(string label)
+    {
+        var normalized = NormalizeLabel(label);
+        return MenuCharacterLabelHints.Any(hint => normalized.Contains(hint, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsCharacterNode(object node)
+    {
+        var typeName = GetTypeName(node) ?? string.Empty;
+        return typeName.Contains("Character", StringComparison.OrdinalIgnoreCase) ||
+               typeName.Contains("Hero", StringComparison.OrdinalIgnoreCase) ||
+               typeName.Contains("Class", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeLabel(string label)
+    {
+        return label.Trim().ToLowerInvariant();
+    }
+
+    private static string? NormalizeCharacterId(object node, string label)
+    {
+        var candidate = ConvertToText(GetMemberValue(node, "CharacterId") ?? GetMemberValue(node, "Id") ?? GetMemberValue(node, "Character") ?? label);
+        if (string.IsNullOrWhiteSpace(candidate))
+        {
+            return null;
+        }
+
+        var normalized = candidate.Trim().ToLowerInvariant();
+        // Keep it stable and readable for action params.
+        normalized = new string(normalized.Where(ch => char.IsLetterOrDigit(ch) || ch == '_' || ch == '-').ToArray());
+        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
+    }
+
+    private RuntimeActionResult ExecuteMenuAction(object gameInstance, ActionRequest request, LegalAction action, string expectedKind)
+    {
+        var textDiagnostics = new TextDiagnosticsCollector();
+        var metadata = new Dictionary<string, object?>();
+        var candidates = DiscoverMenuButtons(gameInstance, textDiagnostics, metadata);
+        var label = ConvertToText(GetDictionaryValue(action.Params, "button_label"));
+        var characterId = ConvertToText(GetDictionaryValue(action.Params, "character_id"));
+
+        MenuActionCandidate? target = null;
+        foreach (var candidate in candidates)
+        {
+            if (!string.Equals(candidate.Kind, expectedKind, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (!string.IsNullOrWhiteSpace(characterId))
+            {
+                if (!string.Equals(candidate.CharacterId, characterId, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+            }
+            else if (!string.IsNullOrWhiteSpace(label))
+            {
+                if (!string.Equals(candidate.Label, label, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+            }
+
+            target = candidate;
+            break;
+        }
+
+        if (target is null)
+        {
+            return new RuntimeActionResult(false, "Menu target is no longer available.", "stale_action", metadata: new Dictionary<string, object?>
+            {
+                ["action_type"] = expectedKind,
+                ["menu_label"] = label,
+                ["menu_character_id"] = characterId,
+                ["menu_candidate_count"] = candidates.Count,
+                ["menu_diagnostics"] = metadata,
+            });
+        }
+
+        // Re-scan roots and find a matching node to click based on label/id.
+        if (!TryResolveMenuTargetNode(gameInstance, expectedKind, label, characterId, out var node, out var resolveMetadata))
+        {
+            return new RuntimeActionResult(false, "Menu target node could not be resolved.", "runtime_incompatible", resolveMetadata);
+        }
+
+        if (!TryActivateMenuNode(node, out var handler))
+        {
+            return new RuntimeActionResult(false, "Menu target node is not clickable.", "not_clickable", new Dictionary<string, object?>
+            {
+                ["runtime_handler"] = "menu_node.activate",
+                ["target_type"] = GetTypeName(node),
+                ["expected_kind"] = expectedKind,
+            });
+        }
+
+        return new RuntimeActionResult(true, $"Executed menu action '{expectedKind}'.", metadata: new Dictionary<string, object?>
+        {
+            ["action_type"] = expectedKind,
+            ["runtime_handler"] = handler,
+            ["target_type"] = GetTypeName(node),
+        });
+    }
+
+    private bool TryResolveMenuTargetNode(object gameInstance, string expectedKind, string? label, string? characterId, out object node, out IReadOnlyDictionary<string, object?> metadata)
+    {
+        foreach (var root in EnumerateMenuRoots(gameInstance))
+        {
+            if (root.Node is null)
+            {
+                continue;
+            }
+
+            foreach (var child in EnumerateNodeDescendants(root.Node, maxDepth: 7).Prepend(root.Node))
+            {
+                if (!IsPotentialMenuButton(child))
+                {
+                    continue;
+                }
+
+                var childLabel = ConvertToText(GetMemberValue(child, "Text") ?? GetMemberValue(child, "Label") ?? GetMemberValue(child, "Title") ?? GetMemberValue(child, "Name") ?? child);
+                if (string.IsNullOrWhiteSpace(childLabel))
+                {
+                    continue;
+                }
+
+                childLabel = childLabel.Trim();
+
+                if (!string.IsNullOrWhiteSpace(characterId) && string.Equals(expectedKind, "select_character", StringComparison.Ordinal))
+                {
+                    var id = NormalizeCharacterId(child, childLabel);
+                    if (!string.IsNullOrWhiteSpace(id) && string.Equals(id, characterId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        node = child;
+                        metadata = new Dictionary<string, object?>
+                        {
+                            ["menu_detection_source"] = root.Source,
+                            ["menu_target_type"] = GetTypeName(child),
+                            ["menu_character_id"] = id,
+                        };
+                        return true;
+                    }
+                }
+                else if (!string.IsNullOrWhiteSpace(label) && string.Equals(childLabel, label, StringComparison.OrdinalIgnoreCase))
+                {
+                    node = child;
+                    metadata = new Dictionary<string, object?>
+                    {
+                        ["menu_detection_source"] = root.Source,
+                        ["menu_target_type"] = GetTypeName(child),
+                        ["menu_label"] = childLabel,
+                    };
+                    return true;
+                }
+            }
+        }
+
+        node = default!;
+        metadata = new Dictionary<string, object?>
+        {
+            ["expected_kind"] = expectedKind,
+            ["menu_label"] = label,
+            ["menu_character_id"] = characterId,
+        };
+        return false;
+    }
+
+    private static bool TryActivateMenuNode(object node, out string handler)
+    {
+        var argSets = new List<object?[]>
+        {
+            Array.Empty<object?>(),
+            new object?[] { false },
+            new object?[] { true },
+            new object?[] { "pressed" },
+        };
+
+        if (TryInvokeFirstCompatibleMethod(node, new[] { "Click", "Press", "Activate", "OnPressed", "OnPress", "Confirm", "Select" }, argSets, out var methodName))
+        {
+            handler = $"menu_node.{methodName}";
+            return true;
+        }
+
+        var emitSignal = node.GetType().GetMethod("EmitSignal", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+        if (emitSignal is not null)
+        {
+            try
+            {
+                // Godot buttons emit "pressed" when clicked.
+                emitSignal.Invoke(node, new object?[] { "pressed" });
+                handler = "menu_node.EmitSignal(pressed)";
+                return true;
+            }
+            catch
+            {
+                // ignore
+            }
+        }
+
+        handler = "menu_node.unhandled";
+        return false;
+    }
+
+    private Dictionary<string, object?> CreateMenuMetadata(object gameInstance)
+    {
+        var metadata = new Dictionary<string, object?>
+        {
+            ["source"] = "sts2_runtime",
+            ["phase_detected"] = DecisionPhase.Menu,
+            ["game_version"] = _probe.GameVersion ?? _options.GameVersion,
+            ["managed_dir"] = _probe.ManagedDir,
+            ["game_instance_type"] = GetTypeName(gameInstance),
+        };
+
+        var overlayStack = GetMemberValue(GetOverlayStackType(), "Instance");
+        var overlayTop = TryInvokeParameterlessMethod(overlayStack, "Peek");
+        if (overlayTop is not null)
+        {
+            metadata["overlay_top_type"] = GetTypeName(overlayTop);
+        }
+
+        return metadata;
     }
 
     private RuntimeWindowContext BuildCombatWindow(object runNode, object runState)
@@ -629,17 +1160,17 @@ internal sealed class Sts2RuntimeReflectionReader
 
         if (runNode is null)
         {
-            root = default;
-            status = "game runtime attached; waiting for an active run.";
-            return false;
+            root = new RuntimeRoot(gameInstance, RunNode: null, RunState: null);
+            status = "game runtime attached; no active run detected (exporting menu phase).";
+            return true;
         }
 
         var runState = GetMemberValue(runNode, "_state");
         if (runState is null)
         {
-            root = default;
-            status = "run node found, but RunState is not available yet.";
-            return false;
+            root = new RuntimeRoot(gameInstance, runNode, RunState: null);
+            status = "run node found, but RunState is not available yet (exporting menu phase).";
+            return true;
         }
 
         root = new RuntimeRoot(gameInstance, runNode, runState);
@@ -1398,7 +1929,7 @@ internal sealed class Sts2RuntimeReflectionReader
         return target?.GetType().FullName ?? target?.GetType().Name;
     }
 
-    private readonly record struct RuntimeRoot(object GameInstance, object RunNode, object RunState);
+    private readonly record struct RuntimeRoot(object GameInstance, object? RunNode, object? RunState);
 
     private readonly record struct HandCardDescriptor(string CardId, string Name, TextResolutionResult NameResolution, string? TargetType, bool Playable);
     private readonly record struct RewardOption(string Label, TextResolutionResult Resolution);

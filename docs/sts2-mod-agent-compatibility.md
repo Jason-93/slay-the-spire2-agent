@@ -72,6 +72,25 @@ Python 侧后续接入真实 HTTP bridge 时，建议把：
 - `rejected` 映射为可恢复失败，并保留 `error_code`
 - `failed` 映射为中断或基础设施错误，触发 fail-closed
 
+### 5. menu phase 用于“无活动 run 但可操作”的开局流程
+
+当游戏处于主菜单或开局流程且尚未进入活动 run 时，bridge 可能导出：
+
+- `snapshot.phase = "menu"`
+- `snapshot.player = null`，且 `enemies`/`map_nodes`/`rewards` 为空数组
+
+此时 `actions` 可能包含以下 menu 动作（仅在控件可安全识别时才会导出）：
+
+- `continue_run`: 点击 Continue/继续，进入已有存档 run
+- `start_new_run`: 点击 New Run/开始新 run，进入开局配置流程
+- `select_character`: 选择角色（`params.character_id`）
+- `confirm_start_run`: 确认并开始 run
+
+兼容性建议：
+
+- agent 应将 `menu` 视为“可推进但非战斗”的窗口，避免尝试 `play_card`/`end_turn`。
+- 若 menu 动作不可用，bridge 会在 `snapshot.metadata` 中提供 `menu_action_suppressed` 与 diagnostics，agent 应选择等待或人工介入，而不是猜测点击。
+
 ## 推荐的 Python 适配点
 
 当前仓库还没有真实 `HttpGameBridge`。后续实现时，建议最少补齐以下逻辑：

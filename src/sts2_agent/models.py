@@ -9,6 +9,7 @@ class Phase(StrEnum):
     COMBAT = "combat"
     REWARD = "reward"
     MAP = "map"
+    MENU = "menu"
     TERMINAL = "terminal"
 
 

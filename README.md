@@ -7,6 +7,7 @@
 - 提供 Python 侧的 Agent 协议模型、bridge 抽象、启发式策略和 orchestrator
 - 提供 C# in-game mod，可在游戏进程内暴露本地 HTTP bridge
 - 已支持读取真实运行时状态，并提供 `/health`、`/snapshot`、`/actions`、`/apply`
+- 支持在无活动 run 的主菜单/开局流程导出 `phase="menu"`，为自动化测试提供可重复的进入 run 起点（详见 `docs/sts2-mod-agent-compatibility.md`）
 - 已提供 `.pck` 打包、安装、启动和联调脚本
 
 ## 仓库结构
