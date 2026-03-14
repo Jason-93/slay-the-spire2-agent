@@ -289,12 +289,9 @@ class ChatCompletionsPolicy:
             "cost": card.cost,
             "playable": card.playable,
         }
-        preferred_description = ChatCompletionsPolicy._preferred_description_text(card)
         optional_values = {
             "canonical_card_id": card.canonical_card_id,
-            "description": preferred_description,
-            "description_rendered": getattr(card, "description_rendered", None),
-            "description_raw": ChatCompletionsPolicy._raw_description_for_summary(card),
+            "description": ChatCompletionsPolicy._preferred_description_text(card),
             "description_quality": getattr(card, "description_quality", None),
             "description_source": getattr(card, "description_source", None),
             "description_vars": ChatCompletionsPolicy._summarize_description_vars(getattr(card, "description_vars", [])),
@@ -323,18 +320,12 @@ class ChatCompletionsPolicy:
             payload["amount"] = power.amount
         if preferred_description:
             payload["description"] = preferred_description
-        rendered = getattr(power, "description_rendered", None)
-        if rendered and rendered != preferred_description:
-            payload["description_rendered"] = rendered
         quality = getattr(power, "description_quality", None)
         if quality:
             payload["description_quality"] = quality
         source = getattr(power, "description_source", None)
         if source:
             payload["description_source"] = source
-        raw_description = ChatCompletionsPolicy._raw_description_for_summary(power)
-        if raw_description:
-            payload["description_raw"] = raw_description
         description_vars = ChatCompletionsPolicy._summarize_description_vars(getattr(power, "description_vars", []))
         if description_vars:
             payload["description_vars"] = description_vars
@@ -400,25 +391,10 @@ class ChatCompletionsPolicy:
 
     @staticmethod
     def _preferred_description_text(item: Any) -> str | None:
-        rendered = getattr(item, "description_rendered", None)
-        quality = getattr(item, "description_quality", None)
-        if isinstance(rendered, str) and rendered and quality != "template_fallback" and not ChatCompletionsPolicy._is_template_text(rendered):
-            return rendered
         description = getattr(item, "description", None)
         if isinstance(description, str) and description:
             return description
-        raw = getattr(item, "description_raw", None)
-        if isinstance(raw, str) and raw:
-            return raw
         return None
-
-    @staticmethod
-    def _raw_description_for_summary(item: Any) -> str | None:
-        raw = getattr(item, "description_raw", None)
-        if not isinstance(raw, str) or not raw:
-            return None
-        preferred = ChatCompletionsPolicy._preferred_description_text(item)
-        return raw if raw != preferred else None
 
     @staticmethod
     def _is_template_text(text: str) -> bool:

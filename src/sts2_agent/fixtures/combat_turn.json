@@ -1,4 +1,4 @@
-﻿{
+{
   "phase": "combat",
   "player": {
     "hp": 70,
@@ -9,23 +9,35 @@
     "draw_pile": 12,
     "discard_pile": 4,
     "exhaust_pile": 0,
-    "relics": ["Burning Blood"],
-    "potions": ["Strength Potion"],
+    "relics": [
+      "Burning Blood"
+    ],
+    "potions": [
+      "Strength Potion"
+    ],
     "powers": [
       {
         "power_id": "metallicize",
         "name": "Metallicize",
         "amount": 3,
-        "description": "At end of turn gain 3 Block.",
-        "description_raw": "At end of turn gain {Amount} [gold]Block[/gold].",
-        "description_rendered": "At end of turn gain 3 Block.",
+        "description": "At end of turn gain 3 **Block**.",
         "description_quality": "resolved",
-        "description_source": "rendered_from_vars",
+        "description_source": "runtime_rendered_with_markdown_glossary",
         "description_vars": [
-          {"key": "amount", "value": 3, "source": "member_alias", "placeholder": "Amount"}
+          {
+            "key": "amount",
+            "value": 3,
+            "source": "member_alias",
+            "placeholder": "Amount"
+          }
         ],
         "glossary": [
-          {"glossary_id": "block", "display_text": "Block", "hint": "Prevents damage until next turn.", "source": "description_text"}
+          {
+            "glossary_id": "block",
+            "display_text": "Block",
+            "hint": "Prevents damage until next turn.",
+            "source": "description_text"
+          }
         ],
         "canonical_power_id": "metallicize"
       }
@@ -39,23 +51,35 @@
         "cost": 1,
         "cost_for_turn": 1,
         "playable": true,
-        "description": "Deal 6 damage.",
-        "description_raw": "Deal {Damage:diff()} damage.",
-        "description_rendered": "Deal 6 damage.",
+        "description": "Deal 6 **damage**.",
         "description_quality": "resolved",
-        "description_source": "rendered_from_vars",
+        "description_source": "runtime_rendered_with_markdown_glossary",
         "description_vars": [
-          {"key": "damage", "value": 6, "source": "description_placeholder", "placeholder": "Damage"}
+          {
+            "key": "damage",
+            "value": 6,
+            "source": "description_placeholder",
+            "placeholder": "Damage"
+          }
         ],
         "glossary": [
-          {"glossary_id": "damage", "display_text": "Damage", "hint": "Reduces HP.", "source": "description_text"}
+          {
+            "glossary_id": "damage",
+            "display_text": "Damage",
+            "hint": "Reduces HP.",
+            "source": "description_text"
+          }
         ],
         "upgraded": false,
         "target_type": "AnyEnemy",
         "card_type": "Attack",
         "rarity": "Starter",
-        "traits": ["starter"],
-        "keywords": ["damage"]
+        "traits": [
+          "starter"
+        ],
+        "keywords": [
+          "damage"
+        ]
       },
       {
         "card_id": "defend_red#1",
@@ -65,23 +89,35 @@
         "cost": 1,
         "cost_for_turn": 1,
         "playable": true,
-        "description": "Gain 5 Block.",
-        "description_raw": "Gain {Block:diff()} [gold]Block[/gold].",
-        "description_rendered": "Gain 5 Block.",
+        "description": "Gain 5 **Block**.",
         "description_quality": "resolved",
         "description_source": "rendered_from_vars",
         "description_vars": [
-          {"key": "block", "value": 5, "source": "description_placeholder", "placeholder": "Block"}
+          {
+            "key": "block",
+            "value": 5,
+            "source": "description_placeholder",
+            "placeholder": "Block"
+          }
         ],
         "glossary": [
-          {"glossary_id": "block", "display_text": "Block", "hint": "Prevents damage until next turn.", "source": "description_text"}
+          {
+            "glossary_id": "block",
+            "display_text": "Block",
+            "hint": "Prevents damage until next turn.",
+            "source": "description_text"
+          }
         ],
         "upgraded": false,
         "target_type": "Self",
         "card_type": "Skill",
         "rarity": "Starter",
-        "traits": ["starter"],
-        "keywords": ["block"]
+        "traits": [
+          "starter"
+        ],
+        "keywords": [
+          "block"
+        ]
       },
       {
         "card_id": "battle_trance#2",
@@ -92,22 +128,34 @@
         "cost_for_turn": 0,
         "playable": true,
         "description": "Draw {Draw:diff()} cards.",
-        "description_raw": "Draw {Draw:diff()} cards.",
-        "description_rendered": "Draw {Draw:diff()} cards.",
         "description_quality": "template_fallback",
         "description_source": "raw_template",
         "description_vars": [
-          {"key": "draw", "value": null, "source": "description_placeholder", "placeholder": "Draw"}
+          {
+            "key": "draw",
+            "value": null,
+            "source": "description_placeholder",
+            "placeholder": "Draw"
+          }
         ],
         "glossary": [
-          {"glossary_id": "draw", "display_text": "Draw", "hint": "Add cards from your draw pile to your hand.", "source": "description_text"}
+          {
+            "glossary_id": "draw",
+            "display_text": "Draw",
+            "hint": "Add cards from your draw pile to your hand.",
+            "source": "description_text"
+          }
         ],
         "upgraded": false,
         "target_type": "Self",
         "card_type": "Skill",
         "rarity": "Common",
-        "traits": ["draw"],
-        "keywords": ["draw"]
+        "traits": [
+          "draw"
+        ],
+        "keywords": [
+          "draw"
+        ]
       }
     ]
   },
@@ -133,14 +181,22 @@
           "name": "Strength",
           "amount": 3,
           "description": "Increase attack damage.",
-          "description_rendered": "Increase attack damage.",
           "description_quality": "resolved",
           "description_source": "runtime_rendered",
           "description_vars": [
-            {"key": "strength", "value": 3, "source": "power_id"}
+            {
+              "key": "strength",
+              "value": 3,
+              "source": "power_id"
+            }
           ],
           "glossary": [
-            {"glossary_id": "strength", "display_text": "Strength", "hint": "Increases attack damage.", "source": "canonical_id"}
+            {
+              "glossary_id": "strength",
+              "display_text": "Strength",
+              "hint": "Increases attack damage.",
+              "source": "canonical_id"
+            }
           ],
           "canonical_power_id": "strength"
         }
@@ -164,14 +220,36 @@
     "map": {
       "current_coord": "0,0",
       "current_node_type": "monster",
-      "reachable_nodes": ["monster_left@0,1", "elite_center@1,1", "question_right@2,1"],
+      "reachable_nodes": [
+        "monster_left@0,1",
+        "elite_center@1,1",
+        "question_right@2,1"
+      ],
       "source": "fixture"
     }
   },
   "legal_actions": [
-    {"type": "play_card", "label": "Play Strike", "card_id": "strike_red#0", "target_constraints": ["jaw_worm_1"]},
-    {"type": "play_card", "label": "Play Defend", "card_id": "defend_red#1"},
-    {"type": "use_potion", "label": "Use Strength Potion", "potion": "Strength Potion"},
-    {"type": "end_turn", "label": "End Turn"}
+    {
+      "type": "play_card",
+      "label": "Play Strike",
+      "card_id": "strike_red#0",
+      "target_constraints": [
+        "jaw_worm_1"
+      ]
+    },
+    {
+      "type": "play_card",
+      "label": "Play Defend",
+      "card_id": "defend_red#1"
+    },
+    {
+      "type": "use_potion",
+      "label": "Use Strength Potion",
+      "potion": "Strength Potion"
+    },
+    {
+      "type": "end_turn",
+      "label": "End Turn"
+    }
   ]
 }

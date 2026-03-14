@@ -106,11 +106,9 @@ public sealed class RewardPhaseDetectionTests
         Assert.NotNull(player);
         var card = Assert.Single(player.Hand);
         Assert.Equal("strike_red", card.CanonicalCardId);
-        Assert.Equal("Deal 6 damage.", card.Description);
-        Assert.Equal("Deal {Damage:diff()} [gold]damage[/gold].", card.DescriptionRaw);
-        Assert.Equal("Deal 6 damage.", card.DescriptionRendered);
+        Assert.Equal("Deal 6 **damage**.", card.Description);
         Assert.Equal("resolved", card.DescriptionQuality);
-        Assert.Equal("runtime_rendered", card.DescriptionSource);
+        Assert.Equal("runtime_rendered_with_markdown_glossary", card.DescriptionSource);
         Assert.Equal("damage", Assert.Single(card.DescriptionVars ?? Array.Empty<DescriptionVariable>()).Key);
         Assert.Contains(card.Glossary ?? Array.Empty<GlossaryAnchor>(), anchor => anchor.GlossaryId == "damage");
         Assert.Equal("AnyEnemy", card.TargetType);
@@ -165,8 +163,7 @@ public sealed class RewardPhaseDetectionTests
         Assert.NotNull(player);
         var card = Assert.Single(player.Hand);
 
-        Assert.Equal("Gain 5 Block.", card.DescriptionRendered);
-        Assert.Equal("Gain 5 Block.", card.Description);
+        Assert.Equal("Gain 5 **Block**.", card.Description);
         Assert.Equal("resolved", card.DescriptionQuality);
         Assert.Equal("rendered_from_vars", card.DescriptionSource);
         Assert.Equal("block", Assert.Single(card.DescriptionVars ?? Array.Empty<DescriptionVariable>()).Key);
@@ -203,7 +200,7 @@ public sealed class RewardPhaseDetectionTests
         var card = Assert.Single(player.Hand);
         var variable = Assert.Single(card.DescriptionVars ?? Array.Empty<DescriptionVariable>());
 
-        Assert.Equal("Deal 6 damage.", card.DescriptionRendered);
+        Assert.Equal("Deal 6 **damage**.", card.Description);
         Assert.Equal("resolved", card.DescriptionQuality);
         Assert.Equal("rendered_from_vars", card.DescriptionSource);
         Assert.Equal("damage", variable.Key);
@@ -237,7 +234,6 @@ public sealed class RewardPhaseDetectionTests
         var card = Assert.Single(player.Hand);
         var variable = Assert.Single(card.DescriptionVars ?? Array.Empty<DescriptionVariable>());
 
-        Assert.Equal("Draw {Draw:diff()} cards.", card.DescriptionRendered);
         Assert.Equal("Draw {Draw:diff()} cards.", card.Description);
         Assert.Equal("template_fallback", card.DescriptionQuality);
         Assert.Equal("raw_template", card.DescriptionSource);

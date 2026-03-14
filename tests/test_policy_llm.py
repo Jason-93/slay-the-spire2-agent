@@ -59,9 +59,7 @@ def build_snapshot() -> DecisionSnapshot:
                     cost=1,
                     playable=True,
                     canonical_card_id="defend_red",
-                    description="获得 5 点格挡。",
-                    description_raw="获得{Block:diff()}点[gold]格挡[/gold]。",
-                    description_rendered="获得5点格挡。",
+                    description="获得5点**格挡**。",
                     description_quality="resolved",
                     description_source="rendered_from_vars",
                     description_vars=[DescriptionVariable(key="block", value=5, source="description_placeholder", placeholder="Block")],
@@ -82,11 +80,9 @@ def build_snapshot() -> DecisionSnapshot:
                     power_id="metallicize",
                     name="金属化",
                     amount=3,
-                    description="回合结束时获得 3 点格挡。",
-                    description_raw="回合结束时获得 {Amount} 点[gold]格挡[/gold]。",
-                    description_rendered="回合结束时获得 3 点格挡。",
+                    description="回合结束时获得3点**格挡**。",
                     description_quality="resolved",
-                    description_source="rendered_from_vars",
+                    description_source="runtime_rendered_with_markdown_glossary",
                     description_vars=[DescriptionVariable(key="amount", value=3, source="member_alias", placeholder="Amount")],
                     glossary=[GlossaryAnchor(glossary_id="block", display_text="格挡", hint="在下个回合前，阻挡伤害。", source="description_text")],
                 )
@@ -111,7 +107,6 @@ def build_snapshot() -> DecisionSnapshot:
                         name="力量",
                         amount=3,
                         description="增加攻击伤害。",
-                        description_rendered="增加攻击伤害。",
                         description_quality="resolved",
                         description_source="runtime_rendered",
                         description_vars=[DescriptionVariable(key="strength", value=3, source="power_id")],
@@ -301,13 +296,12 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
     def test_summarize_snapshot_includes_rich_runtime_fields(self) -> None:
         payload = self.policy._summarize_snapshot(build_snapshot())
 
-        self.assertEqual(payload["player"]["hand"][0]["description"], "获得5点格挡。")
-        self.assertEqual(payload["player"]["hand"][0]["description_rendered"], "获得5点格挡。")
+        self.assertEqual(payload["player"]["hand"][0]["description"], "获得5点**格挡**。")
         self.assertEqual(payload["player"]["hand"][0]["description_quality"], "resolved")
         self.assertEqual(payload["player"]["hand"][0]["description_vars"]["block"], 5)
         self.assertEqual(payload["player"]["hand"][0]["glossary"][0]["id"], "block")
         self.assertEqual(payload["player"]["powers"][0]["amount"], 3)
-        self.assertEqual(payload["player"]["powers"][0]["description_source"], "rendered_from_vars")
+        self.assertEqual(payload["player"]["powers"][0]["description_source"], "runtime_rendered_with_markdown_glossary")
         self.assertEqual(payload["player"]["powers"][0]["description_vars"]["amount"], 3)
         self.assertEqual(payload["enemies"][0]["intent_damage"], 11)
         self.assertEqual(payload["enemies"][0]["powers"][0]["name"], "力量")
@@ -319,7 +313,6 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
             name="打击",
             cost=1,
             description="造成{Damage:diff()}点伤害。",
-            description_rendered="造成{Damage:diff()}点伤害。",
             description_quality="template_fallback",
         )
 

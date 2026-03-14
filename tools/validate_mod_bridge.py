@@ -103,7 +103,6 @@ def main() -> int:
                 assert len(actions) >= 1
         combat_snapshot = fetch(base_url, "/snapshot?phase=combat")
         assert combat_snapshot["player"]["hand"][0]["description"]
-        assert combat_snapshot["player"]["hand"][0]["description_rendered"]
         assert combat_snapshot["player"]["hand"][0]["description_quality"]
         assert combat_snapshot["player"]["hand"][0]["description_vars"]
         assert combat_snapshot["player"]["hand"][0]["glossary"]

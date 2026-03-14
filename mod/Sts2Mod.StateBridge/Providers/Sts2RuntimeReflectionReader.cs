@@ -134,6 +134,7 @@ internal sealed class Sts2RuntimeReflectionReader
         "OnProceedPressed",
     };
     private static readonly Regex RichTextTagRegex = new(@"\[(?:/?)[^\]]+\]", RegexOptions.Compiled);
+    private static readonly Regex RichTextPairRegex = new(@"\[(?<tag>[A-Za-z0-9_]+)\](?<content>.*?)\[/\k<tag>\]", RegexOptions.Compiled);
     private static readonly Regex PlaceholderRegex = new(@"\{(?<name>[A-Za-z_][A-Za-z0-9_]*)(?::(?<expr>[^}]+))?\}", RegexOptions.Compiled);
     private static readonly string[] DescriptionSearchNestedMembers =
     {
@@ -1592,9 +1593,7 @@ internal sealed class Sts2RuntimeReflectionReader
                     ConvertToText(GetMemberValue(card, "TargetType")),
                     GetBoolean(card, "IsPlayable", defaultValue: true),
                     ResolveCardCanonicalId(card),
-                    description.CompatibilityDescription,
-                    description.Raw,
-                    description.Rendered,
+                    description.Description,
                     description.Quality,
                     description.Source,
                     description.Vars,
@@ -1628,7 +1627,7 @@ internal sealed class Sts2RuntimeReflectionReader
                     Playable: GetBoolean(card, "IsPlayable", defaultValue: true),
                     InstanceCardId: RuntimeCardIdentity.CreateCardId(card, index),
                     CanonicalCardId: ResolveCardCanonicalId(card),
-                    Description: description.CompatibilityDescription,
+                    Description: description.Description,
                     CostForTurn: ResolveCardCostForTurn(card),
                     Upgraded: ResolveCardUpgraded(card),
                     TargetType: ConvertToText(GetMemberValue(card, "TargetType"), $"{path}[{index}].target_type", textDiagnostics),
@@ -1636,8 +1635,6 @@ internal sealed class Sts2RuntimeReflectionReader
                     Rarity: ConvertToText(GetMemberValue(card, "Rarity") ?? GetMemberValue(card, "CardRarity"), $"{path}[{index}].rarity", textDiagnostics),
                     Traits: traits,
                     Keywords: keywords,
-                    DescriptionRaw: description.Raw,
-                    DescriptionRendered: description.Rendered,
                     DescriptionQuality: description.Quality,
                     DescriptionSource: description.Source,
                     DescriptionVars: description.Vars,
@@ -2545,8 +2542,8 @@ internal sealed class Sts2RuntimeReflectionReader
             texts: new[] { renderOutcome.Text, raw },
             keywords: keywords,
             traits: traits);
-        var compatibilityDescription = ChooseCompatibilityDescription(renderOutcome.Text, raw);
-        return new DescriptionExtraction(raw, renderOutcome.Text, renderOutcome.Quality, renderOutcome.Source, vars, glossary, compatibilityDescription);
+        var canonicalDescription = ChooseCanonicalDescription(renderOutcome.Text, raw);
+        return new DescriptionExtraction(raw, renderOutcome.Text, canonicalDescription, renderOutcome.Quality, renderOutcome.Source, vars, glossary);
     }
 
     private static object? ResolveCardDescriptionSource(object? card)
@@ -2874,10 +2871,8 @@ internal sealed class Sts2RuntimeReflectionReader
             Amount: GetNullableInt(power, "Amount")
                     ?? GetNullableInt(power, "Stacks")
                     ?? GetNullableInt(power, "Value"),
-            Description: ChooseCompatibilityDescription(renderOutcome.Text, raw),
+            Description: ChooseCanonicalDescription(renderOutcome.Text, raw),
             CanonicalPowerId: canonicalPowerId,
-            DescriptionRaw: raw,
-            DescriptionRendered: renderOutcome.Text,
             DescriptionQuality: renderOutcome.Quality,
             DescriptionSource: renderOutcome.Source,
             DescriptionVars: vars,
@@ -3059,10 +3054,38 @@ internal sealed class Sts2RuntimeReflectionReader
         IReadOnlyList<DescriptionVariable>? variables)
     {
         var preferred = NormalizeDescriptionText(runtimeRendered);
-        var template = preferred ?? NormalizeDescriptionText(raw);
-        if (string.IsNullOrWhiteSpace(template))
+        var template = RenderTemplateDescription(raw, variables);
+        if (string.IsNullOrWhiteSpace(template) && string.IsNullOrWhiteSpace(preferred))
         {
             return new RenderOutcome(null, null, null);
+        }
+
+        if (!string.IsNullOrWhiteSpace(template) && !ContainsDescriptionPlaceholder(template))
+        {
+            return new RenderOutcome(
+                template,
+                "resolved",
+                preferred is not null ? "runtime_rendered_with_markdown_glossary" : "rendered_from_vars");
+        }
+
+        if (!string.IsNullOrWhiteSpace(preferred) && !ContainsDescriptionPlaceholder(preferred))
+        {
+            return new RenderOutcome(preferred, "resolved", "runtime_rendered");
+        }
+
+        var hasResolvedVariables = (variables ?? Array.Empty<DescriptionVariable>()).Any(variable => variable.Value is not null);
+        return new RenderOutcome(
+            template ?? preferred,
+            hasResolvedVariables ? "partial" : "template_fallback",
+            preferred is not null ? "runtime_template_fallback" : "raw_template");
+    }
+
+    private static string? RenderTemplateDescription(string? raw, IReadOnlyList<DescriptionVariable>? variables)
+    {
+        var template = raw?.Trim();
+        if (string.IsNullOrWhiteSpace(template))
+        {
+            return null;
         }
 
         var variableMap = (variables ?? Array.Empty<DescriptionVariable>())
@@ -3080,22 +3103,8 @@ internal sealed class Sts2RuntimeReflectionReader
 
             return match.Value;
         });
-        var containsPlaceholders = ContainsDescriptionPlaceholder(rendered);
-        if (preferred is not null && !containsPlaceholders)
-        {
-            return new RenderOutcome(rendered, "resolved", "runtime_rendered");
-        }
 
-        if (!containsPlaceholders)
-        {
-            return new RenderOutcome(rendered, "resolved", preferred is not null ? "runtime_rendered_with_var_substitution" : "rendered_from_vars");
-        }
-
-        var hasResolvedVariables = (variables ?? Array.Empty<DescriptionVariable>()).Any(variable => variable.Value is not null);
-        return new RenderOutcome(
-            rendered,
-            hasResolvedVariables ? "partial" : "template_fallback",
-            preferred is not null ? "runtime_template_fallback" : "raw_template");
+        return NormalizeDescriptionText(rendered);
     }
 
     private static string? NormalizeDescriptionText(string? text)
@@ -3105,11 +3114,35 @@ internal sealed class Sts2RuntimeReflectionReader
             return null;
         }
 
-        var normalized = RichTextTagRegex.Replace(text, string.Empty).Trim();
+        var normalized = NormalizeDescriptionRichText(text).Trim();
         return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
 
-    private static string? ChooseCompatibilityDescription(string? rendered, string? raw)
+    private static string NormalizeDescriptionRichText(string text)
+    {
+        var normalized = text;
+        for (var pass = 0; pass < 4; pass += 1)
+        {
+            var replaced = RichTextPairRegex.Replace(normalized, match =>
+            {
+                var tag = match.Groups["tag"].Value;
+                var content = match.Groups["content"].Value;
+                return string.Equals(tag, "gold", StringComparison.OrdinalIgnoreCase)
+                    ? $"**{content.Trim()}**"
+                    : content;
+            });
+            if (string.Equals(replaced, normalized, StringComparison.Ordinal))
+            {
+                break;
+            }
+
+            normalized = replaced;
+        }
+
+        return RichTextTagRegex.Replace(normalized, string.Empty);
+    }
+
+    private static string? ChooseCanonicalDescription(string? rendered, string? raw)
     {
         return NormalizeDescriptionText(rendered) ?? NormalizeDescriptionText(raw);
     }
@@ -3500,8 +3533,6 @@ internal sealed class Sts2RuntimeReflectionReader
             ["target_type"] = card.TargetType,
             ["canonical_card_id"] = card.CanonicalCardId,
             ["description"] = card.Description,
-            ["description_raw"] = card.DescriptionRaw,
-            ["description_rendered"] = card.DescriptionRendered,
             ["description_quality"] = card.DescriptionQuality,
             ["description_source"] = card.DescriptionSource,
             ["description_vars"] = card.DescriptionVars,
@@ -3713,11 +3744,11 @@ internal sealed class Sts2RuntimeReflectionReader
     private readonly record struct DescriptionExtraction(
         string? Raw,
         string? Rendered,
+        string? Description,
         string? Quality,
         string? Source,
         IReadOnlyList<DescriptionVariable> Vars,
-        IReadOnlyList<GlossaryAnchor> Glossary,
-        string? CompatibilityDescription);
+        IReadOnlyList<GlossaryAnchor> Glossary);
 
     private readonly record struct HandCardDescriptor(
         string CardId,
@@ -3727,8 +3758,6 @@ internal sealed class Sts2RuntimeReflectionReader
         bool Playable,
         string? CanonicalCardId,
         string? Description,
-        string? DescriptionRaw,
-        string? DescriptionRendered,
         string? DescriptionQuality,
         string? DescriptionSource,
         IReadOnlyList<DescriptionVariable> DescriptionVars,

@@ -62,8 +62,6 @@ class CardView:
     rarity: str | None = None
     traits: list[str] = field(default_factory=list)
     keywords: list[str] = field(default_factory=list)
-    description_raw: str | None = None
-    description_rendered: str | None = None
     description_quality: str | None = None
     description_source: str | None = None
     description_vars: list[DescriptionVariable] = field(default_factory=list)
@@ -77,8 +75,6 @@ class PowerView:
     amount: int | None = None
     description: str | None = None
     canonical_power_id: str | None = None
-    description_raw: str | None = None
-    description_rendered: str | None = None
     description_quality: str | None = None
     description_source: str | None = None
     description_vars: list[DescriptionVariable] = field(default_factory=list)

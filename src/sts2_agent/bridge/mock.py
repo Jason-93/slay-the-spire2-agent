@@ -187,9 +187,6 @@ class MockGameBridge(GameBridge):
 
     @staticmethod
     def _build_card(raw: dict[str, Any]) -> CardView:
-        description_raw = MockGameBridge._optional_str(raw.get("description_raw"))
-        description_rendered = MockGameBridge._optional_str(raw.get("description_rendered"))
-        description = MockGameBridge._optional_str(raw.get("description")) or description_rendered or description_raw
         return CardView(
             card_id=str(raw.get("card_id") or ""),
             name=str(raw.get("name") or ""),
@@ -197,7 +194,7 @@ class MockGameBridge(GameBridge):
             playable=bool(raw.get("playable", True)),
             instance_card_id=raw.get("instance_card_id"),
             canonical_card_id=raw.get("canonical_card_id"),
-            description=description,
+            description=MockGameBridge._optional_str(raw.get("description")),
             cost_for_turn=MockGameBridge._optional_int(raw.get("cost_for_turn")),
             upgraded=raw.get("upgraded") if isinstance(raw.get("upgraded"), bool) else None,
             target_type=raw.get("target_type"),
@@ -205,8 +202,6 @@ class MockGameBridge(GameBridge):
             rarity=raw.get("rarity"),
             traits=list(raw.get("traits") or []),
             keywords=list(raw.get("keywords") or []),
-            description_raw=description_raw,
-            description_rendered=description_rendered or description,
             description_quality=MockGameBridge._optional_str(raw.get("description_quality")),
             description_source=MockGameBridge._optional_str(raw.get("description_source")),
             description_vars=MockGameBridge._build_description_vars(raw.get("description_vars")),
@@ -215,17 +210,12 @@ class MockGameBridge(GameBridge):
 
     @staticmethod
     def _build_power(raw: dict[str, Any]) -> PowerView:
-        description_raw = MockGameBridge._optional_str(raw.get("description_raw"))
-        description_rendered = MockGameBridge._optional_str(raw.get("description_rendered"))
-        description = MockGameBridge._optional_str(raw.get("description")) or description_rendered or description_raw
         return PowerView(
             power_id=str(raw.get("power_id") or ""),
             name=str(raw.get("name") or ""),
             amount=MockGameBridge._optional_int(raw.get("amount")),
-            description=description,
+            description=MockGameBridge._optional_str(raw.get("description")),
             canonical_power_id=raw.get("canonical_power_id"),
-            description_raw=description_raw,
-            description_rendered=description_rendered or description,
             description_quality=MockGameBridge._optional_str(raw.get("description_quality")),
             description_source=MockGameBridge._optional_str(raw.get("description_source")),
             description_vars=MockGameBridge._build_description_vars(raw.get("description_vars")),

@@ -226,9 +226,6 @@ class HttpGameBridge(GameBridge):
 
     @staticmethod
     def _decode_card(payload: dict[str, Any]) -> CardView:
-        description_raw = HttpGameBridge._as_optional_str(payload.get("description_raw"))
-        description_rendered = HttpGameBridge._as_optional_str(payload.get("description_rendered"))
-        description = HttpGameBridge._as_optional_str(payload.get("description")) or description_rendered or description_raw
         return CardView(
             card_id=str(payload.get("card_id") or ""),
             name=str(payload.get("name") or ""),
@@ -236,7 +233,7 @@ class HttpGameBridge(GameBridge):
             playable=bool(payload.get("playable", True)),
             instance_card_id=payload.get("instance_card_id"),
             canonical_card_id=payload.get("canonical_card_id"),
-            description=description,
+            description=HttpGameBridge._as_optional_str(payload.get("description")),
             cost_for_turn=HttpGameBridge._as_optional_int(payload.get("cost_for_turn")),
             upgraded=payload.get("upgraded") if isinstance(payload.get("upgraded"), bool) else None,
             target_type=payload.get("target_type"),
@@ -244,8 +241,6 @@ class HttpGameBridge(GameBridge):
             rarity=payload.get("rarity"),
             traits=list(payload.get("traits") or []),
             keywords=list(payload.get("keywords") or []),
-            description_raw=description_raw,
-            description_rendered=description_rendered or description,
             description_quality=HttpGameBridge._as_optional_str(payload.get("description_quality")),
             description_source=HttpGameBridge._as_optional_str(payload.get("description_source")),
             description_vars=HttpGameBridge._decode_description_vars(payload.get("description_vars")),
@@ -254,17 +249,12 @@ class HttpGameBridge(GameBridge):
 
     @staticmethod
     def _decode_power(payload: dict[str, Any]) -> PowerView:
-        description_raw = HttpGameBridge._as_optional_str(payload.get("description_raw"))
-        description_rendered = HttpGameBridge._as_optional_str(payload.get("description_rendered"))
-        description = HttpGameBridge._as_optional_str(payload.get("description")) or description_rendered or description_raw
         return PowerView(
             power_id=str(payload.get("power_id") or ""),
             name=str(payload.get("name") or ""),
             amount=HttpGameBridge._as_optional_int(payload.get("amount")),
-            description=description,
+            description=HttpGameBridge._as_optional_str(payload.get("description")),
             canonical_power_id=payload.get("canonical_power_id"),
-            description_raw=description_raw,
-            description_rendered=description_rendered or description,
             description_quality=HttpGameBridge._as_optional_str(payload.get("description_quality")),
             description_source=HttpGameBridge._as_optional_str(payload.get("description_source")),
             description_vars=HttpGameBridge._decode_description_vars(payload.get("description_vars")),
