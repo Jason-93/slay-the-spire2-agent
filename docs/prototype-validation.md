@@ -149,3 +149,12 @@ python tools/validate_mod_bridge.py
   - `actions = [choose_reward x2, skip_reward]`
   - `metadata.phase_detection.reward_screen_source = "overlay_stack"`
 - 对应 artifacts：`tmp/reward-phase-detection/20260314-105321`
+
+### 2026-03-14（agent reward 决策：skip 模式 live 冒烟）
+
+- 执行命令：`python tools/run_llm_autoplay.py --bridge-base-url "http://127.0.0.1:17654" --reward-mode skip --trace-dir "tmp/llm-autoplay/20260314-reward-skip-live" --max-steps 6`
+- 结果摘要：
+  - `RunSummary.ended_by = "reward_skipped"`
+  - `total_actions = 1`
+  - 提交动作：`skip_reward`
+- 对应 trace：`tmp/llm-autoplay/20260314-reward-skip-live/sess-9a95e0d2.jsonl`

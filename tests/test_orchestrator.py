@@ -319,9 +319,85 @@ class OrchestratorTests(unittest.TestCase):
             self.assertEqual(summary.total_actions, 1)
             self.assertEqual(summary.turns_completed, 1)
             self.assertEqual(summary.current_turn_index, 1)
-            self.assertEqual(summary.ended_by, "battle_completed")
+            self.assertEqual(summary.ended_by, "reward_phase_reached")
+            records = Path(summary.trace_path).read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(records), 2)
+
+    def test_reward_mode_halt_stops_without_writes(self) -> None:
+        bridge = SequencedCombatBridge(
+            [
+                make_window(
+                    phase="reward",
+                    actions=[{"type": "skip_reward", "label": "Skip Reward"}],
+                    metadata={},
+                ),
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orchestrator = AutoplayOrchestrator(
+                bridge=bridge,
+                policy=FirstLegalActionPolicy(),
+                config=OrchestratorConfig(trace_dir=tmpdir, stop_after_player_turn=False, reward_mode="halt"),
+            )
+            summary = orchestrator.run(scenario="live")
+
+            self.assertFalse(summary.completed)
+            self.assertTrue(summary.interrupted)
+            self.assertEqual(summary.ended_by, "reward_phase_reached")
+            self.assertEqual(bridge.submissions, [])
             records = Path(summary.trace_path).read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(records), 1)
+
+    def test_reward_mode_skip_submits_skip_reward(self) -> None:
+        bridge = SequencedCombatBridge(
+            [
+                make_window(
+                    phase="reward",
+                    actions=[{"type": "skip_reward", "label": "Skip Reward"}],
+                    metadata={},
+                ),
+                make_window(phase="map", actions=[{"type": "choose_map_node", "label": "Choose node", "params": {"node": "Monster@3,1"}}], metadata={}),
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orchestrator = AutoplayOrchestrator(
+                bridge=bridge,
+                policy=FirstLegalActionPolicy(),
+                config=OrchestratorConfig(trace_dir=tmpdir, stop_after_player_turn=False, reward_mode="skip", max_steps=4),
+            )
+            summary = orchestrator.run(scenario="live")
+
+            self.assertTrue(summary.completed)
+            self.assertFalse(summary.interrupted)
+            self.assertEqual(summary.ended_by, "reward_skipped")
+            self.assertEqual(bridge.submissions, ["skip_reward"])
+
+    def test_reward_mode_llm_can_choose_reward(self) -> None:
+        bridge = SequencedCombatBridge(
+            [
+                make_window(
+                    phase="reward",
+                    actions=[
+                        {"type": "choose_reward", "label": "Take Reward", "params": {"reward": "Gold", "reward_index": 0}},
+                        {"type": "skip_reward", "label": "Skip Reward"},
+                    ],
+                    metadata={},
+                ),
+                make_window(phase="map", actions=[], metadata={}),
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orchestrator = AutoplayOrchestrator(
+                bridge=bridge,
+                policy=FirstLegalActionPolicy(),
+                config=OrchestratorConfig(trace_dir=tmpdir, stop_after_player_turn=False, reward_mode="llm", max_steps=4),
+            )
+            summary = orchestrator.run(scenario="live")
+
+            self.assertTrue(summary.completed)
+            self.assertFalse(summary.interrupted)
+            self.assertEqual(summary.ended_by, "reward_chosen")
+            self.assertEqual(bridge.submissions, ["choose_reward"])
 
     def test_battle_mode_completes_when_no_enemies_remain_in_combat_snapshot(self) -> None:
         bridge = SequencedCombatBridge(

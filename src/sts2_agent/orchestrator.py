@@ -20,6 +20,7 @@ class OrchestratorConfig:
     max_actions_per_turn: int | None = None
     stop_after_player_turn: bool = True
     auto_end_turn_when_only_end_turn: bool = True
+    reward_mode: str = "halt"  # halt|skip|llm
     state_sync_retries: int = 3
     stale_action_retries: int = 2
     max_turns_per_battle: int | None = None
@@ -106,6 +107,29 @@ class AutoplayOrchestrator:
                     total_actions=total_actions,
                     current_turn_index=current_turn_index,
                 )
+
+            if str(getattr(snapshot, "phase", "")) == "reward":
+                outcome = self._handle_reward_phase(
+                    recorder=recorder,
+                    snapshot=snapshot,
+                    legal_actions=legal_actions,
+                    step_index=step_index,
+                    current_turn_index=current_turn_index,
+                    current_turn_actions=current_turn_actions,
+                    total_actions=total_actions,
+                    turns_completed=turns_completed,
+                    trace_path=trace_path,
+                    session_id=session.session_id,
+                )
+                step_index = outcome["step_index"]
+                current_turn_actions = outcome["current_turn_actions"]
+                total_actions = outcome["total_actions"]
+                stale_action_attempts = outcome["stale_action_attempts"]
+                consecutive_failures = outcome["consecutive_failures"]
+                pending_end_turn_transition = outcome["pending_end_turn_transition"]
+                if outcome["summary"] is not None:
+                    return outcome["summary"]
+                continue
 
             battle_stop_reason = self._battle_completion_reason(snapshot)
             if battle_stop_reason:
@@ -259,6 +283,323 @@ class AutoplayOrchestrator:
             turns_completed=turns_completed,
             total_actions=total_actions,
             current_turn_index=current_turn_index,
+        )
+
+    def _normalized_reward_mode(self) -> str:
+        value = str(getattr(self.config, "reward_mode", "") or "").strip().lower()
+        if value in {"halt", "skip", "llm"}:
+            return value
+        return "halt"
+
+    def _handle_reward_phase(
+        self,
+        *,
+        recorder: JsonlTraceRecorder,
+        snapshot,
+        legal_actions,
+        step_index: int,
+        current_turn_index: int,
+        current_turn_actions: int,
+        total_actions: int,
+        turns_completed: int,
+        trace_path: Path,
+        session_id: str,
+    ) -> dict[str, object]:
+        step_index += 1
+        reward_mode = self._normalized_reward_mode()
+
+        if reward_mode == "halt":
+            policy_output = PolicyDecision(action_id=None, reason="reward phase reached; reward_mode=halt", halt=True)
+            self._record(
+                recorder=recorder,
+                snapshot=snapshot,
+                legal_actions=legal_actions,
+                policy_output=policy_output,
+                bridge_result={"status": "interrupted", "reason": "reward_phase_reached"},
+                interrupted=True,
+                step_index=step_index,
+                current_turn_index=current_turn_index,
+                actions_this_turn=current_turn_actions,
+                total_actions=total_actions,
+                waiting_for_player_turn=False,
+                is_final_step=True,
+                stop_reason="reward_phase_reached",
+                battle_stop_reason="reward_phase_reached",
+            )
+            return self._step_result(
+                step_index=step_index,
+                current_turn_actions=current_turn_actions,
+                total_actions=total_actions,
+                stale_action_attempts=0,
+                consecutive_failures=0,
+                pending_end_turn_transition=None,
+                summary=self._finish(
+                    session_id=session_id,
+                    trace_path=trace_path,
+                    reason="reward_phase_reached",
+                    completed=total_actions > 0,
+                    interrupted=total_actions == 0,
+                    turn_completed=turns_completed > 0,
+                    battle_completed=True,
+                    actions_this_turn=current_turn_actions,
+                    turns_completed=turns_completed,
+                    total_actions=total_actions,
+                    current_turn_index=current_turn_index,
+                ),
+            )
+
+        if not legal_actions:
+            policy_output = PolicyDecision(action_id=None, reason="reward window has no legal actions", halt=True)
+            self._record(
+                recorder=recorder,
+                snapshot=snapshot,
+                legal_actions=legal_actions,
+                policy_output=policy_output,
+                bridge_result={"status": "interrupted", "reason": "no_legal_actions"},
+                interrupted=True,
+                step_index=step_index,
+                current_turn_index=current_turn_index,
+                actions_this_turn=current_turn_actions,
+                total_actions=total_actions,
+                waiting_for_player_turn=False,
+                is_final_step=True,
+                stop_reason="reward_no_legal_actions",
+                battle_stop_reason="reward_no_legal_actions",
+            )
+            return self._step_result(
+                step_index=step_index,
+                current_turn_actions=current_turn_actions,
+                total_actions=total_actions,
+                stale_action_attempts=0,
+                consecutive_failures=0,
+                pending_end_turn_transition=None,
+                summary=self._finish(
+                    session_id=session_id,
+                    trace_path=trace_path,
+                    reason="reward_no_legal_actions",
+                    completed=False,
+                    interrupted=True,
+                    actions_this_turn=current_turn_actions,
+                    turns_completed=turns_completed,
+                    total_actions=total_actions,
+                    current_turn_index=current_turn_index,
+                ),
+            )
+
+        policy_output: PolicyDecision
+        if reward_mode == "skip":
+            selected_action = next((action for action in legal_actions if action.type == "skip_reward"), None)
+            if selected_action is None:
+                policy_output = PolicyDecision(action_id=None, reason="reward_mode=skip but skip_reward is unavailable", halt=True)
+                self._record(
+                    recorder=recorder,
+                    snapshot=snapshot,
+                    legal_actions=legal_actions,
+                    policy_output=policy_output,
+                    bridge_result={"status": "interrupted", "reason": "skip_reward_unavailable"},
+                    interrupted=True,
+                    step_index=step_index,
+                    current_turn_index=current_turn_index,
+                    actions_this_turn=current_turn_actions,
+                    total_actions=total_actions,
+                    waiting_for_player_turn=False,
+                    is_final_step=True,
+                    stop_reason="reward_skip_unavailable",
+                    battle_stop_reason="reward_skip_unavailable",
+                )
+                return self._step_result(
+                    step_index=step_index,
+                    current_turn_actions=current_turn_actions,
+                    total_actions=total_actions,
+                    stale_action_attempts=0,
+                    consecutive_failures=0,
+                    pending_end_turn_transition=None,
+                    summary=self._finish(
+                        session_id=session_id,
+                        trace_path=trace_path,
+                        reason="reward_skip_unavailable",
+                        completed=False,
+                        interrupted=True,
+                        actions_this_turn=current_turn_actions,
+                        turns_completed=turns_completed,
+                        total_actions=total_actions,
+                        current_turn_index=current_turn_index,
+                    ),
+                )
+            policy_output = PolicyDecision(
+                action_id=selected_action.action_id,
+                reason="reward_mode=skip: submit skip_reward",
+                metadata={"reward_mode": "skip"},
+            )
+        else:
+            policy_output = self._decide(snapshot, legal_actions)
+            if policy_output.halt or not policy_output.action_id:
+                self._record(
+                    recorder=recorder,
+                    snapshot=snapshot,
+                    legal_actions=legal_actions,
+                    policy_output=policy_output,
+                    bridge_result={"status": "interrupted", "reason": "policy_halt"},
+                    interrupted=True,
+                    step_index=step_index,
+                    current_turn_index=current_turn_index,
+                    actions_this_turn=current_turn_actions,
+                    total_actions=total_actions,
+                    waiting_for_player_turn=False,
+                    is_final_step=True,
+                    stop_reason="policy_halt",
+                    battle_stop_reason="policy_halt",
+                )
+                return self._step_result(
+                    step_index=step_index,
+                    current_turn_actions=current_turn_actions,
+                    total_actions=total_actions,
+                    stale_action_attempts=0,
+                    consecutive_failures=0,
+                    pending_end_turn_transition=None,
+                    summary=self._finish(
+                        session_id=session_id,
+                        trace_path=trace_path,
+                        reason="policy_halt",
+                        completed=False,
+                        interrupted=True,
+                        actions_this_turn=current_turn_actions,
+                        turns_completed=turns_completed,
+                        total_actions=total_actions,
+                        current_turn_index=current_turn_index,
+                    ),
+                )
+
+            legal_actions_by_id = {action.action_id: action for action in legal_actions}
+            if policy_output.action_id not in legal_actions_by_id:
+                return self._finalize_failure(
+                    exc=InvalidPayloadError("policy returned an action outside the legal action set"),
+                    recorder=recorder,
+                    snapshot=snapshot,
+                    legal_actions=legal_actions,
+                    step_index=step_index,
+                    current_turn_index=current_turn_index,
+                    current_turn_actions=current_turn_actions,
+                    turns_completed=turns_completed,
+                    total_actions=total_actions,
+                    stale_action_attempts=0,
+                    consecutive_failures=1,
+                    trace_path=trace_path,
+                    session_id=session_id,
+                )
+            selected_action = legal_actions_by_id[policy_output.action_id]
+
+        if self.config.dry_run:
+            self._record(
+                recorder=recorder,
+                snapshot=snapshot,
+                legal_actions=legal_actions,
+                policy_output=policy_output,
+                bridge_result={
+                    "status": "dry_run",
+                    "planned_action_id": policy_output.action_id,
+                    "message": "dry run enabled; bridge submission skipped",
+                },
+                interrupted=False,
+                step_index=step_index,
+                current_turn_index=current_turn_index,
+                actions_this_turn=current_turn_actions,
+                total_actions=total_actions,
+                waiting_for_player_turn=False,
+                is_final_step=True,
+                stop_reason="dry_run",
+                battle_stop_reason="dry_run",
+            )
+            return self._step_result(
+                step_index=step_index,
+                current_turn_actions=current_turn_actions,
+                total_actions=total_actions,
+                stale_action_attempts=0,
+                consecutive_failures=0,
+                pending_end_turn_transition=None,
+                summary=self._finish(
+                    session_id=session_id,
+                    trace_path=trace_path,
+                    reason="dry_run",
+                    completed=False,
+                    interrupted=True,
+                    actions_this_turn=current_turn_actions,
+                    turns_completed=turns_completed,
+                    total_actions=total_actions,
+                    current_turn_index=current_turn_index,
+                ),
+            )
+
+        try:
+            result = self.bridge.submit_action(
+                ActionSubmission(
+                    session_id=snapshot.session_id,
+                    decision_id=snapshot.decision_id,
+                    state_version=snapshot.state_version,
+                    action_id=selected_action.action_id,
+                    args=self._build_action_args(selected_action),
+                )
+            )
+        except (InvalidPayloadError, InterruptedSessionError, BridgeError) as exc:
+            return self._finalize_failure(
+                exc=exc,
+                recorder=recorder,
+                snapshot=snapshot,
+                legal_actions=legal_actions,
+                step_index=step_index,
+                current_turn_index=current_turn_index,
+                current_turn_actions=current_turn_actions,
+                turns_completed=turns_completed,
+                total_actions=total_actions,
+                stale_action_attempts=0,
+                consecutive_failures=1,
+                trace_path=trace_path,
+                session_id=session_id,
+            )
+
+        total_actions += 1
+        reward_stop_reason = "reward_action_submitted"
+        if selected_action.type == "skip_reward":
+            reward_stop_reason = "reward_skipped"
+        elif selected_action.type == "choose_reward":
+            reward_stop_reason = "reward_chosen"
+
+        self._record(
+            recorder=recorder,
+            snapshot=snapshot,
+            legal_actions=legal_actions,
+            policy_output=policy_output,
+            bridge_result=to_dict(result),
+            interrupted=False,
+            step_index=step_index,
+            current_turn_index=current_turn_index,
+            actions_this_turn=current_turn_actions,
+            total_actions=total_actions,
+            waiting_for_player_turn=False,
+            is_final_step=True,
+            stop_reason=reward_stop_reason,
+            battle_stop_reason=reward_stop_reason,
+        )
+        return self._step_result(
+            step_index=step_index,
+            current_turn_actions=current_turn_actions,
+            total_actions=total_actions,
+            stale_action_attempts=0,
+            consecutive_failures=0,
+            pending_end_turn_transition=None,
+            summary=self._finish(
+                session_id=session_id,
+                trace_path=trace_path,
+                reason=reward_stop_reason,
+                completed=True,
+                interrupted=False,
+                turn_completed=turns_completed > 0,
+                battle_completed=True,
+                actions_this_turn=current_turn_actions,
+                turns_completed=turns_completed,
+                total_actions=total_actions,
+                current_turn_index=current_turn_index,
+            ),
         )
 
     def _handle_non_player_turn(
@@ -1094,6 +1435,8 @@ class AutoplayOrchestrator:
 
     def _battle_completion_reason(self, snapshot) -> str:
         if self.config.stop_after_player_turn:
+            return ""
+        if snapshot.phase == "reward" and self._normalized_reward_mode() != "halt":
             return ""
         if snapshot.phase != "combat":
             return "battle_completed"

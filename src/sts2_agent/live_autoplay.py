@@ -20,6 +20,7 @@ class LiveAutoplayConfig:
     battle_mode: bool = False
     stop_after_player_turn: bool = True
     auto_end_turn_when_only_end_turn: bool = True
+    reward_mode: str = "halt"  # halt|skip|llm
     max_turns_per_battle: int | None = None
     max_total_actions: int | None = None
     max_consecutive_failures: int = 6
@@ -60,6 +61,7 @@ def run_live_autoplay(config: LiveAutoplayConfig) -> RunSummary:
             max_actions_per_turn=config.max_actions_per_turn,
             stop_after_player_turn=stop_after_player_turn,
             auto_end_turn_when_only_end_turn=config.auto_end_turn_when_only_end_turn,
+            reward_mode=config.reward_mode,
             max_turns_per_battle=config.max_turns_per_battle,
             max_total_actions=config.max_total_actions,
             max_consecutive_failures=config.max_consecutive_failures,

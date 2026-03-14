@@ -40,6 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--temperature", type=float, default=float(os.environ.get("STS2_LLM_TEMPERATURE", "0.2")))
     parser.add_argument("--max-tokens", type=int, default=int(os.environ.get("STS2_LLM_MAX_TOKENS", "256")))
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--reward-mode", default=os.environ.get("STS2_REWARD_MODE", "halt"), choices=("halt", "skip", "llm"))
     parser.set_defaults(
         battle_mode=_read_optional_bool("STS2_BATTLE_MODE", False),
         stop_after_player_turn=_read_optional_bool("STS2_STOP_AFTER_PLAYER_TURN", True),
@@ -90,6 +91,7 @@ def main(argv: list[str] | None = None) -> int:
             policy_timeout_seconds=args.policy_timeout_seconds,
             temperature=args.temperature,
             max_tokens=args.max_tokens,
+            reward_mode=args.reward_mode,
             dry_run=args.dry_run,
         )
     )
