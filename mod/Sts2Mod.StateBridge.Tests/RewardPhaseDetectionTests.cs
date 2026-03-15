@@ -75,6 +75,40 @@ public sealed class RewardPhaseDetectionTests
     }
 
     [Fact]
+    public void BuildCombatWindow_SuppressesActionsDuringEnemyTurn()
+    {
+        var reader = CreateReader();
+        var runNode = new FakeRunNode(new FakeScreenTracker());
+        var runState = new FakeRunState(
+            new[] { new FakeEnemy("enemy-1", true) },
+            currentSide: "Enemy",
+            hand: new[]
+            {
+                new FakeCard("Strike")
+                {
+                    CardId = "strike_red",
+                    Description = "Deal {Damage:diff()} [gold]damage[/gold].",
+                    RenderedDescription = "Deal 6 damage.",
+                    Damage = 6,
+                    TargetType = "AnyEnemy",
+                    CardType = "Attack",
+                    Keywords = new[] { "damage" },
+                },
+            });
+
+        var window = InvokeBuildCombatWindow(reader, runNode, runState);
+        var exported = new CombatWindowExtractor().Export(window, new BridgeSessionState(new BridgeOptions()));
+
+        Assert.Equal(DecisionPhase.Combat, window.Phase);
+        Assert.Empty(window.Actions);
+        Assert.Equal("Enemy", exported.Snapshot.Metadata["current_side"]);
+        Assert.Equal("enemy_turn", exported.Snapshot.Metadata["window_kind"]);
+        Assert.Equal(true, exported.Snapshot.Metadata["actions_suppressed"]);
+        Assert.Equal("non_player_turn", exported.Snapshot.Metadata["actions_suppressed_reason"]);
+        Assert.Empty(exported.Actions);
+    }
+
+    [Fact]
     public void BuildCombatWindow_ExportsRichCardsEnemiesPowersAndRunState()
     {
         var reader = CreateReader();
@@ -816,6 +850,7 @@ public sealed class RewardPhaseDetectionTests
         object? currentRoom = null,
         FakeMapPoint? currentMapPoint = null,
         FakeMap? map = null,
+        string currentSide = "Player",
         IReadOnlyList<FakeCard>? hand = null,
         IReadOnlyList<FakeCard>? drawPile = null,
         IReadOnlyList<FakeCard>? discardPile = null,
@@ -833,6 +868,7 @@ public sealed class RewardPhaseDetectionTests
         {
             new FakePlayer(
                 enemies.ToArray(),
+                currentSide,
                 hand?.ToArray() ?? Array.Empty<FakeCard>(),
                 drawPileObject ?? new FakePile(drawPile?.ToArray() ?? Array.Empty<FakeCard>()),
                 discardPileObject ?? new FakePile(discardPile?.ToArray() ?? Array.Empty<FakeCard>()),
@@ -865,24 +901,25 @@ public sealed class RewardPhaseDetectionTests
 
     private sealed class FakePlayer(
         FakeEnemy[] enemies,
+        string currentSide,
         FakeCard[] handCards,
         object drawPile,
         object discardPile,
         object exhaustPile)
     {
         public int Gold { get; } = 99;
-        public FakeCreature Creature { get; } = new(enemies);
+        public FakeCreature Creature { get; } = new(enemies, currentSide);
         public FakePlayerCombatState PlayerCombatState { get; } = new(handCards, drawPile, discardPile, exhaustPile);
         public List<object> Relics { get; } = new();
         public List<object> PotionSlots { get; } = new();
     }
 
-    private sealed class FakeCreature(FakeEnemy[] enemies)
+    private sealed class FakeCreature(FakeEnemy[] enemies, string currentSide)
     {
         public int CurrentHp { get; } = 80;
         public int MaxHp { get; } = 80;
         public int Block { get; } = 0;
-        public FakeCombatState CombatState { get; } = new(enemies);
+        public FakeCombatState CombatState { get; } = new(enemies, currentSide);
         public List<FakePower> Powers { get; } = new()
         {
             new FakePower("metallicize", "Metallicize", 3, "Gain 3 Block at end of turn.")
@@ -895,10 +932,10 @@ public sealed class RewardPhaseDetectionTests
         };
     }
 
-    private sealed class FakeCombatState(FakeEnemy[] enemies)
+    private sealed class FakeCombatState(FakeEnemy[] enemies, string currentSide)
     {
         public int RoundNumber { get; } = 3;
-        public string CurrentSide { get; } = "Player";
+        public string CurrentSide { get; } = currentSide;
         public List<FakeEnemy> Enemies { get; } = new(enemies);
     }
 

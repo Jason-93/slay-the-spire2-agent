@@ -1255,6 +1255,8 @@ internal sealed class Sts2RuntimeReflectionReader
         var rewardAnalysis = AnalyzeRewardPhase(runNode, runState);
         metadata["phase_detection"] = rewardAnalysis.ToMetadata();
         var actions = new List<RuntimeActionDefinition>();
+        var isPlayerTurn = IsPlayerTurn(runState);
+        metadata["window_kind"] = isPlayerTurn ? "player_turn" : "enemy_turn";
         var liveEnemyIds = enemies.Where(enemy => enemy.IsAlive).Select(enemy => enemy.EnemyId).ToArray();
         if (liveEnemyIds.Length == 0)
         {
@@ -1262,6 +1264,23 @@ internal sealed class Sts2RuntimeReflectionReader
             metadata["reward_pending"] = true;
             metadata["transition_kind"] = "combat_reward_transition";
             LogTextDiagnostics("combat_transition", textDiagnostics);
+            return new RuntimeWindowContext(
+                DecisionPhase.Combat,
+                player,
+                enemies,
+                Array.Empty<string>(),
+                Array.Empty<string>(),
+                Terminal: false,
+                Metadata: metadata,
+                Actions: Array.Empty<RuntimeActionDefinition>(),
+                RunState: runStateSnapshot);
+        }
+
+        if (!isPlayerTurn)
+        {
+            metadata["actions_suppressed"] = true;
+            metadata["actions_suppressed_reason"] = "non_player_turn";
+            LogTextDiagnostics("combat_enemy_turn", textDiagnostics);
             return new RuntimeWindowContext(
                 DecisionPhase.Combat,
                 player,
@@ -1519,6 +1538,18 @@ internal sealed class Sts2RuntimeReflectionReader
         }
 
         return metadata;
+    }
+
+    private bool IsPlayerTurn(object runState)
+    {
+        var combatState = GetCombatState(runState);
+        var currentSide = ConvertToText(GetMemberValue(combatState, "CurrentSide"));
+        if (string.IsNullOrWhiteSpace(currentSide))
+        {
+            return true;
+        }
+
+        return string.Equals(currentSide, "Player", StringComparison.OrdinalIgnoreCase);
     }
 
     private Dictionary<string, object?> CreateBaseMetadata(object runNode, object runState, string phase)
@@ -5209,6 +5240,11 @@ internal sealed class Sts2RuntimeReflectionReader
 
     private RuntimeActionResult ExecutePlayCard(object runState, ActionRequest request, LegalAction action)
     {
+        if (!IsPlayerTurn(runState))
+        {
+            return new RuntimeActionResult(false, "Cards can only be played during the player's turn.", "not_player_turn");
+        }
+
         var player = GetPlayers(runState).FirstOrDefault();
         var playerCombatState = GetMemberValue(player, "PlayerCombatState");
         var hand = GetMemberValue(playerCombatState, "Hand");
@@ -5261,6 +5297,11 @@ internal sealed class Sts2RuntimeReflectionReader
 
     private RuntimeActionResult ExecuteEndTurn(object runState, ActionRequest request)
     {
+        if (!IsPlayerTurn(runState))
+        {
+            return new RuntimeActionResult(false, "End turn is only available during the player's turn.", "not_player_turn");
+        }
+
         var assembly = FindSts2Assembly();
         var playerCommandType = assembly?.GetType("MegaCrit.Sts2.Core.Commands.PlayerCmd");
         var method = playerCommandType?.GetMethod(
