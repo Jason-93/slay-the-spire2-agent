@@ -154,6 +154,64 @@ public sealed class RewardPhaseDetectionTests
     }
 
     [Fact]
+    public void BuildCombatWindow_UsesOverlayHintToExportPlayerHandCombatSelectionWindow()
+    {
+        var reader = CreateReader();
+        var firstHolder = new FakeNHandCardHolder(new FakeCard("Strike") { CardId = "strike_red" });
+        var secondHolder = new FakeNHandCardHolder(new FakeCard("Defend") { CardId = "defend_red", TargetType = "Self", CardType = "Skill" });
+        var playerHand = new FakeNPlayerHandSelection(firstHolder, secondHolder)
+        {
+            IsInCardSelection = false,
+            InSelectMode = false,
+        };
+        var overlayScreen = new FakeNChooseACardSelectionScreen("消耗1张牌");
+        var runNode = new FakeRunNode(
+            new FakeScreenTracker(),
+            new FakeGlobalUi(new FakeOverlayStack(overlayScreen)));
+        var runState = new FakeRunState(
+            new[] { new FakeEnemy("enemy-1", true) },
+            handObject: playerHand);
+
+        var window = InvokeBuildCombatWindow(reader, runNode, runState);
+        var exported = new CombatWindowExtractor().Export(window, new BridgeSessionState(new BridgeOptions()));
+
+        Assert.Equal("combat_card_selection", exported.Snapshot.Metadata["window_kind"]);
+        Assert.Equal("overlay_assisted_player_hand", exported.Snapshot.Metadata["selection_source"]);
+        Assert.Equal("overlay_top", exported.Snapshot.Metadata["selection_prompt_source"]);
+        Assert.Equal("消耗1张牌", exported.Snapshot.Metadata["selection_prompt"]);
+        Assert.Equal(playerHand.GetType().FullName, exported.Snapshot.Metadata["selection_screen_type"]);
+        Assert.Contains(window.Actions, action => action.Type == "choose_combat_card");
+        Assert.DoesNotContain(window.Actions, action => action.Type == "play_card");
+        Assert.DoesNotContain(window.Actions, action => action.Type == "end_turn");
+    }
+
+    [Fact]
+    public void BuildCombatWindow_PrefersOverlayDirectCombatSelectionWindow()
+    {
+        var reader = CreateReader();
+        var firstHolder = new FakeNCardHolder(new FakeCard("Inflame") { CardId = "inflame_red", CardType = "Power", TargetType = "Self" });
+        var secondHolder = new FakeNCardHolder(new FakeCard("Demon Form") { CardId = "demon_form_red", CardType = "Power", TargetType = "Self" });
+        var selectionScreen = new FakeNChooseACardSelectionScreenDirect("选择1张牌", firstHolder, secondHolder);
+        var runNode = new FakeRunNode(
+            new FakeScreenTracker(),
+            new FakeGlobalUi(new FakeOverlayStack(selectionScreen)));
+        var runState = new FakeRunState(new[] { new FakeEnemy("enemy-1", true) });
+
+        var window = InvokeBuildCombatWindow(reader, runNode, runState);
+        var exported = new CombatWindowExtractor().Export(window, new BridgeSessionState(new BridgeOptions()));
+
+        Assert.Equal("combat_card_selection", exported.Snapshot.Metadata["window_kind"]);
+        Assert.Equal("overlay_direct", exported.Snapshot.Metadata["selection_source"]);
+        Assert.Equal("selection_screen", exported.Snapshot.Metadata["selection_prompt_source"]);
+        Assert.Equal("选择1张牌", exported.Snapshot.Metadata["selection_prompt"]);
+        Assert.Equal(selectionScreen.GetType().FullName, exported.Snapshot.Metadata["selection_screen_type"]);
+        Assert.Contains(window.Actions, action => action.Type == "choose_combat_card");
+        Assert.Contains(window.Actions, action => action.Type == "cancel_combat_selection");
+        Assert.DoesNotContain(window.Actions, action => action.Type == "play_card");
+        Assert.DoesNotContain(window.Actions, action => action.Type == "end_turn");
+    }
+
+    [Fact]
     public void ExecuteChooseCombatCard_SelectsCurrentChoice()
     {
         var reader = CreateReader();
@@ -187,6 +245,39 @@ public sealed class RewardPhaseDetectionTests
         Assert.Equal("Defend", selectionScreen.SelectedChoice!.Card.Title);
         Assert.Equal("choose_combat_card", metadata["action_type"]);
         Assert.Equal(1, metadata["selection_index"]);
+    }
+
+    [Fact]
+    public void ExecuteChooseCombatCard_UsesOverlayDirectSelectHolder()
+    {
+        var reader = CreateReader();
+        var firstHolder = new FakeNCardHolder(new FakeCard("Inflame") { CardId = "inflame_red", CardType = "Power", TargetType = "Self" });
+        var secondHolder = new FakeNCardHolder(new FakeCard("Demon Form") { CardId = "demon_form_red", CardType = "Power", TargetType = "Self" });
+        var selectionScreen = new FakeNChooseACardSelectionScreenDirect("选择1张牌", firstHolder, secondHolder);
+        var runNode = new FakeRunNode(
+            new FakeScreenTracker(),
+            new FakeGlobalUi(new FakeOverlayStack(selectionScreen)));
+        var runState = new FakeRunState(new[] { new FakeEnemy("enemy-1", true) });
+        var window = InvokeBuildCombatWindow(reader, runNode, runState);
+        var runtimeAction = Assert.Single(window.Actions, candidate =>
+            candidate.Type == "choose_combat_card" &&
+            Equals(candidate.Parameters["selection_index"], 1));
+        var action = new LegalAction(
+            "act-select",
+            runtimeAction.Type,
+            runtimeAction.Label,
+            runtimeAction.Parameters,
+            runtimeAction.TargetConstraints ?? Array.Empty<string>(),
+            runtimeAction.Metadata ?? new Dictionary<string, object?>());
+        var request = new ActionRequest("dec-1", "act-select", null, action.Params, Guid.NewGuid().ToString("N"));
+
+        var result = InvokeExecuteChooseCombatCard(reader, runNode, runState, request, action);
+        var accepted = (bool)result.GetType().GetProperty("Accepted")!.GetValue(result)!;
+        var metadata = (IReadOnlyDictionary<string, object?>)result.GetType().GetProperty("Metadata")!.GetValue(result)!;
+
+        Assert.True(accepted);
+        Assert.Same(secondHolder, selectionScreen.SelectedHolder);
+        Assert.Equal("combat_selection_screen.SelectHolder", metadata["runtime_handler"]);
     }
 
     [Fact]
@@ -255,7 +346,7 @@ public sealed class RewardPhaseDetectionTests
         Assert.Same(secondHolder, playerHand.LastPressedHolder);
         Assert.True(playerHand.CheckIfSelectionCompleteCalled);
         Assert.True(playerHand.ConfirmPressed);
-        Assert.Equal("player_hand_selection.OnHolderPressed", metadata["runtime_handler"]);
+        Assert.Equal("player_hand_selection.SelectCardInSimpleMode", metadata["runtime_handler"]);
     }
 
     [Fact]
@@ -511,6 +602,37 @@ public sealed class RewardPhaseDetectionTests
         Assert.Contains("获得9点**格挡**。", card.Description);
         Assert.Equal(0, renderedDescription.FormattedCallCount);
         Assert.True(renderedDescription.RawCallCount >= 1);
+    }
+
+    [Fact]
+    public void BuildCombatWindow_SkipsGameRenderedDescriptionWhenTemplateHasPlaceholders()
+    {
+        var reader = CreateReader();
+        var runNode = new FakeRunNode(new FakeScreenTracker());
+        var runState = new FakeRunState(
+            new[] { new FakeEnemy("enemy-1", true) },
+            hand: new[]
+            {
+                new FakeCard("祭击")
+                {
+                    CardId = "pommel_strike",
+                    Description = "造成{Damage:diff()}点伤害。\n抽{Cards:diff()}张牌。",
+                    Damage = 9,
+                    Cards = 1,
+                    TargetType = "AnyEnemy",
+                    CardType = "Attack",
+                    ThrowOnGameRender = true,
+                },
+            });
+
+        var window = InvokeBuildCombatWindow(reader, runNode, runState);
+        var exported = new CombatWindowExtractor().Export(window, new BridgeSessionState(new BridgeOptions()));
+
+        Assert.NotNull(exported.Snapshot.Player);
+        var card = Assert.Single(exported.Snapshot.Player!.Hand);
+        Assert.Equal("造成9点伤害。\n抽1张牌。", card.Description);
+        var sourceCard = Assert.Single(runState.Players).PlayerCombatState.HandCards.OfType<FakeCard>().Single();
+        Assert.Equal(0, sourceCard.GameRenderedDescriptionCallCount);
     }
 
     [Fact]
@@ -1201,11 +1323,34 @@ public sealed class RewardPhaseDetectionTests
         public int CurrentStarCost { get; init; } = 1;
         public int? Damage { get; init; } = 6;
         public int? Block { get; init; } = 5;
+        public int? Cards { get; init; }
         public bool IsPlayable { get; init; } = true;
+        public bool ThrowOnGameRender { get; init; }
+        public int GameRenderedDescriptionCallCount { get; private set; }
         public IReadOnlyList<string> Traits { get; init; } = Array.Empty<string>();
         public IReadOnlyList<string> Keywords { get; init; } = Array.Empty<string>();
         public FakeDynamicVars? DynamicVars { get; init; }
         public IReadOnlyList<FakeHoverTip> HoverTips { get; init; } = Array.Empty<FakeHoverTip>();
+
+        public string GetDescriptionForPile(FakeCardPileType _, object? __)
+        {
+            GameRenderedDescriptionCallCount++;
+            if (ThrowOnGameRender)
+            {
+                throw new InvalidOperationException("Game-rendered description should be skipped for placeholder templates.");
+            }
+
+            return RenderedDescription as string ?? Description;
+        }
+    }
+
+    private enum FakeCardPileType
+    {
+        Hand,
+        DrawPile,
+        DiscardPile,
+        ExhaustPile,
+        HandPile,
     }
 
     private sealed class FakeDynamicVars(int? damage = null, int? block = null, int? cards = null)
@@ -1323,6 +1468,29 @@ public sealed class RewardPhaseDetectionTests
         }
     }
 
+    private sealed class FakeNChooseACardSelectionScreen(string prompt)
+    {
+        public string Prompt { get; } = prompt;
+    }
+
+    private sealed class FakeNChooseACardSelectionScreenDirect(string prompt, params FakeNCardHolder[] holders)
+    {
+        public string Prompt { get; } = prompt;
+        public IReadOnlyList<FakeNCardHolder> Holders { get; } = holders;
+        public FakeNCardHolder? SelectedHolder { get; private set; }
+        public bool Cancelled { get; private set; }
+
+        public void SelectHolder(FakeNCardHolder holder)
+        {
+            SelectedHolder = holder;
+        }
+
+        public void CancelFree()
+        {
+            Cancelled = true;
+        }
+    }
+
     private sealed class FakeRunState(
         IEnumerable<FakeEnemy> enemies,
         object? currentRoom = null,
@@ -1337,7 +1505,8 @@ public sealed class RewardPhaseDetectionTests
         int maxPotionCount = 2,
         object? drawPileObject = null,
         object? discardPileObject = null,
-        object? exhaustPileObject = null)
+        object? exhaustPileObject = null,
+        object? handObject = null)
     {
         public object CurrentRoom { get; } = currentRoom ?? new FakeCombatRoom();
         public object CurrentLocation { get; } = "Act1";
@@ -1350,6 +1519,7 @@ public sealed class RewardPhaseDetectionTests
                 enemies.ToArray(),
                 currentSide,
                 hand?.ToArray() ?? Array.Empty<FakeCard>(),
+                handObject,
                 drawPileObject ?? new FakePile(drawPile?.ToArray() ?? Array.Empty<FakeCard>()),
                 discardPileObject ?? new FakePile(discardPile?.ToArray() ?? Array.Empty<FakeCard>()),
                 exhaustPileObject ?? new FakePile(exhaustPile?.ToArray() ?? Array.Empty<FakeCard>()),
@@ -1385,6 +1555,7 @@ public sealed class RewardPhaseDetectionTests
         FakeEnemy[] enemies,
         string currentSide,
         FakeCard[] handCards,
+        object? handObject,
         object drawPile,
         object discardPile,
         object exhaustPile,
@@ -1394,7 +1565,7 @@ public sealed class RewardPhaseDetectionTests
         public int Gold { get; } = 99;
         public int MaxPotionCount { get; } = maxPotionCount;
         public FakeCreature Creature { get; } = new(enemies, currentSide);
-        public FakePlayerCombatState PlayerCombatState { get; } = new(handCards, drawPile, discardPile, exhaustPile);
+        public FakePlayerCombatState PlayerCombatState { get; } = new(handCards, handObject, drawPile, discardPile, exhaustPile);
         public List<object> Relics { get; } = new();
         public List<object> PotionSlots { get; } = new(potionSlots);
     }
@@ -1456,6 +1627,7 @@ public sealed class RewardPhaseDetectionTests
 
     private sealed class FakePlayerCombatState(
         FakeCard[] handCards,
+        object? handObject,
         object drawPile,
         object discardPile,
         object exhaustPile)
@@ -1463,7 +1635,8 @@ public sealed class RewardPhaseDetectionTests
         public int Energy { get; } = 3;
         public int Stars { get; } = 0;
         public int MaxEnergy { get; } = 3;
-        public FakePile Hand { get; } = new(handCards);
+        public FakeCard[] HandCards { get; } = handCards;
+        public object Hand { get; } = handObject ?? new FakePile(handCards);
         public object DrawPile { get; } = drawPile;
         public object DiscardPile { get; } = discardPile;
         public object ExhaustPile { get; } = exhaustPile;

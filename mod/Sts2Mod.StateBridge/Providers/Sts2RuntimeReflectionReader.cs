@@ -107,6 +107,12 @@ internal sealed class Sts2RuntimeReflectionReader
         "CardButtons",
         "_buttons",
         "Buttons",
+        "_cardNodes",
+        "CardNodes",
+        "_displayedCards",
+        "DisplayedCards",
+        "_generatedCards",
+        "GeneratedCards",
     };
 
     private static readonly string[] CardRewardChoiceCardMembers =
@@ -126,6 +132,7 @@ internal sealed class Sts2RuntimeReflectionReader
     private static readonly string[] CardRewardChoiceSelectMethodNames =
     {
         "SelectCard",
+        "SelectHolder",
         "ChooseCard",
         "OnCardSelected",
         "OnCardChosen",
@@ -163,6 +170,7 @@ internal sealed class Sts2RuntimeReflectionReader
     };
     private static readonly string[] CombatCardChoiceCancelMethodNames =
     {
+        "CancelFree",
         "Cancel",
         "CancelSelection",
         "Back",
@@ -1356,6 +1364,9 @@ internal sealed class Sts2RuntimeReflectionReader
             metadata["window_kind"] = "combat_card_selection";
             metadata["selection_kind"] = combatSelection.Value.SelectionKind;
             metadata["selection_prompt"] = combatSelection.Value.SelectionPrompt;
+            metadata["selection_source"] = combatSelection.Value.DetectionSource;
+            metadata["selection_screen_type"] = combatSelection.Value.SelectionScreenType;
+            metadata["selection_prompt_source"] = combatSelection.Value.PromptSource;
             metadata["selection_choice_count"] = combatSelection.Value.Actions.Count(action => string.Equals(action.Type, "choose_combat_card", StringComparison.Ordinal));
             metadata["selection_cancel_available"] = combatSelection.Value.CancelAvailable;
             if (!combatSelection.Value.CancelAvailable)
@@ -2474,19 +2485,34 @@ internal sealed class Sts2RuntimeReflectionReader
 
     private CombatSelectionContext? TryBuildCombatSelectionContext(object runNode, object runState, TextDiagnosticsCollector textDiagnostics)
     {
-        var selectionScreen = GetCombatCardSelectionScreen(runNode, runState, textDiagnostics);
-        if (selectionScreen is null)
+        var selectionResolution = GetCombatCardSelectionResolution(runNode, runState, textDiagnostics);
+        if (selectionResolution is null)
         {
             return null;
         }
 
+        var selectionScreen = selectionResolution.Value.SelectionScreen;
         var choices = FilterCardRewardSelectionChoices(ExtractCardRewardChoiceItems(selectionScreen));
         if (choices.Count == 0)
         {
+            _logger?.Warn(
+                $"Combat selection detection rejected source={selectionResolution.Value.DetectionSource} " +
+                $"screen={selectionResolution.Value.SelectionScreenType ?? "<unknown>"} reason=no_choices");
             return null;
         }
 
         var selectionPrompt = ResolveCombatSelectionPrompt(selectionScreen, textDiagnostics);
+        if (IsGenericCombatSelectionPrompt(selectionPrompt) &&
+            selectionResolution.Value.PromptScreen is not null &&
+            !ReferenceEquals(selectionResolution.Value.PromptScreen, selectionScreen))
+        {
+            var promptFallback = ResolveCombatSelectionPrompt(selectionResolution.Value.PromptScreen, textDiagnostics);
+            if (!string.IsNullOrWhiteSpace(promptFallback))
+            {
+                selectionPrompt = promptFallback;
+            }
+        }
+
         var selectionKind = ResolveCombatSelectionKind(selectionScreen, selectionPrompt);
         var actions = new List<RuntimeActionDefinition>(choices.Count + 1);
         for (var index = 0; index < choices.Count; index++)
@@ -2505,6 +2531,7 @@ internal sealed class Sts2RuntimeReflectionReader
                 Metadata: new Dictionary<string, object?>
                 {
                     ["selection_kind"] = selectionKind,
+                    ["selection_source"] = selectionResolution.Value.DetectionSource,
                     ["card_preview"] = BuildCardPreview(runtimeCard),
                 }));
         }
@@ -2520,11 +2547,15 @@ internal sealed class Sts2RuntimeReflectionReader
                 Metadata: new Dictionary<string, object?>
                 {
                     ["selection_kind"] = selectionKind,
+                    ["selection_source"] = selectionResolution.Value.DetectionSource,
                 }));
         }
         else
         {
             cancelReason = "cancel_hook_not_found";
+            _logger?.Warn(
+                $"Combat selection cancel hook missing source={selectionResolution.Value.DetectionSource} " +
+                $"screen={selectionResolution.Value.SelectionScreenType ?? "<unknown>"}");
         }
 
         return new CombatSelectionContext(
@@ -2533,44 +2564,137 @@ internal sealed class Sts2RuntimeReflectionReader
             SelectionPrompt: selectionPrompt,
             CancelAvailable: cancelAvailable,
             CancelReason: cancelReason,
+            DetectionSource: selectionResolution.Value.DetectionSource,
+            SelectionScreenType: selectionResolution.Value.SelectionScreenType,
+            PromptSource: selectionResolution.Value.PromptSource,
             Actions: actions);
     }
 
     private object? GetCombatCardSelectionScreen(object runNode, object runState, TextDiagnosticsCollector? textDiagnostics = null)
+    {
+        return GetCombatCardSelectionResolution(runNode, runState, textDiagnostics)?.SelectionScreen;
+    }
+
+    private CombatSelectionScreenResolution? GetCombatCardSelectionResolution(
+        object runNode,
+        object runState,
+        TextDiagnosticsCollector? textDiagnostics = null)
     {
         if (!BuildEnemies(runState, new TextDiagnosticsCollector()).Enemies.Any(enemy => enemy.IsAlive))
         {
             return null;
         }
 
-        var playerHandSelection = GetActivePlayerHandSelectionScreen(textDiagnostics);
-        if (playerHandSelection is not null)
-        {
-            return playerHandSelection;
-        }
-
         var overlayTop = GetOverlayTopScreen(runNode);
-        if (overlayTop is not null &&
-            !IsRewardScreenObject(overlayTop) &&
-            LooksLikeCombatCardSelectionScreen(overlayTop, textDiagnostics))
+        var overlayTopType = GetTypeName(overlayTop);
+        var currentPlayerHand = GetCurrentPlayerHand(runState);
+        var staticPlayerHand = GetStaticPlayerHand();
+        var activeCurrentPlayerHandSelection = IsActivePlayerHandSelectionScreen(currentPlayerHand, textDiagnostics)
+            ? currentPlayerHand
+            : null;
+        var activeStaticPlayerHandSelection =
+            !ReferenceEquals(staticPlayerHand, currentPlayerHand) && IsActivePlayerHandSelectionScreen(staticPlayerHand, textDiagnostics)
+                ? staticPlayerHand
+                : null;
+
+        if (overlayTop is not null)
         {
-            return overlayTop;
+            var overlayLooksReward = IsRewardScreenObject(overlayTop);
+            var overlayHasSelectionHint = HasCombatCardSelectionTypeHint(overlayTop) ||
+                                          HasCombatSelectionPromptHint(ResolveCombatSelectionPrompt(overlayTop, textDiagnostics));
+            if ((!overlayLooksReward || overlayHasSelectionHint) &&
+                LooksLikeCombatCardSelectionScreen(overlayTop, textDiagnostics))
+            {
+                return new CombatSelectionScreenResolution(
+                    SelectionScreen: overlayTop,
+                    PromptScreen: overlayTop,
+                    DetectionSource: "overlay_direct",
+                    SelectionScreenType: overlayTopType,
+                    PromptSource: "selection_screen");
+            }
+
+            if (HasCombatCardSelectionTypeHint(overlayTop) &&
+                LooksLikeOverlayBackedPlayerHandSelection(staticPlayerHand, textDiagnostics))
+            {
+                return new CombatSelectionScreenResolution(
+                    SelectionScreen: staticPlayerHand!,
+                    PromptScreen: overlayTop,
+                    DetectionSource: "overlay_assisted_static_player_hand",
+                    SelectionScreenType: GetTypeName(staticPlayerHand),
+                    PromptSource: "overlay_top");
+            }
+
+            if (HasCombatCardSelectionTypeHint(overlayTop) &&
+                LooksLikeOverlayBackedPlayerHandSelection(currentPlayerHand, textDiagnostics))
+            {
+                return new CombatSelectionScreenResolution(
+                    SelectionScreen: currentPlayerHand!,
+                    PromptScreen: overlayTop,
+                    DetectionSource: "overlay_assisted_player_hand",
+                    SelectionScreenType: GetTypeName(currentPlayerHand),
+                    PromptSource: "overlay_top");
+            }
+
+            if (HasCombatCardSelectionTypeHint(overlayTop))
+            {
+                var playerHandChoiceCount = currentPlayerHand is null
+                    ? 0
+                    : FilterCardRewardSelectionChoices(ExtractCardRewardChoiceItems(currentPlayerHand)).Count;
+                var staticPlayerHandChoiceCount = staticPlayerHand is null
+                    ? 0
+                    : FilterCardRewardSelectionChoices(ExtractCardRewardChoiceItems(staticPlayerHand)).Count;
+                _logger?.Warn(
+                    $"Combat selection overlay hint rejected overlay={overlayTopType ?? "<unknown>"} " +
+                    $"reward_like={overlayLooksReward} " +
+                    $"player_hand={GetTypeName(currentPlayerHand) ?? "<none>"} " +
+                    $"player_hand_choices={playerHandChoiceCount} " +
+                    $"static_player_hand={GetTypeName(staticPlayerHand) ?? "<none>"} " +
+                    $"static_player_hand_choices={staticPlayerHandChoiceCount}");
+            }
         }
 
-        var playerHandType = FindSts2Assembly()?.GetType("MegaCrit.Sts2.Core.Nodes.Combat.NPlayerHand");
-        var playerHand = GetMemberValue(playerHandType, "Instance");
+        if (activeCurrentPlayerHandSelection is not null)
+        {
+            return new CombatSelectionScreenResolution(
+                SelectionScreen: activeCurrentPlayerHandSelection,
+                PromptScreen: activeCurrentPlayerHandSelection,
+                DetectionSource: "player_hand_state",
+                SelectionScreenType: GetTypeName(activeCurrentPlayerHandSelection),
+                PromptSource: "selection_screen");
+        }
+
+        if (activeStaticPlayerHandSelection is not null)
+        {
+            return new CombatSelectionScreenResolution(
+                SelectionScreen: activeStaticPlayerHandSelection,
+                PromptScreen: activeStaticPlayerHandSelection,
+                DetectionSource: "player_hand_instance",
+                SelectionScreenType: GetTypeName(activeStaticPlayerHandSelection),
+                PromptSource: "selection_screen");
+        }
+
+        return null;
+    }
+
+    private object? GetActivePlayerHandSelectionScreen(TextDiagnosticsCollector? textDiagnostics)
+    {
+        var playerHand = GetStaticPlayerHand();
         return IsActivePlayerHandSelectionScreen(playerHand, textDiagnostics)
             ? playerHand
             : null;
     }
 
-    private object? GetActivePlayerHandSelectionScreen(TextDiagnosticsCollector? textDiagnostics)
+    private object? GetCurrentPlayerHand(object runState)
+    {
+        var player = GetPlayers(runState).FirstOrDefault();
+        var playerCombatState = GetMemberValue(player, "PlayerCombatState");
+        return GetMemberValue(playerCombatState, "Hand");
+    }
+
+    private object? GetStaticPlayerHand()
     {
         var playerHandType = FindSts2Assembly()?.GetType("MegaCrit.Sts2.Core.Nodes.Combat.NPlayerHand");
-        var playerHand = GetMemberValue(playerHandType, "Instance");
-        return IsActivePlayerHandSelectionScreen(playerHand, textDiagnostics)
-            ? playerHand
-            : null;
+        return GetMemberValue(playerHandType, "Instance");
     }
 
     private bool IsActivePlayerHandSelectionScreen(object? playerHand, TextDiagnosticsCollector? textDiagnostics)
@@ -2586,6 +2710,23 @@ internal sealed class Sts2RuntimeReflectionReader
         return choices.Count > 0 || !string.IsNullOrWhiteSpace(prompt);
     }
 
+    private bool LooksLikeOverlayBackedPlayerHandSelection(object? playerHand, TextDiagnosticsCollector? textDiagnostics)
+    {
+        if (playerHand is null || !LooksLikePlayerHandSelectionScreen(playerHand))
+        {
+            return false;
+        }
+
+        var choices = FilterCardRewardSelectionChoices(ExtractCardRewardChoiceItems(playerHand));
+        if (choices.Count == 0)
+        {
+            return false;
+        }
+
+        var prompt = ResolveCombatSelectionPrompt(playerHand, textDiagnostics);
+        return HasCardSelectionHook(playerHand, choices) || !string.IsNullOrWhiteSpace(prompt);
+    }
+
     private bool LooksLikeCombatCardSelectionScreen(object selectionScreen, TextDiagnosticsCollector? textDiagnostics)
     {
         var choices = FilterCardRewardSelectionChoices(ExtractCardRewardChoiceItems(selectionScreen));
@@ -2594,8 +2735,7 @@ internal sealed class Sts2RuntimeReflectionReader
             return false;
         }
 
-        var hasSelectHook = HasAnyMethod(selectionScreen, CardRewardChoiceSelectMethodNames) ||
-                            choices.Any(choice => HasAnyMethod(choice, CardRewardChoiceSelectMethodNames));
+        var hasSelectHook = HasCardSelectionHook(selectionScreen, choices);
         if (!hasSelectHook)
         {
             return false;
@@ -2603,16 +2743,55 @@ internal sealed class Sts2RuntimeReflectionReader
 
         var typeName = GetTypeName(selectionScreen) ?? string.Empty;
         var prompt = ResolveCombatSelectionPrompt(selectionScreen, textDiagnostics);
-        var hasTypeHint = CombatCardSelectionTypeHints.Any(hint => typeName.Contains(hint, StringComparison.OrdinalIgnoreCase));
-        var hasPromptHint = !string.IsNullOrWhiteSpace(prompt) &&
-                            (prompt.Contains("选择", StringComparison.OrdinalIgnoreCase) ||
-                             prompt.Contains("消耗", StringComparison.OrdinalIgnoreCase) ||
-                             prompt.Contains("弃", StringComparison.OrdinalIgnoreCase) ||
-                             prompt.Contains("select", StringComparison.OrdinalIgnoreCase) ||
-                             prompt.Contains("choose", StringComparison.OrdinalIgnoreCase) ||
-                             prompt.Contains("exhaust", StringComparison.OrdinalIgnoreCase) ||
-                             prompt.Contains("discard", StringComparison.OrdinalIgnoreCase));
+        var hasTypeHint = HasCombatCardSelectionTypeHint(typeName);
+        var hasPromptHint = HasCombatSelectionPromptHint(prompt);
         return hasTypeHint || hasPromptHint;
+    }
+
+    private static bool HasCardSelectionHook(object selectionScreen, IReadOnlyList<object> choices)
+    {
+        return HasAnyMethod(selectionScreen, CardRewardChoiceSelectMethodNames) ||
+               choices.Any(choice => HasAnyMethod(choice, CardRewardChoiceSelectMethodNames));
+    }
+
+    private static bool HasCombatCardSelectionTypeHint(object? selectionScreen)
+    {
+        return HasCombatCardSelectionTypeHint(GetTypeName(selectionScreen));
+    }
+
+    private static bool HasCombatCardSelectionTypeHint(string? typeName)
+    {
+        if (string.IsNullOrWhiteSpace(typeName))
+        {
+            return false;
+        }
+
+        return CombatCardSelectionTypeHints.Any(hint => typeName.Contains(hint, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool HasCombatSelectionPromptHint(string? prompt)
+    {
+        return !string.IsNullOrWhiteSpace(prompt) &&
+               (prompt.Contains("选择", StringComparison.OrdinalIgnoreCase) ||
+                prompt.Contains("消耗", StringComparison.OrdinalIgnoreCase) ||
+                prompt.Contains("弃", StringComparison.OrdinalIgnoreCase) ||
+                prompt.Contains("select", StringComparison.OrdinalIgnoreCase) ||
+                prompt.Contains("choose", StringComparison.OrdinalIgnoreCase) ||
+                prompt.Contains("exhaust", StringComparison.OrdinalIgnoreCase) ||
+                prompt.Contains("discard", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsGenericCombatSelectionPrompt(string? prompt)
+    {
+        if (string.IsNullOrWhiteSpace(prompt))
+        {
+            return true;
+        }
+
+        var normalized = NormalizeLabel(prompt);
+        return string.Equals(normalized, "hand", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(normalized, "cards", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(normalized, "card", StringComparison.OrdinalIgnoreCase);
     }
 
     private RuntimeCard BuildCombatSelectionCard(object choice, int index, TextDiagnosticsCollector textDiagnostics)
@@ -2870,6 +3049,14 @@ internal sealed class Sts2RuntimeReflectionReader
             GetMemberValue(cardRewardScreen, "_grid"),
             GetMemberValue(cardRewardScreen, "Selection"),
             GetMemberValue(cardRewardScreen, "_selection"),
+            GetMemberValue(cardRewardScreen, "CardSelection"),
+            GetMemberValue(cardRewardScreen, "_cardSelection"),
+            GetMemberValue(cardRewardScreen, "CardSelectionContainer"),
+            GetMemberValue(cardRewardScreen, "_cardSelectionContainer"),
+            GetMemberValue(cardRewardScreen, "ChoiceContainer"),
+            GetMemberValue(cardRewardScreen, "_choiceContainer"),
+            GetMemberValue(cardRewardScreen, "CardsContainer"),
+            GetMemberValue(cardRewardScreen, "_cardsContainer"),
         };
         foreach (var container in nestedContainers.Where(container => container is not null))
         {
@@ -2888,6 +3075,12 @@ internal sealed class Sts2RuntimeReflectionReader
                     return items;
                 }
             }
+        }
+
+        var scannedChoices = ExtractLikelyCardChoiceDescendants(cardRewardScreen);
+        if (scannedChoices.Count > 0)
+        {
+            return scannedChoices;
         }
 
         return new List<object>();
@@ -2911,7 +3104,7 @@ internal sealed class Sts2RuntimeReflectionReader
     private List<object> ExtractCardRewardChoiceHoldersFromContainer(object container)
     {
         var cardHolderType = FindSts2Assembly()?.GetType("MegaCrit.Sts2.Core.Nodes.Cards.Holders.NCardHolder");
-        return EnumerateNodeDescendants(container, maxDepth: 6)
+        var holders = EnumerateNodeDescendants(container, maxDepth: 10)
             .Where(child =>
             {
                 var typeName = GetTypeName(child) ?? string.Empty;
@@ -2929,6 +3122,34 @@ internal sealed class Sts2RuntimeReflectionReader
 
                 return false;
             })
+            .ToList();
+        if (holders.Count > 0)
+        {
+            return holders;
+        }
+
+        return ExtractLikelyCardChoiceDescendants(container);
+    }
+
+    private List<object> ExtractLikelyCardChoiceDescendants(object container)
+    {
+        return EnumerateNodeDescendants(container, maxDepth: 10)
+            .Where(child =>
+            {
+                if (LooksLikeCardHolder(child))
+                {
+                    return true;
+                }
+
+                var card = ResolveCardRewardChoiceCard(child);
+                if (card is not null && LooksLikeCardModel(card))
+                {
+                    return true;
+                }
+
+                return LooksLikeCardModel(child);
+            })
+            .Distinct(ReferenceEqualityComparer.Instance)
             .ToList();
     }
 
@@ -3342,12 +3563,14 @@ internal sealed class Sts2RuntimeReflectionReader
             "DescriptionRendered",
             "ResolvedDescription",
             "CurrentDescription");
-        var gameRendered = ResolveGameRenderedCardDescription(card, source, effectiveContext, path);
         var seedVariables = ResolveCardDescriptionSeedVariables(source ?? card, raw, keywords)
             .Concat(ExtractDescriptionVariablesFromLocString(descriptionValue, "loc_string"))
             .Concat(ExtractDescriptionVariablesFromLocString(boundDescriptionValue, "bound_loc_string"))
             .ToArray();
         var vars = ExtractDescriptionVariables(source ?? card, raw, seedVariables);
+        var gameRendered = ShouldAttemptGameRenderedCardDescription(raw)
+            ? ResolveGameRenderedCardDescription(card, source, effectiveContext, path)
+            : new GameRenderedCardDescription(null, "game_render_skipped_placeholders");
         var renderOutcome = RenderCardDescription(raw, gameRendered.Text, runtimeRendered, vars);
         var glossary = ExtractGlossaryAnchors(
             canonicalId: null,
@@ -3376,6 +3599,11 @@ internal sealed class Sts2RuntimeReflectionReader
             glossary: glossary,
             context: GetCardDescriptionContextLabel(effectiveContext));
         return new DescriptionExtraction(raw, renderOutcome.Text, canonicalDescription, renderOutcome.Quality, renderOutcome.Source, vars, glossary);
+    }
+
+    private static bool ShouldAttemptGameRenderedCardDescription(string? raw)
+    {
+        return !ContainsDescriptionPlaceholder(raw);
     }
 
     private IReadOnlyList<GlossaryAnchor> FilterCardGlossary(
@@ -7056,7 +7284,16 @@ internal sealed class Sts2RuntimeReflectionReader
         string? SelectionPrompt,
         bool CancelAvailable,
         string? CancelReason,
+        string DetectionSource,
+        string? SelectionScreenType,
+        string PromptSource,
         IReadOnlyList<RuntimeActionDefinition> Actions);
+    private readonly record struct CombatSelectionScreenResolution(
+        object SelectionScreen,
+        object PromptScreen,
+        string DetectionSource,
+        string? SelectionScreenType,
+        string PromptSource);
     private readonly record struct RewardPhaseAnalysis(
         bool TreatAsReward,
         bool HasRewardScreen,
@@ -8202,7 +8439,7 @@ internal sealed class Sts2RuntimeReflectionReader
 
         if (TryInvokeFirstCompatibleMethod(
             selectionScreen,
-            new[] { "OnHolderPressed", "SelectCardInSimpleMode", "SelectCardInUpgradeMode" },
+            new[] { "SelectCardInSimpleMode", "SelectCardInUpgradeMode", "OnHolderPressed" },
             new[]
             {
                 new object?[] { holder },
@@ -8300,6 +8537,23 @@ internal sealed class Sts2RuntimeReflectionReader
         var typeName = GetTypeName(value) ?? string.Empty;
         return typeName.Contains("NHandCardHolder", StringComparison.OrdinalIgnoreCase) ||
                typeName.Contains("NCardHolder", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool LooksLikeCardModel(object? value)
+    {
+        if (value is null)
+        {
+            return false;
+        }
+
+        var typeName = GetTypeName(value) ?? string.Empty;
+        return typeName.Contains("Card", StringComparison.OrdinalIgnoreCase) &&
+               (GetMemberValue(value, "CardId") is not null ||
+                GetMemberValue(value, "CardType") is not null ||
+                GetMemberValue(value, "TargetType") is not null ||
+                GetMemberValue(value, "CardData") is not null ||
+                GetMemberValue(value, "Definition") is not null ||
+                GetMemberValue(value, "Data") is not null);
     }
 
     private RuntimeActionResult ExecuteChooseReward(object runNode, ActionRequest request, LegalAction action)
