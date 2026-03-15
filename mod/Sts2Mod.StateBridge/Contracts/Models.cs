@@ -183,6 +183,17 @@ public sealed record AgentStatusUpdateRequest(
     int? Turn = null,
     int? Step = null);
 
+public sealed record AgentStatusHistoryEntry(
+    string Status,
+    string? Phase = null,
+    string? ActionLabel = null,
+    string? Reason = null,
+    string? Detail = null,
+    string? Confidence = null,
+    int? Turn = null,
+    int? Step = null,
+    string? UpdatedAt = null);
+
 public sealed record AgentStatusResponse(
     bool Empty,
     bool Stale,
@@ -197,7 +208,8 @@ public sealed record AgentStatusResponse(
     string? Confidence = null,
     int? Turn = null,
     int? Step = null,
-    string? UpdatedAt = null);
+    string? UpdatedAt = null,
+    IReadOnlyList<AgentStatusHistoryEntry>? History = null);
 
 public sealed record ErrorResponse(string ErrorCode, string Message, string? TraceId = null);
 

@@ -6,7 +6,9 @@ internal static class AgentStatusStateStore
 {
     private static readonly object Gate = new();
     private static readonly TimeSpan StaleTtl = TimeSpan.FromSeconds(5);
+    private const int HistoryLimit = 12;
     private static StoredAgentStatus? _current;
+    private static readonly List<StoredAgentStatus> History = [];
 
     public static bool TryValidate(AgentStatusUpdateRequest? request, out string message)
     {
@@ -61,6 +63,7 @@ internal static class AgentStatusStateStore
                 request.Turn,
                 request.Step,
                 DateTimeOffset.UtcNow);
+            AppendHistory(_current);
             return CreateResponse(_current, DateTimeOffset.UtcNow);
         }
     }
@@ -78,6 +81,7 @@ internal static class AgentStatusStateStore
         lock (Gate)
         {
             _current = null;
+            History.Clear();
             return EmptyResponse();
         }
     }
@@ -104,7 +108,8 @@ internal static class AgentStatusStateStore
             Confidence: current.Confidence,
             Turn: current.Turn,
             Step: current.Step,
-            UpdatedAt: current.UpdatedAt);
+            UpdatedAt: current.UpdatedAt,
+            History: BuildHistory(now));
     }
 
     private static AgentStatusResponse EmptyResponse()
@@ -112,7 +117,8 @@ internal static class AgentStatusStateStore
         return new AgentStatusResponse(
             Empty: true,
             Stale: false,
-            Status: "idle");
+            Status: "idle",
+            History: []);
     }
 
     private static string? NormalizeOptional(string? value)
@@ -123,6 +129,59 @@ internal static class AgentStatusStateStore
         }
 
         return value.Trim();
+    }
+
+    private static void AppendHistory(StoredAgentStatus current)
+    {
+        if (History.Count > 0 && IsSameHistoryEntry(History[^1], current))
+        {
+            History[^1] = current;
+            return;
+        }
+
+        History.Add(current);
+        if (History.Count > HistoryLimit)
+        {
+            History.RemoveRange(0, History.Count - HistoryLimit);
+        }
+    }
+
+    private static bool IsSameHistoryEntry(StoredAgentStatus left, StoredAgentStatus right)
+    {
+        return string.Equals(left.Status, right.Status, StringComparison.Ordinal)
+            && string.Equals(left.Phase, right.Phase, StringComparison.Ordinal)
+            && string.Equals(left.ActionLabel, right.ActionLabel, StringComparison.Ordinal)
+            && string.Equals(left.Reason, right.Reason, StringComparison.Ordinal)
+            && string.Equals(left.Detail, right.Detail, StringComparison.Ordinal)
+            && string.Equals(left.Confidence, right.Confidence, StringComparison.Ordinal)
+            && left.Turn == right.Turn
+            && left.Step == right.Step;
+    }
+
+    private static IReadOnlyList<AgentStatusHistoryEntry> BuildHistory(DateTimeOffset now)
+    {
+        if (History.Count == 0)
+        {
+            return [];
+        }
+
+        var entries = new List<AgentStatusHistoryEntry>(History.Count);
+        foreach (var item in History)
+        {
+            var stale = now - item.ReceivedAtUtc > StaleTtl;
+            entries.Add(new AgentStatusHistoryEntry(
+                Status: stale ? "stale" : item.Status,
+                Phase: item.Phase,
+                ActionLabel: item.ActionLabel,
+                Reason: item.Reason,
+                Detail: item.Detail,
+                Confidence: item.Confidence,
+                Turn: item.Turn,
+                Step: item.Step,
+                UpdatedAt: item.UpdatedAt));
+        }
+
+        return entries;
     }
 
     private sealed record StoredAgentStatus(

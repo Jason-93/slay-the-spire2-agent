@@ -10,14 +10,16 @@ internal sealed partial class AgentStatusOverlayNode : Control
 {
     public const string NodeNameValue = "Sts2AgentStatusOverlay";
 
-    private const float PanelWidth = 388.0f;
-    private const float PanelHeight = 168.0f;
+    private const float PanelWidth = 412.0f;
+    private const float PanelHeight = 244.0f;
     private const float TopOffset = 84.0f;
     private const float RightMargin = 20.0f;
     private const int TitleFontSize = 14;
-    private const int BodyFontSize = 13;
+    private const int BodyFontSize = 12;
     private const int MaxSummaryLength = 72;
     private const int MaxDetailLength = 240;
+    private const int MaxHistorySummaryLength = 44;
+    private const int MaxHistoryEntries = 6;
 
     private ColorRect? _background;
     private Label? _titleLabel;
@@ -115,7 +117,7 @@ internal sealed partial class AgentStatusOverlayNode : Control
             Name = "Body",
             BbcodeEnabled = false,
             FitContent = false,
-            ScrollActive = false,
+            ScrollActive = true,
             MouseFilter = MouseFilterEnum.Ignore,
             AutowrapMode = TextServer.AutowrapMode.WordSmart,
             Position = new Vector2(12.0f, 30.0f),
@@ -160,6 +162,7 @@ internal sealed partial class AgentStatusOverlayNode : Control
         }
 
         _bodyLabel.Text = text;
+        _bodyLabel.ScrollToLine(Math.Max(0, _bodyLabel.GetLineCount() - 1));
         _lastText = text;
     }
 
@@ -257,10 +260,55 @@ internal sealed partial class AgentStatusOverlayNode : Control
         var detail = NormalizeMultiline(snapshot.Detail, MaxDetailLength);
         if (!string.IsNullOrWhiteSpace(detail))
         {
-            builder.Append("思路: ").Append(detail.Replace("\n", "\n      ", StringComparison.Ordinal));
+            builder.Append("思路: ").Append(detail.Replace("\n", "\n      ", StringComparison.Ordinal)).AppendLine();
+        }
+
+        var history = snapshot.History ?? [];
+        if (history.Count > 1)
+        {
+            builder.AppendLine();
+            builder.AppendLine("最近决策:");
+            var start = Math.Max(0, history.Count - MaxHistoryEntries);
+            for (var index = start; index < history.Count; index++)
+            {
+                var entry = history[index];
+                builder.Append("  ");
+                builder.Append(index == history.Count - 1 ? "-> " : "· ");
+                builder.Append(FormatHistoryEntry(entry));
+                if (index < history.Count - 1)
+                {
+                    builder.AppendLine();
+                }
+            }
         }
 
         return builder.ToString().TrimEnd();
+    }
+
+    private static string FormatHistoryEntry(AgentStatusHistoryEntry entry)
+    {
+        var builder = new StringBuilder();
+        builder.Append(entry.Status);
+        if (!string.IsNullOrWhiteSpace(entry.ActionLabel))
+        {
+            builder.Append(" / ").Append(entry.ActionLabel);
+        }
+
+        var summary = NormalizeSingleLine(entry.Reason, MaxHistorySummaryLength);
+        if (!string.IsNullOrWhiteSpace(summary))
+        {
+            builder.Append(" / ").Append(summary);
+        }
+
+        if (entry.Turn is not null || entry.Step is not null)
+        {
+            builder.Append(" / ");
+            builder.Append(entry.Turn?.ToString() ?? "-");
+            builder.Append('/');
+            builder.Append(entry.Step?.ToString() ?? "-");
+        }
+
+        return builder.ToString();
     }
 
     private static string NormalizeSingleLine(string? value, int limit)
