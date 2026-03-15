@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -20,6 +21,7 @@ except ImportError:
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PORT = 17654
+DESCRIPTION_PLACEHOLDER_RE = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*(?::[^}]+)?\}")
 
 
 @dataclass(frozen=True)
@@ -239,6 +241,72 @@ def detect_progress(
     return evidence
 
 
+def contains_description_placeholder(text: Any) -> bool:
+    return isinstance(text, str) and bool(DESCRIPTION_PLACEHOLDER_RE.search(text))
+
+
+def audit_card_descriptions(
+    snapshot: dict[str, Any],
+    actions: list[dict[str, Any]],
+) -> dict[str, Any]:
+    placeholder_paths: list[str] = []
+    preview_mismatches: list[dict[str, str]] = []
+    audited_card_count = 0
+
+    player = snapshot.get("player")
+    player = player if isinstance(player, dict) else {}
+    pile_fields = ("hand", "draw_pile_cards", "discard_pile_cards", "exhaust_pile_cards")
+    hand_descriptions_by_id: dict[str, str] = {}
+
+    for pile_name in pile_fields:
+        pile_cards = player.get(pile_name)
+        pile_cards = pile_cards if isinstance(pile_cards, list) else []
+        for index, card in enumerate(pile_cards):
+            if not isinstance(card, dict):
+                continue
+            audited_card_count += 1
+            description = card.get("description")
+            if contains_description_placeholder(description):
+                placeholder_paths.append(f"snapshot.player.{pile_name}[{index}].description")
+            card_id = card.get("card_id")
+            if pile_name == "hand" and isinstance(card_id, str) and isinstance(description, str) and description:
+                hand_descriptions_by_id[card_id] = description
+
+    for index, action in enumerate(actions):
+        if not isinstance(action, dict):
+            continue
+        metadata = action.get("metadata")
+        metadata = metadata if isinstance(metadata, dict) else {}
+        preview = metadata.get("card_preview")
+        preview = preview if isinstance(preview, dict) else {}
+        if not preview:
+            continue
+        audited_card_count += 1
+        description = preview.get("description")
+        if contains_description_placeholder(description):
+            placeholder_paths.append(f"actions[{index}].metadata.card_preview.description")
+        card_id = preview.get("card_id")
+        if isinstance(card_id, str) and isinstance(description, str):
+            snapshot_description = hand_descriptions_by_id.get(card_id)
+            if snapshot_description and snapshot_description != description:
+                preview_mismatches.append(
+                    {
+                        "card_id": card_id,
+                        "snapshot_description": snapshot_description,
+                        "preview_description": description,
+                        "path": f"actions[{index}].metadata.card_preview.description",
+                    }
+                )
+
+    return {
+        "audited_card_count": audited_card_count,
+        "placeholder_description_count": len(placeholder_paths),
+        "placeholder_description_paths": placeholder_paths[:20],
+        "preview_mismatch_count": len(preview_mismatches),
+        "preview_mismatches": preview_mismatches[:10],
+    }
+
+
 def summarize_snapshot_schema(snapshot: dict[str, Any]) -> dict[str, Any]:
     player = snapshot.get("player")
     hand = player.get("hand") if isinstance(player, dict) else []
@@ -378,6 +446,7 @@ def build_result(
     before_schema_summary: dict[str, Any] | None = None,
     after_schema_summary: dict[str, Any] | None = None,
     runtime_log_summary: dict[str, Any] | None = None,
+    description_audit: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "mode": mode,
@@ -395,6 +464,7 @@ def build_result(
         "before_schema_summary": before_schema_summary,
         "after_schema_summary": after_schema_summary,
         "runtime_log_summary": runtime_log_summary,
+        "description_audit": description_audit,
         "verdict": verdict,
         "summary": summary,
         "http_status": http_status,
@@ -467,6 +537,8 @@ def run_validation(args: argparse.Namespace) -> int:
     write_json(artifact_dir / "before_actions.json", actions)
     before_schema_summary = summarize_snapshot_schema(snapshot)
     write_json(artifact_dir / "before_schema_summary.json", before_schema_summary)
+    before_description_audit = audit_card_descriptions(snapshot, actions)
+    write_json(artifact_dir / "before_description_audit.json", before_description_audit)
     runtime_log_summary = summarize_runtime_log(discover_runtime_log())
     if runtime_log_summary is not None:
         write_json(artifact_dir / "runtime_log_summary.json", runtime_log_summary)
@@ -495,6 +567,7 @@ def run_validation(args: argparse.Namespace) -> int:
             snapshot_schema_summary=before_schema_summary,
             before_schema_summary=before_schema_summary,
             runtime_log_summary=runtime_log_summary,
+            description_audit=before_description_audit,
         )
         write_json(artifact_dir / "result.json", result)
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -513,6 +586,7 @@ def run_validation(args: argparse.Namespace) -> int:
             snapshot_schema_summary=before_schema_summary,
             before_schema_summary=before_schema_summary,
             runtime_log_summary=runtime_log_summary,
+            description_audit=before_description_audit,
         )
         write_json(artifact_dir / "result.json", result)
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -531,6 +605,7 @@ def run_validation(args: argparse.Namespace) -> int:
             snapshot_schema_summary=before_schema_summary,
             before_schema_summary=before_schema_summary,
             runtime_log_summary=runtime_log_summary,
+            description_audit=before_description_audit,
         )
         write_json(artifact_dir / "result.json", result)
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -549,6 +624,7 @@ def run_validation(args: argparse.Namespace) -> int:
             snapshot_schema_summary=before_schema_summary,
             before_schema_summary=before_schema_summary,
             runtime_log_summary=runtime_log_summary,
+            description_audit=before_description_audit,
         )
         write_json(artifact_dir / "result.json", result)
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -567,6 +643,7 @@ def run_validation(args: argparse.Namespace) -> int:
             snapshot_schema_summary=before_schema_summary,
             before_schema_summary=before_schema_summary,
             runtime_log_summary=runtime_log_summary,
+            description_audit=before_description_audit,
         )
         write_json(artifact_dir / "result.json", result)
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -585,6 +662,7 @@ def run_validation(args: argparse.Namespace) -> int:
             snapshot_schema_summary=before_schema_summary,
             before_schema_summary=before_schema_summary,
             runtime_log_summary=runtime_log_summary,
+            description_audit=before_description_audit,
         )
         write_json(artifact_dir / "result.json", result)
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -620,6 +698,8 @@ def run_validation(args: argparse.Namespace) -> int:
     write_json(artifact_dir / "after_actions.json", after_actions)
     after_schema_summary = summarize_snapshot_schema(after_snapshot)
     write_json(artifact_dir / "after_schema_summary.json", after_schema_summary)
+    after_description_audit = audit_card_descriptions(after_snapshot, after_actions)
+    write_json(artifact_dir / "after_description_audit.json", after_description_audit)
     runtime_log_summary = summarize_runtime_log(discover_runtime_log())
     if runtime_log_summary is not None:
         write_json(artifact_dir / "runtime_log_summary.json", runtime_log_summary)
@@ -635,6 +715,15 @@ def run_validation(args: argparse.Namespace) -> int:
     else:
         verdict = "inconclusive"
         summary = "动作已被接受，但在超时窗口内未确认到明确的 live 状态推进。"
+        exit_code = 1
+
+    if after_description_audit["placeholder_description_count"] > 0:
+        verdict = "failed"
+        summary = "live snapshot/actions 仍暴露 description 模板占位符。"
+        exit_code = 1
+    elif after_description_audit["preview_mismatch_count"] > 0:
+        verdict = "failed"
+        summary = "live snapshot 与 card_preview 的 description 语义不一致。"
         exit_code = 1
 
     result = build_result(
@@ -654,6 +743,7 @@ def run_validation(args: argparse.Namespace) -> int:
         before_schema_summary=before_schema_summary,
         after_schema_summary=after_schema_summary,
         runtime_log_summary=runtime_log_summary,
+        description_audit=after_description_audit,
     )
     write_json(artifact_dir / "result.json", result)
     print(json.dumps(result, ensure_ascii=False, indent=2))

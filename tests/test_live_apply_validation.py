@@ -2,10 +2,49 @@ from __future__ import annotations
 
 import unittest
 
-from tools.validate_live_apply import detect_progress, select_candidate
+from tools.validate_live_apply import audit_card_descriptions, contains_description_placeholder, detect_progress, select_candidate
 
 
 class LiveApplyValidationTests(unittest.TestCase):
+    def test_contains_description_placeholder_detects_template_dsl(self) -> None:
+        self.assertTrue(contains_description_placeholder("获得9点**格挡**。\n{IfUpgraded:show:| 随机}**消耗**1张牌。"))
+        self.assertFalse(contains_description_placeholder("获得9点**格挡**。\n**消耗**1张牌。"))
+
+    def test_audit_card_descriptions_reports_placeholders_and_preview_mismatch(self) -> None:
+        snapshot = {
+            "phase": "combat",
+            "player": {
+                "hand": [
+                    {
+                        "card_id": "card-true-grit",
+                        "description": "获得9点**格挡**。\n{IfUpgraded:show:| 随机}**消耗**1张牌。",
+                    }
+                ],
+                "draw_pile_cards": [],
+                "discard_pile_cards": [],
+                "exhaust_pile_cards": [],
+            },
+        }
+        actions = [
+            {
+                "action_id": "act-play",
+                "type": "play_card",
+                "metadata": {
+                    "card_preview": {
+                        "card_id": "card-true-grit",
+                        "description": "获得9点**格挡**。\n**消耗**1张牌。",
+                    }
+                },
+            }
+        ]
+
+        audit = audit_card_descriptions(snapshot, actions)
+
+        self.assertEqual(audit["placeholder_description_count"], 1)
+        self.assertIn("snapshot.player.hand[0].description", audit["placeholder_description_paths"])
+        self.assertEqual(audit["preview_mismatch_count"], 1)
+        self.assertEqual(audit["preview_mismatches"][0]["card_id"], "card-true-grit")
+
     def test_select_candidate_prefers_choose_combat_card_in_combat_selection(self) -> None:
         snapshot = {"phase": "combat"}
         actions = [

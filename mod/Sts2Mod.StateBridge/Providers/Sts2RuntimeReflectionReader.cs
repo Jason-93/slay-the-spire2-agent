@@ -1711,13 +1711,35 @@ internal sealed class Sts2RuntimeReflectionReader
         var drawPile = GetMemberValue(playerCombatState, "DrawPile");
         var discardPile = GetMemberValue(playerCombatState, "DiscardPile");
         var exhaustPile = GetMemberValue(playerCombatState, "ExhaustPile");
-        var handCards = ExtractCards(GetMemberValue(playerCombatState, "Hand"), "player.hand", textDiagnostics);
+        var handCards = ExtractCards(
+            GetMemberValue(playerCombatState, "Hand"),
+            "player.hand",
+            textDiagnostics,
+            CardDescriptionContext.Hand);
         var drawPileCount = CountCards(drawPile);
         var discardPileCount = CountCards(discardPile);
         var exhaustPileCount = CountCards(exhaustPile);
-        var drawPileCards = ExtractCardsWithSource(drawPile, "player.draw_pile_cards", textDiagnostics, "draw_pile", drawPileCount);
-        var discardPileCards = ExtractCardsWithSource(discardPile, "player.discard_pile_cards", textDiagnostics, "discard_pile", discardPileCount);
-        var exhaustPileCards = ExtractCardsWithSource(exhaustPile, "player.exhaust_pile_cards", textDiagnostics, "exhaust_pile", exhaustPileCount);
+        var drawPileCards = ExtractCardsWithSource(
+            drawPile,
+            "player.draw_pile_cards",
+            textDiagnostics,
+            "draw_pile",
+            drawPileCount,
+            CardDescriptionContext.DrawPile);
+        var discardPileCards = ExtractCardsWithSource(
+            discardPile,
+            "player.discard_pile_cards",
+            textDiagnostics,
+            "discard_pile",
+            discardPileCount,
+            CardDescriptionContext.DiscardPile);
+        var exhaustPileCards = ExtractCardsWithSource(
+            exhaustPile,
+            "player.exhaust_pile_cards",
+            textDiagnostics,
+            "exhaust_pile",
+            exhaustPileCount,
+            CardDescriptionContext.ExhaustPile);
         var relics = ExtractLabels(GetMemberValue(player, "Relics"), "player.relics", textDiagnostics);
         var potionCollection = ResolvePotionCollection(player);
         var potions = ExtractPotions(potionCollection, "player.potions", textDiagnostics);
@@ -1777,7 +1799,13 @@ internal sealed class Sts2RuntimeReflectionReader
         return diagnostics;
     }
 
-    private PileCardExtraction ExtractCardsWithSource(object? pile, string path, TextDiagnosticsCollector textDiagnostics, string pileName, int expectedCount)
+    private PileCardExtraction ExtractCardsWithSource(
+        object? pile,
+        string path,
+        TextDiagnosticsCollector textDiagnostics,
+        string pileName,
+        int expectedCount,
+        CardDescriptionContext descriptionContext)
     {
         if (pile is null)
         {
@@ -1792,7 +1820,10 @@ internal sealed class Sts2RuntimeReflectionReader
 
         try
         {
-            return new PileCardExtraction(ExtractCards(pile, path, textDiagnostics), $"{pileName}_cards", expectedCount);
+            return new PileCardExtraction(
+                ExtractCards(pile, path, textDiagnostics, descriptionContext),
+                $"{pileName}_cards",
+                expectedCount);
         }
         catch (Exception ex)
         {
@@ -1990,7 +2021,13 @@ internal sealed class Sts2RuntimeReflectionReader
                     GetMemberValue(card, "Keywords") ?? GetMemberValue(card, "KeywordIds"),
                     $"player.hand[{index}].keywords",
                     textDiagnostics);
-                var description = ResolveCardDescription(card, $"player.hand[{index}].description", textDiagnostics, traits, keywords);
+                var description = ResolveCardDescription(
+                    card,
+                    $"player.hand[{index}].description",
+                    textDiagnostics,
+                    CardDescriptionContext.Hand,
+                    traits,
+                    keywords);
                 return new HandCardDescriptor(
                     RuntimeCardIdentity.CreateCardId(card, index),
                     nameResolution.Text ?? $"card_{index}",
@@ -2007,14 +2044,18 @@ internal sealed class Sts2RuntimeReflectionReader
             .ToArray();
     }
 
-    private IReadOnlyList<RuntimeCard> ExtractCards(object? pile, string path, TextDiagnosticsCollector textDiagnostics)
+    private IReadOnlyList<RuntimeCard> ExtractCards(
+        object? pile,
+        string path,
+        TextDiagnosticsCollector textDiagnostics,
+        CardDescriptionContext descriptionContext = CardDescriptionContext.Unknown)
     {
         var results = new List<RuntimeCard>();
         foreach (var (card, index) in EnumerateObjects(GetMemberValue(pile, "Cards")).Select((card, index) => (card, index)))
         {
             try
             {
-                results.Add(BuildRuntimeCard(card, index, path, textDiagnostics));
+                results.Add(BuildRuntimeCard(card, index, path, textDiagnostics, descriptionContext));
             }
             catch (Exception ex)
             {
@@ -2026,7 +2067,12 @@ internal sealed class Sts2RuntimeReflectionReader
         return results;
     }
 
-    private RuntimeCard BuildRuntimeCard(object card, int index, string path, TextDiagnosticsCollector textDiagnostics)
+    private RuntimeCard BuildRuntimeCard(
+        object card,
+        int index,
+        string path,
+        TextDiagnosticsCollector textDiagnostics,
+        CardDescriptionContext descriptionContext = CardDescriptionContext.Unknown)
     {
         var traits = ExtractTextList(
             GetMemberValue(card, "Traits") ?? GetMemberValue(card, "Tags"),
@@ -2036,7 +2082,13 @@ internal sealed class Sts2RuntimeReflectionReader
             GetMemberValue(card, "Keywords") ?? GetMemberValue(card, "KeywordIds"),
             $"{path}[{index}].keywords",
             textDiagnostics);
-        var description = ResolveCardDescription(card, $"{path}[{index}].description", textDiagnostics, traits, keywords);
+        var description = ResolveCardDescription(
+            card,
+            $"{path}[{index}].description",
+            textDiagnostics,
+            descriptionContext,
+            traits,
+            keywords);
         var instanceCardId = RuntimeCardIdentity.CreateCardId(card, index);
         return new RuntimeCard(
             CardId: instanceCardId,
@@ -2481,7 +2533,12 @@ internal sealed class Sts2RuntimeReflectionReader
         var card = ResolveCardRewardChoiceCard(choice) ?? choice;
         try
         {
-            return BuildRuntimeCard(card, index, "combat_selection_choices", textDiagnostics);
+            return BuildRuntimeCard(
+                card,
+                index,
+                "combat_selection_choices",
+                textDiagnostics,
+                CardDescriptionContext.Hand);
         }
         catch (Exception ex)
         {
@@ -3144,10 +3201,14 @@ internal sealed class Sts2RuntimeReflectionReader
         object? card,
         string path,
         TextDiagnosticsCollector textDiagnostics,
+        CardDescriptionContext descriptionContext,
         IReadOnlyList<string>? traits = null,
         IReadOnlyList<string>? keywords = null)
     {
         var source = ResolveCardDescriptionSource(card);
+        var effectiveContext = descriptionContext == CardDescriptionContext.Unknown
+            ? InferCardDescriptionContext(path)
+            : descriptionContext;
         var descriptionValue =
             GetMemberValue(card, "Description")
             ?? GetMemberValue(source, "Description")
@@ -3168,7 +3229,7 @@ internal sealed class Sts2RuntimeReflectionReader
             "CardText",
             "BodyText",
             "Text");
-        var rendered = ConvertToText(
+        var runtimeRendered = ConvertToText(
             GetMemberValue(card, "RenderedDescription")
             ?? GetMemberValue(source, "RenderedDescription")
             ?? GetMemberValue(card, "RenderedText")
@@ -3194,12 +3255,13 @@ internal sealed class Sts2RuntimeReflectionReader
             "DescriptionRendered",
             "ResolvedDescription",
             "CurrentDescription");
+        var gameRendered = ResolveGameRenderedCardDescription(card, source, effectiveContext, path);
         var seedVariables = ResolveCardDescriptionSeedVariables(source ?? card, raw, keywords)
             .Concat(ExtractDescriptionVariablesFromLocString(descriptionValue, "loc_string"))
             .Concat(ExtractDescriptionVariablesFromLocString(boundDescriptionValue, "bound_loc_string"))
             .ToArray();
         var vars = ExtractDescriptionVariables(source ?? card, raw, seedVariables);
-        var renderOutcome = RenderDescription(raw, rendered, vars);
+        var renderOutcome = RenderCardDescription(raw, gameRendered.Text, runtimeRendered, vars);
         var glossary = ExtractGlossaryAnchors(
             canonicalId: null,
             displayName: ConvertToText(GetMemberValue(card, "Title") ?? GetMemberValue(card, "Name") ?? card),
@@ -3219,7 +3281,8 @@ internal sealed class Sts2RuntimeReflectionReader
             quality: renderOutcome.Quality,
             source: renderOutcome.Source,
             variables: vars,
-            glossary: glossary);
+            glossary: glossary,
+            context: GetCardDescriptionContextLabel(effectiveContext));
         return new DescriptionExtraction(raw, renderOutcome.Text, canonicalDescription, renderOutcome.Quality, renderOutcome.Source, vars, glossary);
     }
 
@@ -3229,6 +3292,197 @@ internal sealed class Sts2RuntimeReflectionReader
             ?? GetMemberValue(card, "Model")
             ?? GetMemberValue(card, "Card")
             ?? card;
+    }
+
+    private GameRenderedCardDescription ResolveGameRenderedCardDescription(
+        object? card,
+        object? source,
+        CardDescriptionContext context,
+        string path)
+    {
+        var targets = new[] { card, source }
+            .Where(target => target is not null)
+            .Distinct()
+            .Cast<object>()
+            .ToArray();
+        if (targets.Length == 0)
+        {
+            return new GameRenderedCardDescription(null, null);
+        }
+
+        if (context == CardDescriptionContext.UpgradePreview)
+        {
+            foreach (var target in targets)
+            {
+                var previewDescription = TryInvokeGameRenderedDescriptionMethod(
+                    target,
+                    "GetDescriptionForUpgradePreview",
+                    Array.Empty<object?>(),
+                    "game_upgrade_preview");
+                if (!string.IsNullOrWhiteSpace(previewDescription.Text))
+                {
+                    return previewDescription;
+                }
+            }
+        }
+
+        if (!TryResolvePileTypeArgument(targets, context, out var pileTypeArgument))
+        {
+            return new GameRenderedCardDescription(null, null);
+        }
+
+        foreach (var target in targets)
+        {
+            var description = TryInvokeGameRenderedDescriptionMethod(
+                target,
+                "GetDescriptionForPile",
+                new[] { pileTypeArgument, null },
+                $"game_rendered_{GetCardDescriptionContextLabel(context)}");
+            if (!string.IsNullOrWhiteSpace(description.Text))
+            {
+                return description;
+            }
+        }
+
+        _logger?.Warn(
+            $"Card description fallback path={path} context={GetCardDescriptionContextLabel(context)} stage=game_render_unavailable");
+        return new GameRenderedCardDescription(null, null);
+    }
+
+    private GameRenderedCardDescription TryInvokeGameRenderedDescriptionMethod(
+        object target,
+        string methodName,
+        object?[] args,
+        string sourceLabel)
+    {
+        var methods = target.GetType()
+            .GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+            .Where(method => string.Equals(method.Name, methodName, StringComparison.Ordinal))
+            .ToArray();
+        foreach (var method in methods)
+        {
+            if (method.GetParameters().Length != args.Length)
+            {
+                continue;
+            }
+
+            try
+            {
+                var result = method.Invoke(target, args);
+                var normalized = NormalizeDescriptionText(ConvertToText(result));
+                if (!string.IsNullOrWhiteSpace(normalized))
+                {
+                    return new GameRenderedCardDescription(normalized, sourceLabel);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.Warn(
+                    $"Card description method {methodName} fallback source={sourceLabel} target={target.GetType().FullName} detail={ex.GetBaseException().Message}");
+            }
+        }
+
+        return new GameRenderedCardDescription(null, null);
+    }
+
+    private static bool TryResolvePileTypeArgument(
+        IReadOnlyList<object> targets,
+        CardDescriptionContext context,
+        out object? pileTypeArgument)
+    {
+        pileTypeArgument = null;
+        var candidateNames = GetCardDescriptionPileTypeCandidates(context);
+        if (candidateNames.Length == 0)
+        {
+            return false;
+        }
+
+        foreach (var target in targets)
+        {
+            var enumType = target.GetType()
+                .GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                .Where(method => string.Equals(method.Name, "GetDescriptionForPile", StringComparison.Ordinal))
+                .Select(method => method.GetParameters())
+                .Where(parameters => parameters.Length == 2 && parameters[0].ParameterType.IsEnum)
+                .Select(parameters => parameters[0].ParameterType)
+                .FirstOrDefault();
+            if (enumType is null)
+            {
+                continue;
+            }
+
+            foreach (var candidateName in candidateNames)
+            {
+                try
+                {
+                    pileTypeArgument = Enum.Parse(enumType, candidateName, ignoreCase: true);
+                    return true;
+                }
+                catch
+                {
+                    // Probe other enum names.
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static string[] GetCardDescriptionPileTypeCandidates(CardDescriptionContext context)
+    {
+        return context switch
+        {
+            CardDescriptionContext.Hand => new[] { "Hand", "HandPile" },
+            CardDescriptionContext.DrawPile => new[] { "DrawPile", "Draw", "Deck" },
+            CardDescriptionContext.DiscardPile => new[] { "DiscardPile", "Discard" },
+            CardDescriptionContext.ExhaustPile => new[] { "ExhaustPile", "Exhaust" },
+            CardDescriptionContext.Preview => new[] { "Hand", "HandPile" },
+            _ => Array.Empty<string>(),
+        };
+    }
+
+    private static CardDescriptionContext InferCardDescriptionContext(string path)
+    {
+        if (path.Contains("draw_pile_cards", StringComparison.OrdinalIgnoreCase))
+        {
+            return CardDescriptionContext.DrawPile;
+        }
+
+        if (path.Contains("discard_pile_cards", StringComparison.OrdinalIgnoreCase))
+        {
+            return CardDescriptionContext.DiscardPile;
+        }
+
+        if (path.Contains("exhaust_pile_cards", StringComparison.OrdinalIgnoreCase))
+        {
+            return CardDescriptionContext.ExhaustPile;
+        }
+
+        if (path.Contains("player.hand", StringComparison.OrdinalIgnoreCase))
+        {
+            return CardDescriptionContext.Hand;
+        }
+
+        if (path.Contains("preview", StringComparison.OrdinalIgnoreCase))
+        {
+            return CardDescriptionContext.Preview;
+        }
+
+        return CardDescriptionContext.Unknown;
+    }
+
+    private static string GetCardDescriptionContextLabel(CardDescriptionContext context)
+    {
+        return context switch
+        {
+            CardDescriptionContext.Hand => "hand",
+            CardDescriptionContext.DrawPile => "draw_pile",
+            CardDescriptionContext.DiscardPile => "discard_pile",
+            CardDescriptionContext.ExhaustPile => "exhaust_pile",
+            CardDescriptionContext.Preview => "preview",
+            CardDescriptionContext.UpgradePreview => "upgrade_preview",
+            _ => "unknown",
+        };
     }
 
     private static IReadOnlyList<DescriptionVariable> ExtractDescriptionVariablesFromLocString(object? descriptionValue, string sourceLabel)
@@ -4412,6 +4666,51 @@ internal sealed class Sts2RuntimeReflectionReader
         };
     }
 
+    private static RenderOutcome RenderCardDescription(
+        string? raw,
+        string? gameRendered,
+        string? runtimeRendered,
+        IReadOnlyList<DescriptionVariable>? variables)
+    {
+        var preferredGameRendered = NormalizeDescriptionText(gameRendered);
+        if (!string.IsNullOrWhiteSpace(preferredGameRendered) && !ContainsDescriptionPlaceholder(preferredGameRendered))
+        {
+            return new RenderOutcome(preferredGameRendered, "resolved", "game_rendered");
+        }
+
+        var preferredRuntimeRendered = NormalizeDescriptionText(runtimeRendered);
+        if (!string.IsNullOrWhiteSpace(preferredRuntimeRendered) && !ContainsDescriptionPlaceholder(preferredRuntimeRendered))
+        {
+            return new RenderOutcome(preferredRuntimeRendered, "resolved", "runtime_rendered");
+        }
+
+        var template = RenderTemplateDescription(raw, variables);
+        if (string.IsNullOrWhiteSpace(template) &&
+            string.IsNullOrWhiteSpace(preferredRuntimeRendered) &&
+            string.IsNullOrWhiteSpace(preferredGameRendered))
+        {
+            return new RenderOutcome(null, null, null);
+        }
+
+        if (!string.IsNullOrWhiteSpace(template) && !ContainsDescriptionPlaceholder(template))
+        {
+            return new RenderOutcome(
+                template,
+                "resolved",
+                "rendered_from_vars");
+        }
+
+        var hasResolvedVariables = (variables ?? Array.Empty<DescriptionVariable>()).Any(variable => variable.Value is not null);
+        return new RenderOutcome(
+            template ?? preferredRuntimeRendered ?? preferredGameRendered,
+            hasResolvedVariables ? "partial" : "template_fallback",
+            !string.IsNullOrWhiteSpace(preferredGameRendered)
+                ? "game_template_fallback"
+                : !string.IsNullOrWhiteSpace(preferredRuntimeRendered)
+                    ? "runtime_template_fallback"
+                    : "raw_template");
+    }
+
     private static RenderOutcome RenderDescription(
         string? raw,
         string? runtimeRendered,
@@ -5368,7 +5667,8 @@ internal sealed class Sts2RuntimeReflectionReader
         string? quality,
         string? source,
         IReadOnlyList<DescriptionVariable> variables,
-        IReadOnlyList<GlossaryAnchor> glossary)
+        IReadOnlyList<GlossaryAnchor> glossary,
+        string? context = null)
     {
         var unresolvedVariables = variables.Where(variable => variable.Value is null).Select(variable => variable.Key).Distinct(StringComparer.Ordinal).ToArray();
         var expectedGlossaryNormalization = !string.IsNullOrWhiteSpace(raw) && RichTextPairRegex.IsMatch(raw);
@@ -5385,7 +5685,7 @@ internal sealed class Sts2RuntimeReflectionReader
         }
 
         var message =
-            $"Description {kind}={identifier} path={path} quality={quality ?? "unknown"} source={source ?? "unknown"} " +
+            $"Description {kind}={identifier} path={path} context={context ?? "-"} quality={quality ?? "unknown"} source={source ?? "unknown"} " +
             $"unresolved_vars={(unresolvedVariables.Length == 0 ? "-" : string.Join(",", unresolvedVariables))} " +
             $"glossary={glossary.Count} raw=\"{AbbreviateForLog(raw)}\" rendered=\"{AbbreviateForLog(rendered)}\"";
         if (requiresWarning)
@@ -5654,7 +5954,20 @@ internal sealed class Sts2RuntimeReflectionReader
 
     private readonly record struct VariableResolution(int? Value, string? Source);
 
+    private enum CardDescriptionContext
+    {
+        Unknown,
+        Hand,
+        DrawPile,
+        DiscardPile,
+        ExhaustPile,
+        Preview,
+        UpgradePreview,
+    }
+
     private readonly record struct RenderOutcome(string? Text, string? Quality, string? Source);
+
+    private readonly record struct GameRenderedCardDescription(string? Text, string? Source);
 
     private readonly record struct DescriptionExtraction(
         string? Raw,
