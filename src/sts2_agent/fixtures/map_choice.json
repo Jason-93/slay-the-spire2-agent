@@ -213,7 +213,8 @@
         ]
       }
     ],
-    "exhaust_pile_cards": []
+    "exhaust_pile_cards": [],
+    "potion_capacity": 2
   },
   "enemies": [],
   "rewards": [],

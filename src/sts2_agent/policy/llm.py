@@ -239,6 +239,9 @@ class ChatCompletionsPolicy:
         card_preview = action.metadata.get("card_preview")
         if isinstance(card_preview, dict):
             payload["card_preview"] = to_dict(card_preview)
+        potion_preview = action.metadata.get("potion_preview")
+        if isinstance(potion_preview, dict):
+            payload["potion_preview"] = to_dict(potion_preview)
         return payload
 
     @staticmethod
@@ -265,7 +268,8 @@ class ChatCompletionsPolicy:
                 "discard_pile_cards": [ChatCompletionsPolicy._summarize_card(card) for card in snapshot.player.discard_pile_cards],
                 "exhaust_pile_cards": [ChatCompletionsPolicy._summarize_card(card) for card in snapshot.player.exhaust_pile_cards],
                 "relics": list(snapshot.player.relics),
-                "potions": list(snapshot.player.potions),
+                "potions": [ChatCompletionsPolicy._summarize_potion(potion) for potion in snapshot.player.potions],
+                "potion_capacity": snapshot.player.potion_capacity,
                 "powers": [ChatCompletionsPolicy._summarize_power(power) for power in snapshot.player.powers],
             }
         if snapshot.enemies:
@@ -338,6 +342,22 @@ class ChatCompletionsPolicy:
             payload["glossary"] = glossary
         if power.canonical_power_id:
             payload["canonical_power_id"] = power.canonical_power_id
+        return payload
+
+    @staticmethod
+    def _summarize_potion(potion: Any) -> dict[str, Any]:
+        payload = {
+            "name": potion.name,
+        }
+        preferred_description = ChatCompletionsPolicy._preferred_description_text(potion)
+        if preferred_description:
+            payload["description"] = preferred_description
+        glossary = ChatCompletionsPolicy._summarize_glossary(getattr(potion, "glossary", []))
+        if glossary:
+            payload["glossary"] = glossary
+        canonical_potion_id = getattr(potion, "canonical_potion_id", None)
+        if isinstance(canonical_potion_id, str) and canonical_potion_id:
+            payload["canonical_potion_id"] = canonical_potion_id
         return payload
 
     @staticmethod

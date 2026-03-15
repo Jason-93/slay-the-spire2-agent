@@ -24,6 +24,7 @@ from sts2_agent.models import (
     GlossaryAnchor,
     LegalAction,
     PlayerState,
+    PotionView,
     PowerView,
     RunMapState,
     RunState,
@@ -193,7 +194,12 @@ class HttpGameBridge(GameBridge):
                 discard_pile=int(player_payload.get("discard_pile") or 0),
                 exhaust_pile=int(player_payload.get("exhaust_pile") or 0),
                 relics=list(player_payload.get("relics") or []),
-                potions=list(player_payload.get("potions") or []),
+                potions=[
+                    HttpGameBridge._decode_potion(item)
+                    for item in player_payload.get("potions", [])
+                    if isinstance(item, (dict, str))
+                ],
+                potion_capacity=int(player_payload.get("potion_capacity") or 0),
                 powers=powers,
                 draw_pile_cards=[
                     HttpGameBridge._decode_card(item)
@@ -266,6 +272,17 @@ class HttpGameBridge(GameBridge):
             amount=HttpGameBridge._as_optional_int(payload.get("amount")),
             description=HttpGameBridge._as_optional_str(payload.get("description")),
             canonical_power_id=payload.get("canonical_power_id"),
+            glossary=HttpGameBridge._decode_glossary(payload.get("glossary")),
+        )
+
+    @staticmethod
+    def _decode_potion(payload: dict[str, Any] | str) -> PotionView:
+        if isinstance(payload, str):
+            return PotionView(name=payload)
+        return PotionView(
+            name=str(payload.get("name") or ""),
+            description=HttpGameBridge._as_optional_str(payload.get("description")),
+            canonical_potion_id=HttpGameBridge._as_optional_str(payload.get("canonical_potion_id")),
             glossary=HttpGameBridge._decode_glossary(payload.get("glossary")),
         )
 

@@ -1399,12 +1399,31 @@ internal sealed class Sts2RuntimeReflectionReader
 
         if (player is not null)
         {
-            foreach (var potion in player.Potions.Where(potion => !string.IsNullOrWhiteSpace(potion)))
+            for (var potionIndex = 0; potionIndex < player.Potions.Count; potionIndex += 1)
             {
+                var potion = player.Potions[potionIndex];
+                if (string.IsNullOrWhiteSpace(potion.Name))
+                {
+                    continue;
+                }
+
+                var potionPreview = BuildPotionPreview(potion);
+                var actionMetadata = new Dictionary<string, object?>();
+                if (potionPreview.Count > 0)
+                {
+                    actionMetadata["potion_preview"] = potionPreview;
+                }
+
                 actions.Add(new RuntimeActionDefinition(
                     "use_potion",
-                    $"Use {potion}",
-                    new Dictionary<string, object?> { ["potion"] = potion }));
+                    $"Use {potion.Name}",
+                    new Dictionary<string, object?>
+                    {
+                        ["potion"] = potion.Name,
+                        ["potion_index"] = potionIndex,
+                        ["canonical_potion_id"] = potion.CanonicalPotionId,
+                    },
+                    Metadata: actionMetadata));
             }
         }
 
@@ -1700,7 +1719,11 @@ internal sealed class Sts2RuntimeReflectionReader
         var discardPileCards = ExtractCardsWithSource(discardPile, "player.discard_pile_cards", textDiagnostics, "discard_pile", discardPileCount);
         var exhaustPileCards = ExtractCardsWithSource(exhaustPile, "player.exhaust_pile_cards", textDiagnostics, "exhaust_pile", exhaustPileCount);
         var relics = ExtractLabels(GetMemberValue(player, "Relics"), "player.relics", textDiagnostics);
-        var potions = ExtractLabels(GetMemberValue(player, "PotionSlots"), "player.potions", textDiagnostics);
+        var potionCollection = ResolvePotionCollection(player);
+        var potions = ExtractPotions(potionCollection, "player.potions", textDiagnostics);
+        var potionCapacity = GetNullableInt(player, "MaxPotionCount")
+                             ?? CountObjects(potionCollection)
+                             ?? potions.Count;
         var powers = ExtractPowers(creature ?? player, "player.powers", textDiagnostics);
         var diagnostics = new Dictionary<string, object?>
         {
@@ -1709,7 +1732,12 @@ internal sealed class Sts2RuntimeReflectionReader
                 ["draw_pile"] = CreatePileDiagnostics(drawPileCards),
                 ["discard_pile"] = CreatePileDiagnostics(discardPileCards),
                 ["exhaust_pile"] = CreatePileDiagnostics(exhaustPileCards),
-            }
+            },
+            ["potion_export"] = new Dictionary<string, object?>
+            {
+                ["count"] = potions.Count,
+                ["capacity"] = potionCapacity,
+            },
         };
 
         return new PlayerBuildResult(new RuntimePlayerState(
@@ -1724,6 +1752,7 @@ internal sealed class Sts2RuntimeReflectionReader
             ExhaustPile: exhaustPileCount,
             Relics: relics,
             Potions: potions,
+            PotionCapacity: potionCapacity,
             Powers: powers,
             DrawPileCards: drawPileCards.Cards,
             DiscardPileCards: discardPileCards.Cards,
@@ -2052,6 +2081,16 @@ internal sealed class Sts2RuntimeReflectionReader
     private int CountCards(object? pile)
     {
         return EnumerateObjects(GetMemberValue(pile, "Cards")).Count();
+    }
+
+    private static int? CountObjects(object? collection)
+    {
+        if (collection is null)
+        {
+            return null;
+        }
+
+        return EnumerateObjects(collection).Count();
     }
 
     private List<RewardOption> ExtractRewards(object runNode, TextDiagnosticsCollector textDiagnostics)
@@ -3372,6 +3411,22 @@ internal sealed class Sts2RuntimeReflectionReader
             ?? GetMemberValue(power, "CanonicalId"));
     }
 
+    private static string? ResolvePotionCanonicalId(object? potion)
+    {
+        var canonicalInstance = GetMemberValue(potion, "CanonicalInstance");
+        return ConvertToText(
+                   GetMemberValue(potion, "PotionId")
+                   ?? GetMemberValue(potion, "Id")
+                   ?? GetMemberValue(potion, "Key")
+                   ?? GetMemberValue(potion, "TemplateId")
+                   ?? GetMemberValue(potion, "CanonicalId")
+                   ?? GetMemberValue(canonicalInstance, "PotionId")
+                   ?? GetMemberValue(canonicalInstance, "Id")
+                   ?? GetMemberValue(canonicalInstance, "Key")
+                   ?? canonicalInstance)
+               ?? GetTypeName(potion);
+    }
+
     private static EnemyIntentDescriptor ResolveEnemyIntent(object enemy, object? playerTargets, string path, TextDiagnosticsCollector textDiagnostics)
     {
         var raw = ConvertToText(
@@ -3982,6 +4037,27 @@ internal sealed class Sts2RuntimeReflectionReader
             .ToArray();
     }
 
+    private IReadOnlyList<RuntimePotionState> ExtractPotions(object? collection, string path, TextDiagnosticsCollector textDiagnostics)
+    {
+        return EnumerateObjects(collection)
+            .Select((potion, index) => DescribePotion(potion, $"{path}[{index}]", textDiagnostics))
+            .Where(potion => potion is not null)
+            .Cast<RuntimePotionState>()
+            .ToArray();
+    }
+
+    private static object? ResolvePotionCollection(object? player)
+    {
+        if (player is null)
+        {
+            return null;
+        }
+
+        return GetMemberValue(player, "PotionSlots")
+               ?? GetMemberValue(player, "Potions")
+               ?? GetMemberValue(player, "PotionModels");
+    }
+
     private static object? ResolvePowerCollection(object? source)
     {
         if (source is null)
@@ -4079,6 +4155,91 @@ internal sealed class Sts2RuntimeReflectionReader
                     ?? GetNullableInt(power, "Value"),
             Description: ChooseCanonicalDescription(renderOutcome.Text, raw),
             CanonicalPowerId: canonicalPowerId,
+            Glossary: glossary);
+    }
+
+    private RuntimePotionState? DescribePotion(object? potion, string path, TextDiagnosticsCollector textDiagnostics)
+    {
+        var source = GetMemberValue(potion, "Potion")
+                     ?? GetMemberValue(potion, "Model")
+                     ?? GetMemberValue(potion, "PotionModel")
+                     ?? GetMemberValue(potion, "CanonicalInstance")
+                     ?? potion;
+        var name = ConvertToText(
+            GetMemberValue(source, "Title")
+            ?? GetMemberValue(source, "Name")
+            ?? GetMemberValue(source, "DisplayName")
+            ?? potion,
+            $"{path}.name",
+            textDiagnostics,
+            "Title",
+            "Name",
+            "DisplayName");
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return null;
+        }
+
+        var descriptionValue =
+            GetMemberValue(source, "Description")
+            ?? GetMemberValue(source, "DynamicDescription")
+            ?? GetMemberValue(source, "StaticDescription")
+            ?? GetMemberValue(source, "RulesText")
+            ?? GetMemberValue(source, "Text")
+            ?? GetMemberValue(GetMemberValue(source, "HoverTip"), "Description");
+        var boundDescriptionValue = TryBindLocStringWithDynamicVars(descriptionValue, source);
+        var raw = ConvertDescriptionTemplateToText(
+            descriptionValue,
+            $"{path}.description",
+            textDiagnostics,
+            "Description",
+            "DynamicDescription",
+            "StaticDescription",
+            "RulesText",
+            "Text");
+        var rendered = ConvertToText(
+            GetMemberValue(source, "RenderedDescription")
+            ?? GetMemberValue(source, "RenderedText")
+            ?? GetMemberValue(source, "DisplayDescription")
+            ?? GetMemberValue(GetMemberValue(source, "HoverTip"), "Description")
+            ?? boundDescriptionValue,
+            $"{path}.rendered",
+            textDiagnostics,
+            "RenderedDescription",
+            "RenderedText",
+            "DisplayDescription");
+        var canonicalPotionId = ResolvePotionCanonicalId(source);
+        var vars = ExtractDescriptionVariables(
+            source,
+            raw,
+            ExtractDescriptionVariablesFromLocString(descriptionValue, "loc_string")
+                .Concat(ExtractDescriptionVariablesFromLocString(boundDescriptionValue, "bound_loc_string"))
+                .ToArray());
+        var renderOutcome = RenderDescription(raw, rendered, vars);
+        var glossary = ExtractGlossaryAnchors(
+            canonicalPotionId,
+            name,
+            new[] { renderOutcome.Text, raw },
+            keywords: null,
+            traits: null,
+            path: $"{path}.glossary",
+            source,
+            potion);
+        LogDescriptionDiagnostics(
+            kind: "potion",
+            identifier: canonicalPotionId ?? name,
+            path: path,
+            raw: raw,
+            rendered: ChooseCanonicalDescription(renderOutcome.Text, raw),
+            quality: renderOutcome.Quality,
+            source: renderOutcome.Source,
+            variables: vars,
+            glossary: glossary);
+
+        return new RuntimePotionState(
+            Name: name,
+            Description: ChooseCanonicalDescription(renderOutcome.Text, raw),
+            CanonicalPotionId: canonicalPotionId,
             Glossary: glossary);
     }
 
@@ -5151,6 +5312,22 @@ internal sealed class Sts2RuntimeReflectionReader
             ["upgraded"] = card.Upgraded,
             ["traits"] = card.Traits,
             ["keywords"] = card.Keywords,
+        };
+        return preview
+            .Where(pair => pair.Value is not null &&
+                           (!(pair.Value is string text) || !string.IsNullOrWhiteSpace(text)) &&
+                           (!(pair.Value is IReadOnlyCollection<string> values) || values.Count > 0))
+            .ToDictionary(pair => pair.Key, pair => pair.Value);
+    }
+
+    private static IReadOnlyDictionary<string, object?> BuildPotionPreview(RuntimePotionState potion)
+    {
+        var preview = new Dictionary<string, object?>
+        {
+            ["name"] = potion.Name,
+            ["description"] = potion.Description,
+            ["canonical_potion_id"] = potion.CanonicalPotionId,
+            ["glossary"] = potion.Glossary,
         };
         return preview
             .Where(pair => pair.Value is not null &&

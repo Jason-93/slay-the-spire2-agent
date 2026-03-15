@@ -113,7 +113,14 @@ public abstract class WindowExtractorBase : IWindowExtractor
                         Glossary = card.Glossary?.ToArray() ?? Array.Empty<GlossaryAnchor>(),
                     }).ToArray() ?? Array.Empty<object>(),
                     Relics = context.Player.Relics.ToArray(),
-                    Potions = context.Player.Potions.ToArray(),
+                    Potions = context.Player.Potions.Select(potion => new
+                    {
+                        potion.Name,
+                        potion.Description,
+                        potion.CanonicalPotionId,
+                        Glossary = potion.Glossary?.ToArray() ?? Array.Empty<GlossaryAnchor>(),
+                    }).ToArray(),
+                    context.Player.PotionCapacity,
                     Powers = context.Player.Powers?.Select(power => new
                     {
                         power.PowerId,
@@ -240,7 +247,8 @@ public abstract class WindowExtractorBase : IWindowExtractor
             player.DiscardPile,
             player.ExhaustPile,
             player.Relics.ToArray(),
-            player.Potions.ToArray(),
+            player.Potions.Select(Convert).ToArray(),
+            player.PotionCapacity,
             Convert(player.Powers),
             player.DrawPileCards?.Select(Convert).ToArray() ?? Array.Empty<CardView>(),
             player.DiscardPileCards?.Select(Convert).ToArray() ?? Array.Empty<CardView>(),
@@ -307,6 +315,15 @@ public abstract class WindowExtractorBase : IWindowExtractor
             power.Description,
             power.CanonicalPowerId,
             power.Glossary?.ToArray() ?? Array.Empty<GlossaryAnchor>());
+    }
+
+    protected static PotionView Convert(RuntimePotionState potion)
+    {
+        return new PotionView(
+            potion.Name,
+            potion.Description,
+            potion.CanonicalPotionId,
+            potion.Glossary?.ToArray() ?? Array.Empty<GlossaryAnchor>());
     }
 
     protected static RunState Convert(RuntimeRunState runState)

@@ -35,6 +35,12 @@ class MockBridgeTests(unittest.TestCase):
         self.assertEqual(snapshot.player.draw_pile, len(snapshot.player.draw_pile_cards))
         self.assertEqual(snapshot.player.discard_pile, len(snapshot.player.discard_pile_cards))
         self.assertEqual(snapshot.player.exhaust_pile, len(snapshot.player.exhaust_pile_cards))
+        self.assertEqual(snapshot.player.potion_capacity, 2)
+        self.assertEqual(snapshot.player.potions[0].name, "Strength Potion")
+        self.assertEqual(snapshot.player.potions[0].canonical_potion_id, "strength_potion")
+        use_potion = next(action for action in actions if action.type == "use_potion")
+        self.assertEqual(use_potion.params["potion_index"], 0)
+        self.assertEqual(use_potion.metadata["potion_preview"]["canonical_potion_id"], "strength_potion")
         self.assertTrue(snapshot.player.draw_pile_cards[0].description)
         self.assertTrue(snapshot.player.discard_pile_cards[0].glossary)
         self.assertEqual(snapshot.enemies[0].move_name, "Chomp")
@@ -279,7 +285,22 @@ class HttpBridgeTests(unittest.TestCase):
                 "discard_pile": 2,
                 "exhaust_pile": 0,
                 "relics": ["Burning Blood"],
-                "potions": ["Strength Potion"],
+                "potions": [
+                    {
+                        "name": "Strength Potion",
+                        "description": "Gain 2 **Strength** this turn.",
+                        "canonical_potion_id": "strength_potion",
+                        "glossary": [
+                            {
+                                "glossary_id": "strength",
+                                "display_text": "Strength",
+                                "hint": "Increases attack damage.",
+                                "source": "runtime_hover_tip",
+                            }
+                        ],
+                    }
+                ],
+                "potion_capacity": 2,
                 "powers": [
                     {
                         "power_id": "metallicize",
@@ -431,6 +452,9 @@ class HttpBridgeTests(unittest.TestCase):
         self.assertEqual(snapshot.player.draw_pile_cards[0].description, "Deal 9 **damage**. Draw 1 card.")
         self.assertEqual(snapshot.player.discard_pile_cards[0].glossary[0].glossary_id, "block")
         self.assertEqual(snapshot.player.exhaust_pile_cards, [])
+        self.assertEqual(snapshot.player.potion_capacity, 2)
+        self.assertEqual(snapshot.player.potions[0].description, "Gain 2 **Strength** this turn.")
+        self.assertEqual(snapshot.player.potions[0].glossary[0].glossary_id, "strength")
         self.assertEqual(snapshot.player.powers[0].name, "Metallicize")
         self.assertEqual(snapshot.enemies[0].intent_type, "attack")
         self.assertEqual(snapshot.enemies[0].powers[0].canonical_power_id, "strength")
@@ -466,6 +490,8 @@ class HttpBridgeTests(unittest.TestCase):
         self.assertEqual(snapshot.enemies[0].move_glossary, [])
         self.assertEqual(snapshot.enemies[0].traits, [])
         self.assertEqual(snapshot.enemies[0].keywords, [])
+        self.assertEqual(snapshot.player.potions, [])
+        self.assertEqual(snapshot.player.potion_capacity, 0)
         self.assertEqual(snapshot.player.hand, [])
         self.assertEqual(snapshot.player.draw_pile_cards, [])
         self.assertEqual(snapshot.player.discard_pile_cards, [])

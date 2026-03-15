@@ -99,7 +99,19 @@
       "Burning Blood"
     ],
     "potions": [
-      "Strength Potion"
+      {
+        "name": "Strength Potion",
+        "description": "Gain 2 **Strength** this turn.",
+        "canonical_potion_id": "strength_potion",
+        "glossary": [
+          {
+            "glossary_id": "strength",
+            "display_text": "Strength",
+            "hint": "Increases attack damage.",
+            "source": "runtime_hover_tip"
+          }
+        ]
+      }
     ],
     "powers": [
       {
@@ -306,7 +318,8 @@
         ]
       }
     ],
-    "exhaust_pile_cards": []
+    "exhaust_pile_cards": [],
+    "potion_capacity": 2
   },
   "enemies": [
     {
@@ -392,10 +405,26 @@
       "type": "use_potion",
       "label": "Use Strength Potion",
       "params": {
-        "potion": "Strength Potion"
+        "potion": "Strength Potion",
+        "potion_index": 0,
+        "canonical_potion_id": "strength_potion"
       },
       "target_constraints": [],
-      "metadata": {}
+      "metadata": {
+        "potion_preview": {
+          "name": "Strength Potion",
+          "description": "Gain 2 **Strength** this turn.",
+          "canonical_potion_id": "strength_potion",
+          "glossary": [
+            {
+              "glossary_id": "strength",
+              "display_text": "Strength",
+              "hint": "Increases attack damage.",
+              "source": "runtime_hover_tip"
+            }
+          ]
+        }
+      }
     },
     {
       "action_id": "act-3790f8a4",

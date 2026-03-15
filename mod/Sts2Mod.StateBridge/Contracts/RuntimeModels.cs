@@ -8,6 +8,12 @@ public sealed record RuntimePowerState(
     string? CanonicalPowerId = null,
     IReadOnlyList<GlossaryAnchor>? Glossary = null);
 
+public sealed record RuntimePotionState(
+    string Name,
+    string? Description = null,
+    string? CanonicalPotionId = null,
+    IReadOnlyList<GlossaryAnchor>? Glossary = null);
+
 public sealed record RuntimeRunMapState(
     string? CurrentCoord = null,
     string? CurrentNodeType = null,
@@ -51,7 +57,8 @@ public sealed record RuntimePlayerState(
     int DiscardPile,
     int ExhaustPile,
     IReadOnlyList<string> Relics,
-    IReadOnlyList<string> Potions,
+    IReadOnlyList<RuntimePotionState> Potions,
+    int PotionCapacity,
     IReadOnlyList<RuntimePowerState>? Powers = null,
     IReadOnlyList<RuntimeCard>? DrawPileCards = null,
     IReadOnlyList<RuntimeCard>? DiscardPileCards = null,

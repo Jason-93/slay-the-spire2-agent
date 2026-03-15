@@ -275,7 +275,15 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                     DiscardPile: 4,
                     ExhaustPile: 0,
                     Relics: new[] { "Burning Blood" },
-                    Potions: new[] { "Strength Potion" },
+                    Potions: new[]
+                    {
+                        CreateFixturePotion(
+                            "Strength Potion",
+                            "Gain 2 **Strength** this turn.",
+                            "strength_potion",
+                            "strength"),
+                    },
+                    PotionCapacity: 2,
                     Powers: new[]
                     {
                         new RuntimePowerState(
@@ -349,7 +357,24 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                 {
                     new RuntimeActionDefinition("play_card", "Play Strike", new Dictionary<string, object?> { ["card_id"] = "strike_red#0" }, new[] { "jaw_worm_1" }),
                     new RuntimeActionDefinition("play_card", "Play Defend", new Dictionary<string, object?> { ["card_id"] = "defend_red#1" }),
-                    new RuntimeActionDefinition("use_potion", "Use Strength Potion", new Dictionary<string, object?> { ["potion"] = "Strength Potion" }),
+                    new RuntimeActionDefinition(
+                        "use_potion",
+                        "Use Strength Potion",
+                        new Dictionary<string, object?>
+                        {
+                            ["potion"] = "Strength Potion",
+                            ["potion_index"] = 0,
+                            ["canonical_potion_id"] = "strength_potion",
+                        },
+                        Metadata: new Dictionary<string, object?>
+                        {
+                            ["potion_preview"] = BuildPotionPreview(
+                                CreateFixturePotion(
+                                    "Strength Potion",
+                                    "Gain 2 **Strength** this turn.",
+                                    "strength_potion",
+                                    "strength")),
+                        }),
                     new RuntimeActionDefinition("end_turn", "End Turn", new Dictionary<string, object?>()),
                 },
                 RunState: new RuntimeRunState(
@@ -377,7 +402,8 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                     4,
                     0,
                     new[] { "Burning Blood" },
-                    Array.Empty<string>(),
+                    Array.Empty<RuntimePotionState>(),
+                    2,
                     new[]
                     {
                         new RuntimePowerState(
@@ -427,7 +453,8 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                     0,
                     0,
                     new[] { "Burning Blood" },
-                    Array.Empty<string>(),
+                    Array.Empty<RuntimePotionState>(),
+                    2,
                     DrawPileCards: Array.Empty<RuntimeCard>(),
                     DiscardPileCards: Array.Empty<RuntimeCard>(),
                     ExhaustPileCards: Array.Empty<RuntimeCard>()),
@@ -516,7 +543,8 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
             4,
             0,
             new[] { "Burning Blood" },
-            Array.Empty<string>(),
+            Array.Empty<RuntimePotionState>(),
+            2,
             new[]
             {
                 new RuntimePowerState(
@@ -731,6 +759,33 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
             Traits: traits ?? Array.Empty<string>(),
             Keywords: keywords ?? Array.Empty<string>(),
             Glossary: CreateFixtureGlossary(keywords));
+    }
+
+    private static RuntimePotionState CreateFixturePotion(
+        string name,
+        string description,
+        string canonicalPotionId,
+        params string[] keywords)
+    {
+        return new RuntimePotionState(
+            Name: name,
+            Description: description,
+            CanonicalPotionId: canonicalPotionId,
+            Glossary: CreateFixtureGlossary(keywords));
+    }
+
+    private static IReadOnlyDictionary<string, object?> BuildPotionPreview(RuntimePotionState potion)
+    {
+        var preview = new Dictionary<string, object?>
+        {
+            ["name"] = potion.Name,
+            ["description"] = potion.Description,
+            ["canonical_potion_id"] = potion.CanonicalPotionId,
+            ["glossary"] = potion.Glossary,
+        };
+        return preview
+            .Where(pair => pair.Value is not null)
+            .ToDictionary(pair => pair.Key, pair => pair.Value);
     }
 
     private static IReadOnlyList<GlossaryAnchor> CreateFixtureGlossary(IReadOnlyList<string>? keywords)

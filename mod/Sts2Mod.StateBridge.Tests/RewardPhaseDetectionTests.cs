@@ -265,6 +265,17 @@ public sealed class RewardPhaseDetectionTests
         var runNode = new FakeRunNode(new FakeScreenTracker());
         var currentPoint = new FakeMapPoint("Monster", new FakeMapCoord(1, 1),
             new FakeMapPoint("Elite", new FakeMapCoord(2, 2)));
+        var strengthPotion = new FakePotion("Strength Potion")
+        {
+            PotionId = "strength_potion",
+            Description = "Gain {Strength:diff()} [gold]Strength[/gold] this turn.",
+            RenderedDescription = "Gain 2 Strength this turn.",
+            Strength = 2,
+            HoverTips = new[]
+            {
+                new FakeHoverTip("strength", "Strength", "Increases attack damage."),
+            },
+        };
         var runState = new FakeRunState(
             new[]
             {
@@ -342,7 +353,9 @@ public sealed class RewardPhaseDetectionTests
                         new FakeHoverTip("block", "Block", "Prevents damage until next turn."),
                     },
                 },
-            });
+            },
+            potions: new object[] { strengthPotion },
+            maxPotionCount: 2);
 
         var window = InvokeBuildCombatWindow(reader, runNode, runState);
         var exported = new CombatWindowExtractor().Export(window, new BridgeSessionState(new BridgeOptions()));
@@ -373,6 +386,18 @@ public sealed class RewardPhaseDetectionTests
         Assert.Equal("Gain 3 Block at end of turn.", playerPower.Description);
         Assert.Contains(playerPower.Glossary ?? Array.Empty<GlossaryAnchor>(), anchor => anchor.GlossaryId == "metallicize" && anchor.Source == "model_description");
         Assert.Contains(playerPower.Glossary ?? Array.Empty<GlossaryAnchor>(), anchor => anchor.GlossaryId == "block" && anchor.Source == "runtime_hover_tip");
+        var potion = Assert.Single(player.Potions);
+        Assert.Equal("Strength Potion", potion.Name);
+        Assert.Equal("strength_potion", potion.CanonicalPotionId);
+        Assert.Equal("Gain 2 **Strength** this turn.", potion.Description);
+        Assert.Contains(potion.Glossary ?? Array.Empty<GlossaryAnchor>(), anchor => anchor.GlossaryId == "strength" && anchor.Source == "runtime_hover_tip");
+        Assert.Equal(2, player.PotionCapacity);
+        var usePotionAction = Assert.Single(exported.Actions, action => action.Type == "use_potion");
+        Assert.Equal("Strength Potion", usePotionAction.Params["potion"]);
+        Assert.Equal(0, usePotionAction.Params["potion_index"]);
+        Assert.Equal("strength_potion", usePotionAction.Params["canonical_potion_id"]);
+        var potionPreview = Assert.IsAssignableFrom<IReadOnlyDictionary<string, object?>>(usePotionAction.Metadata["potion_preview"]);
+        Assert.Equal("strength_potion", potionPreview["canonical_potion_id"]);
 
         var enemy = Assert.Single(exported.Snapshot.Enemies);
         Assert.Equal("louse", enemy.CanonicalEnemyId);
@@ -411,6 +436,34 @@ public sealed class RewardPhaseDetectionTests
         Assert.Equal(false, discardPileExport["degraded"]);
         var enemyExport = Assert.IsAssignableFrom<IReadOnlyDictionary<string, object?>>(exported.Snapshot.Metadata["enemy_export"]);
         Assert.Equal(false, enemyExport["degraded"]);
+    }
+
+    [Fact]
+    public void BuildCombatWindow_ExportsPotionObjectWhenDescriptionIsMissing()
+    {
+        var reader = CreateReader();
+        var runNode = new FakeRunNode(new FakeScreenTracker());
+        var runState = new FakeRunState(
+            new[] { new FakeEnemy("enemy-1", true) },
+            potions: new object[]
+            {
+                new FakePotion("Mystery Potion")
+                {
+                    PotionId = "mystery_potion",
+                },
+            },
+            maxPotionCount: 3);
+
+        var window = InvokeBuildCombatWindow(reader, runNode, runState);
+        var exported = new CombatWindowExtractor().Export(window, new BridgeSessionState(new BridgeOptions()));
+
+        var player = exported.Snapshot.Player;
+        Assert.NotNull(player);
+        var potion = Assert.Single(player.Potions);
+        Assert.Equal("Mystery Potion", potion.Name);
+        Assert.Null(potion.Description);
+        Assert.Equal("mystery_potion", potion.CanonicalPotionId);
+        Assert.Equal(3, player.PotionCapacity);
     }
 
     [Fact]
@@ -1110,6 +1163,8 @@ public sealed class RewardPhaseDetectionTests
         IReadOnlyList<FakeCard>? drawPile = null,
         IReadOnlyList<FakeCard>? discardPile = null,
         IReadOnlyList<FakeCard>? exhaustPile = null,
+        IReadOnlyList<object>? potions = null,
+        int maxPotionCount = 2,
         object? drawPileObject = null,
         object? discardPileObject = null,
         object? exhaustPileObject = null)
@@ -1127,7 +1182,9 @@ public sealed class RewardPhaseDetectionTests
                 hand?.ToArray() ?? Array.Empty<FakeCard>(),
                 drawPileObject ?? new FakePile(drawPile?.ToArray() ?? Array.Empty<FakeCard>()),
                 discardPileObject ?? new FakePile(discardPile?.ToArray() ?? Array.Empty<FakeCard>()),
-                exhaustPileObject ?? new FakePile(exhaustPile?.ToArray() ?? Array.Empty<FakeCard>())),
+                exhaustPileObject ?? new FakePile(exhaustPile?.ToArray() ?? Array.Empty<FakeCard>()),
+                potions?.ToArray() ?? Array.Empty<object>(),
+                maxPotionCount),
         };
         public FakeMapPoint? CurrentMapPoint { get; } = currentMapPoint;
         public FakeMap? Map { get; } = map;
@@ -1160,13 +1217,16 @@ public sealed class RewardPhaseDetectionTests
         FakeCard[] handCards,
         object drawPile,
         object discardPile,
-        object exhaustPile)
+        object exhaustPile,
+        object[] potionSlots,
+        int maxPotionCount)
     {
         public int Gold { get; } = 99;
+        public int MaxPotionCount { get; } = maxPotionCount;
         public FakeCreature Creature { get; } = new(enemies, currentSide);
         public FakePlayerCombatState PlayerCombatState { get; } = new(handCards, drawPile, discardPile, exhaustPile);
         public List<object> Relics { get; } = new();
-        public List<object> PotionSlots { get; } = new();
+        public List<object> PotionSlots { get; } = new(potionSlots);
     }
 
     private sealed class FakeCreature(FakeEnemy[] enemies, string currentSide)
@@ -1253,6 +1313,18 @@ public sealed class RewardPhaseDetectionTests
         public int Amount { get; } = amount;
         public string Description { get; } = description;
         public string RenderedDescription => description;
+        public IReadOnlyList<FakeHoverTip> HoverTips { get; init; } = Array.Empty<FakeHoverTip>();
+    }
+
+    private sealed class FakePotion(string title)
+    {
+        public string Title { get; } = title;
+        public string Name => Title;
+        public string PotionId { get; init; } = title.ToLowerInvariant().Replace(" ", "_");
+        public string? Description { get; init; }
+        public string? RenderedDescription { get; init; }
+        public int? Strength { get; init; }
+        public int? Block { get; init; }
         public IReadOnlyList<FakeHoverTip> HoverTips { get; init; } = Array.Empty<FakeHoverTip>();
     }
 

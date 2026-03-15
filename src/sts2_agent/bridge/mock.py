@@ -25,6 +25,7 @@ from sts2_agent.models import (
     GlossaryAnchor,
     LegalAction,
     PlayerState,
+    PotionView,
     PowerView,
     RunMapState,
     RunState,
@@ -87,15 +88,25 @@ class MockGameBridge(GameBridge):
         decision_id = create_decision_id(session.session_id, session.state_version, window.phase)
         actions = []
         for action in window.legal_actions:
-            payload = {k: v for k, v in action.items() if k not in {"label", "type"}}
+            raw_params = action.get("params")
+            params = dict(raw_params) if isinstance(raw_params, dict) else {
+                k: v
+                for k, v in action.items()
+                if k not in {"action_id", "label", "type", "target_constraints", "metadata"}
+            }
+            target_constraints = list(action.get("target_constraints") or [])
+            payload = {
+                "params": deepcopy(params),
+                "target_constraints": deepcopy(target_constraints),
+            }
             actions.append(
                 LegalAction(
                     action_id=create_action_id(decision_id, action["type"], payload),
                     type=action["type"],
                     label=action["label"],
-                    params={k: v for k, v in action.items() if k not in {"label", "type", "target_constraints"}},
-                    target_constraints=action.get("target_constraints", []),
-                    metadata={"decision_id": decision_id},
+                    params=params,
+                    target_constraints=target_constraints,
+                    metadata={"decision_id": decision_id, **deepcopy(action.get("metadata") or {})},
                 )
             )
         return actions
@@ -180,7 +191,12 @@ class MockGameBridge(GameBridge):
             discard_pile=int(raw.get("discard_pile") or 0),
             exhaust_pile=int(raw.get("exhaust_pile") or 0),
             relics=list(raw.get("relics") or []),
-            potions=list(raw.get("potions") or []),
+            potions=[
+                MockGameBridge._build_potion(potion)
+                for potion in raw.get("potions", [])
+                if isinstance(potion, (dict, str))
+            ],
+            potion_capacity=int(raw.get("potion_capacity") or 0),
             powers=powers,
             draw_pile_cards=[
                 MockGameBridge._build_card(card)
@@ -227,6 +243,17 @@ class MockGameBridge(GameBridge):
             amount=MockGameBridge._optional_int(raw.get("amount")),
             description=MockGameBridge._optional_str(raw.get("description")),
             canonical_power_id=raw.get("canonical_power_id"),
+            glossary=MockGameBridge._build_glossary(raw.get("glossary")),
+        )
+
+    @staticmethod
+    def _build_potion(raw: dict[str, Any] | str) -> PotionView:
+        if isinstance(raw, str):
+            return PotionView(name=raw)
+        return PotionView(
+            name=str(raw.get("name") or ""),
+            description=MockGameBridge._optional_str(raw.get("description")),
+            canonical_potion_id=MockGameBridge._optional_str(raw.get("canonical_potion_id")),
             glossary=MockGameBridge._build_glossary(raw.get("glossary")),
         )
 

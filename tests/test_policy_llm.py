@@ -12,6 +12,7 @@ from sts2_agent.models import (
     GlossaryAnchor,
     LegalAction,
     PlayerState,
+    PotionView,
     PowerView,
     RunMapState,
     RunState,
@@ -109,7 +110,15 @@ def build_snapshot() -> DecisionSnapshot:
                 )
             ],
             relics=["燃烧之血"],
-            potions=[],
+            potions=[
+                PotionView(
+                    name="力量药水",
+                    description="本回合获得2点**力量**。",
+                    canonical_potion_id="strength_potion",
+                    glossary=[GlossaryAnchor(glossary_id="strength", display_text="力量", hint="使攻击造成更多伤害。", source="description_text")],
+                )
+            ],
+            potion_capacity=2,
             powers=[
                 PowerView(
                     power_id="metallicize",
@@ -168,6 +177,20 @@ def build_snapshot() -> DecisionSnapshot:
 def build_actions() -> list[LegalAction]:
     return [
         LegalAction(action_id="act-1", type="play_card", label="Play 防御", params={"card_id": "card-1"}, target_constraints=[], metadata={}),
+        LegalAction(
+            action_id="act-potion",
+            type="use_potion",
+            label="Use 力量药水",
+            params={"potion": "力量药水", "potion_index": 0},
+            target_constraints=[],
+            metadata={
+                "potion_preview": {
+                    "name": "力量药水",
+                    "description": "本回合获得2点**力量**。",
+                    "canonical_potion_id": "strength_potion",
+                }
+            },
+        ),
         LegalAction(action_id="act-2", type="end_turn", label="End Turn", params={}, target_constraints=[], metadata={}),
     ]
 
@@ -355,6 +378,8 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
         self.assertEqual(payload["player"]["draw_pile_cards"][0]["canonical_card_id"], "pommel_strike")
         self.assertEqual(payload["player"]["discard_pile_cards"][0]["name"], "打击")
         self.assertEqual(payload["player"]["exhaust_pile_cards"], [])
+        self.assertEqual(payload["player"]["potion_capacity"], 2)
+        self.assertEqual(payload["player"]["potions"][0]["canonical_potion_id"], "strength_potion")
         self.assertEqual(payload["player"]["powers"][0]["amount"], 3)
         self.assertEqual(payload["enemies"][0]["intent_damage"], 11)
         self.assertEqual(payload["enemies"][0]["move_name"], "撕咬")
@@ -363,6 +388,11 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
         self.assertEqual(payload["enemies"][0]["powers"][0]["name"], "力量")
         self.assertEqual(payload["run_state"]["map"]["current_coord"], "1,2")
         self.assertNotIn("intent_raw", payload["enemies"][0])
+
+    def test_summarize_action_includes_potion_preview(self) -> None:
+        payload = self.policy._summarize_action(build_actions()[1])
+
+        self.assertEqual(payload["potion_preview"]["canonical_potion_id"], "strength_potion")
 
     def test_summarize_snapshot_hides_duplicate_move_name(self) -> None:
         snapshot = build_snapshot()
@@ -402,6 +432,8 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
         self.assertNotIn("run_state", payload)
         self.assertEqual(payload["player"]["hand"][0]["name"], "打击")
         self.assertEqual(payload["player"]["draw_pile_cards"], [])
+        self.assertEqual(payload["player"]["potions"], [])
+        self.assertEqual(payload["player"]["potion_capacity"], 0)
         self.assertEqual(payload["enemies"][0]["intent"], "attack")
 
 
