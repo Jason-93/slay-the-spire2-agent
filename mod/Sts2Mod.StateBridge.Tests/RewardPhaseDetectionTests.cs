@@ -310,7 +310,7 @@ public sealed class RewardPhaseDetectionTests
                     TargetType = "AnyEnemy",
                     CardType = "Attack",
                     Rarity = "Starter",
-                    Traits = new[] { "starter" },
+                    Traits = new[] { "starter", "Strike" },
                     Keywords = new[] { "damage" },
                     HoverTips = new[]
                     {
@@ -348,6 +348,7 @@ public sealed class RewardPhaseDetectionTests
                     TargetType = "Self",
                     CardType = "Skill",
                     Rarity = "Starter",
+                    Traits = new[] { "Defend" },
                     Keywords = new[] { "block" },
                     HoverTips = new[]
                     {
@@ -472,10 +473,7 @@ public sealed class RewardPhaseDetectionTests
         Assert.NotNull(exported.Snapshot.Player);
         var player = exported.Snapshot.Player!;
         var card = Assert.Single(player.Hand);
-        var glossary = Assert.Single(card.Glossary ?? Array.Empty<GlossaryAnchor>());
-        Assert.Equal("draw", glossary.GlossaryId);
-        Assert.Equal("runtime_hover_tip", glossary.Source);
-        Assert.Equal("拾起时，随机**升级**{Cards}张技能牌。", glossary.Hint);
+        Assert.Empty(card.Glossary ?? Array.Empty<GlossaryAnchor>());
         Assert.Equal(0, hoverTipDescription.FormattedCallCount);
         Assert.True(hoverTipDescription.RawCallCount >= 1);
     }
@@ -513,6 +511,40 @@ public sealed class RewardPhaseDetectionTests
         Assert.Contains("获得9点**格挡**。", card.Description);
         Assert.Equal(0, renderedDescription.FormattedCallCount);
         Assert.True(renderedDescription.RawCallCount >= 1);
+    }
+
+    [Fact]
+    public void BuildCombatWindow_RendersGlossaryHintTemplateVariablesFromPotionSource()
+    {
+        var reader = CreateReader();
+        var runNode = new FakeRunNode(new FakeScreenTracker());
+        var runState = new FakeRunState(
+            new[] { new FakeEnemy("enemy-1", true) },
+            potions: new object[]
+            {
+                new FakePotion("Block Potion")
+                {
+                    PotionId = "block_potion",
+                    Description = "Gain {Block:diff()} [gold]Block[/gold].",
+                    Block = 12,
+                    HoverTips = new[]
+                    {
+                        new FakeHoverTip("block", "Block", "Gain {Block:diff()} [gold]Block[/gold]."),
+                    },
+                },
+            },
+            maxPotionCount: 2);
+
+        var window = InvokeBuildCombatWindow(reader, runNode, runState);
+        var exported = new CombatWindowExtractor().Export(window, new BridgeSessionState(new BridgeOptions()));
+
+        Assert.NotNull(exported.Snapshot.Player);
+        var player = exported.Snapshot.Player!;
+        var potion = Assert.Single(player.Potions);
+        var glossary = Assert.Single(potion.Glossary ?? Array.Empty<GlossaryAnchor>());
+        Assert.Equal("block", glossary.GlossaryId);
+        Assert.Equal("Gain 12 **Block**.", glossary.Hint);
+        Assert.Equal("runtime_hover_tip", glossary.Source);
     }
 
     [Fact]
@@ -594,11 +626,8 @@ public sealed class RewardPhaseDetectionTests
         Assert.Contains("debuff", enemy.IntentEffects ?? Array.Empty<string>());
         Assert.Null(enemy.MoveName);
         Assert.Equal("这个敌人将要对你施加一个负面效果。", enemy.MoveDescription);
-        var debuffGlossary = Assert.Single(enemy.MoveGlossary ?? Array.Empty<GlossaryAnchor>());
-        Assert.Equal("debuff", debuffGlossary.GlossaryId);
-        Assert.Equal("fallback_builtin", debuffGlossary.Source);
-        Assert.Equal("会削弱目标。", debuffGlossary.Hint);
-        Assert.DoesNotContain(logger.WarnMessages, message => message.Contains("Glossary hint missing glossary_id=debuff", StringComparison.Ordinal));
+        Assert.Empty(enemy.MoveGlossary ?? Array.Empty<GlossaryAnchor>());
+        Assert.Contains(logger.WarnMessages, message => message.Contains("reason=fallback_builtin", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -723,7 +752,7 @@ public sealed class RewardPhaseDetectionTests
         var card = Assert.Single(player.Hand);
 
         Assert.Equal("Gain 5 **Block**.", card.Description);
-        Assert.Contains(card.Glossary ?? Array.Empty<GlossaryAnchor>(), anchor => anchor.GlossaryId == "block");
+        Assert.Empty(card.Glossary ?? Array.Empty<GlossaryAnchor>());
     }
 
     [Fact]
@@ -756,7 +785,7 @@ public sealed class RewardPhaseDetectionTests
         var card = Assert.Single(player.Hand);
 
         Assert.Equal("Deal 6 **damage**.", card.Description);
-        Assert.Contains(card.Glossary ?? Array.Empty<GlossaryAnchor>(), anchor => anchor.GlossaryId == "damage");
+        Assert.Empty(card.Glossary ?? Array.Empty<GlossaryAnchor>());
     }
 
     [Fact]
@@ -785,7 +814,7 @@ public sealed class RewardPhaseDetectionTests
         var card = Assert.Single(player.Hand);
 
         Assert.Equal("Draw {Draw:diff()} cards.", card.Description);
-        Assert.Contains(card.Glossary ?? Array.Empty<GlossaryAnchor>(), anchor => anchor.GlossaryId == "draw");
+        Assert.Empty(card.Glossary ?? Array.Empty<GlossaryAnchor>());
     }
 
     [Fact]

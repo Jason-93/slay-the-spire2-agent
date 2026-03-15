@@ -308,6 +308,8 @@ internal sealed class Sts2RuntimeReflectionReader
             ["upgrade"] = new("upgrade", "升级", new[] { "升级", "upgrade" }, "永久强化卡牌或其他对象的数值与效果。"),
             ["relic"] = new("relic", "遗物", new[] { "遗物", "relic" }, "提供被动效果的永久收藏品。"),
             ["metallicize"] = new("metallicize", "金属化", new[] { "金属化", "metallicize" }, "在回合结束时获得格挡。"),
+            ["strike"] = new("strike", "打击", new[] { "打击", "strike" }, "攻击标签，常用于与打击牌相关的协同效果。"),
+            ["defend"] = new("defend", "防御", new[] { "防御", "defend" }, "防御标签，常用于与防御牌相关的协同效果。"),
         };
     private readonly BridgeOptions _options;
     private readonly InstallationProbeResult _probe;
@@ -3356,6 +3358,11 @@ internal sealed class Sts2RuntimeReflectionReader
             path: $"{path}.glossary",
             source ?? card,
             card);
+        glossary = FilterCardGlossary(
+            ResolveCardCanonicalId(card),
+            ConvertToText(GetMemberValue(card, "Title") ?? GetMemberValue(card, "Name") ?? card) ?? path,
+            glossary,
+            $"{path}.glossary");
         var canonicalDescription = ChooseCanonicalDescription(renderOutcome.Text, raw);
         LogDescriptionDiagnostics(
             kind: "card",
@@ -3369,6 +3376,77 @@ internal sealed class Sts2RuntimeReflectionReader
             glossary: glossary,
             context: GetCardDescriptionContextLabel(effectiveContext));
         return new DescriptionExtraction(raw, renderOutcome.Text, canonicalDescription, renderOutcome.Quality, renderOutcome.Source, vars, glossary);
+    }
+
+    private IReadOnlyList<GlossaryAnchor> FilterCardGlossary(
+        string? canonicalCardId,
+        string cardName,
+        IReadOnlyList<GlossaryAnchor> glossary,
+        string path)
+    {
+        if (glossary.Count == 0)
+        {
+            return glossary;
+        }
+
+        var filtered = new List<GlossaryAnchor>(glossary.Count);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var anchor in glossary)
+        {
+            var reason = ClassifyCardGlossaryFilterReason(anchor);
+            if (reason is not null)
+            {
+                LogCardGlossaryFilter(canonicalCardId ?? cardName, path, anchor, reason);
+                continue;
+            }
+
+            var dedupeKey = string.Join("|",
+                NormalizeComparisonText(anchor.GlossaryId),
+                NormalizeComparisonText(anchor.DisplayText),
+                NormalizeComparisonText(anchor.Hint));
+            if (!seen.Add(dedupeKey))
+            {
+                LogCardGlossaryFilter(canonicalCardId ?? cardName, path, anchor, "duplicate_glossary");
+                continue;
+            }
+
+            filtered.Add(anchor);
+        }
+
+        return filtered;
+    }
+
+    private static string? ClassifyCardGlossaryFilterReason(GlossaryAnchor anchor)
+    {
+        if (string.IsNullOrWhiteSpace(anchor.Hint))
+        {
+            return "empty_hint";
+        }
+
+        if (string.Equals(anchor.Source, "missing_hint", StringComparison.OrdinalIgnoreCase))
+        {
+            return "missing_hint";
+        }
+
+        if (string.Equals(anchor.Source, "fallback_builtin", StringComparison.OrdinalIgnoreCase))
+        {
+            return "fallback_builtin";
+        }
+
+        if (ContainsDescriptionPlaceholder(anchor.Hint))
+        {
+            return "template_hint";
+        }
+
+        return null;
+    }
+
+    private void LogCardGlossaryFilter(string identifier, string path, GlossaryAnchor anchor, string reason)
+    {
+        var message =
+            $"Card glossary filtered card={identifier} path={path} glossary_id={anchor.GlossaryId} " +
+            $"display_text={anchor.DisplayText} source={anchor.Source ?? "unknown"} reason={reason} hint=\"{AbbreviateForLog(anchor.Hint)}\"";
+        _logger?.Warn(message);
     }
 
     private static object? ResolveCardDescriptionSource(object? card)
@@ -4670,6 +4748,11 @@ internal sealed class Sts2RuntimeReflectionReader
             return "missing_hint";
         }
 
+        if (string.Equals(anchor.Source, "fallback_builtin", StringComparison.OrdinalIgnoreCase))
+        {
+            return "fallback_builtin";
+        }
+
         if (ContainsDescriptionPlaceholder(anchor.Hint))
         {
             return "template_hint";
@@ -4795,6 +4878,11 @@ internal sealed class Sts2RuntimeReflectionReader
         if (string.Equals(anchor.Source, "missing_hint", StringComparison.OrdinalIgnoreCase))
         {
             return "missing_hint";
+        }
+
+        if (string.Equals(anchor.Source, "fallback_builtin", StringComparison.OrdinalIgnoreCase))
+        {
+            return "fallback_builtin";
         }
 
         if (ContainsDescriptionPlaceholder(anchor.Hint))
@@ -5173,6 +5261,11 @@ internal sealed class Sts2RuntimeReflectionReader
             return "missing_hint";
         }
 
+        if (string.Equals(anchor.Source, "fallback_builtin", StringComparison.OrdinalIgnoreCase))
+        {
+            return "fallback_builtin";
+        }
+
         if (ContainsDescriptionPlaceholder(anchor.Hint))
         {
             return "template_hint";
@@ -5266,6 +5359,11 @@ internal sealed class Sts2RuntimeReflectionReader
         if (string.Equals(anchor.Source, "missing_hint", StringComparison.OrdinalIgnoreCase))
         {
             return "missing_hint";
+        }
+
+        if (string.Equals(anchor.Source, "fallback_builtin", StringComparison.OrdinalIgnoreCase))
+        {
+            return "fallback_builtin";
         }
 
         if (ContainsDescriptionPlaceholder(anchor.Hint))
@@ -5485,12 +5583,15 @@ internal sealed class Sts2RuntimeReflectionReader
             "currentblock" => "block",
             "baseblock" => "block",
             "blockamount" => "block",
+            "cards" => "draw",
             "drawamount" => "draw",
             "drawcount" => "draw",
+            "cardstodraw" => "draw",
             "carddraw" => "draw",
             "magicnumber" => "magic",
             "magicvalue" => "magic",
             "strengthamount" => "strength",
+            "strengthpower" => "strength",
             _ => normalized ?? string.Empty,
         };
     }
@@ -5924,19 +6025,25 @@ internal sealed class Sts2RuntimeReflectionReader
 
     private GlossaryHintResolution ResolveGlossaryHint(GlossaryCandidate candidate, string path, IReadOnlyList<object?> hintSources)
     {
+        if (string.Equals(candidate.MatchSource, "trait", StringComparison.OrdinalIgnoreCase) &&
+            TryResolveBuiltInGlossaryHint(candidate.GlossaryId, out var traitBuiltInHint))
+        {
+            return new GlossaryHintResolution(traitBuiltInHint, "fallback_builtin");
+        }
+
         if (TryResolveRuntimeHoverTipHint(candidate, hintSources, out var hoverTipHint))
         {
-            return new GlossaryHintResolution(hoverTipHint, "runtime_hover_tip");
+            return new GlossaryHintResolution(RenderGlossaryHintTemplate(hoverTipHint, candidate, hintSources), "runtime_hover_tip");
         }
 
         if (TryResolveModelDescriptionHint(candidate, hintSources, out var modelHint))
         {
-            return new GlossaryHintResolution(modelHint, "model_description");
+            return new GlossaryHintResolution(RenderGlossaryHintTemplate(modelHint, candidate, hintSources), "model_description");
         }
 
         if (TryResolveLocalizationHint(candidate.GlossaryId, out var locStringHint))
         {
-            return new GlossaryHintResolution(locStringHint, "loc_string");
+            return new GlossaryHintResolution(RenderGlossaryHintTemplate(locStringHint, candidate, hintSources), "loc_string");
         }
 
         if (TryResolveBuiltInGlossaryHint(candidate.GlossaryId, out var builtInHint))
@@ -5948,6 +6055,49 @@ internal sealed class Sts2RuntimeReflectionReader
             $"Glossary hint missing glossary_id={candidate.GlossaryId} display_text={candidate.DisplayText} " +
             $"match_source={candidate.MatchSource} path={path}");
         return new GlossaryHintResolution(null, "missing_hint");
+    }
+
+    private static string? RenderGlossaryHintTemplate(string? rawHint, GlossaryCandidate candidate, IReadOnlyList<object?> hintSources)
+    {
+        var normalizedHint = NormalizeDescriptionText(rawHint);
+        if (string.IsNullOrWhiteSpace(normalizedHint) || !ContainsDescriptionPlaceholder(normalizedHint))
+        {
+            return normalizedHint;
+        }
+
+        var best = normalizedHint;
+        var bestPlaceholderCount = PlaceholderRegex.Matches(normalizedHint).Count;
+        foreach (var source in hintSources)
+        {
+            if (source is null)
+            {
+                continue;
+            }
+
+            var seedVariables = new List<DescriptionVariable>();
+            AddSeedVariable(seedVariables, candidate.GlossaryId, source, "glossary_hint_seed", null);
+            var rendered = NormalizeDescriptionText(RenderTemplateDescription(
+                normalizedHint,
+                ExtractDescriptionVariables(source, normalizedHint, seedVariables)));
+            if (string.IsNullOrWhiteSpace(rendered))
+            {
+                continue;
+            }
+
+            var placeholderCount = PlaceholderRegex.Matches(rendered).Count;
+            if (placeholderCount == 0)
+            {
+                return rendered;
+            }
+
+            if (placeholderCount < bestPlaceholderCount)
+            {
+                best = rendered;
+                bestPlaceholderCount = placeholderCount;
+            }
+        }
+
+        return best;
     }
 
     private static bool TryResolveRuntimeHoverTipHint(GlossaryCandidate candidate, IReadOnlyList<object?> hintSources, out string? hint)
