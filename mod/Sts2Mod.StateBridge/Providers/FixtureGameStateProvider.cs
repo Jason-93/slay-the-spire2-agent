@@ -274,7 +274,13 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                     DrawPile: 2,
                     DiscardPile: 4,
                     ExhaustPile: 0,
-                    Relics: new[] { "Burning Blood" },
+                    Relics: new[]
+                    {
+                        CreateFixtureRelic(
+                            "Burning Blood",
+                            "At the end of combat, heal 6 HP.",
+                            "burning_blood"),
+                    },
                     Potions: new[]
                     {
                         CreateFixturePotion(
@@ -401,7 +407,13 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                     2,
                     4,
                     0,
-                    new[] { "Burning Blood" },
+                    new[]
+                    {
+                        CreateFixtureRelic(
+                            "Burning Blood",
+                            "At the end of combat, heal 6 HP.",
+                            "burning_blood"),
+                    },
                     Array.Empty<RuntimePotionState>(),
                     2,
                     new[]
@@ -452,7 +464,13 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                     0,
                     0,
                     0,
-                    new[] { "Burning Blood" },
+                    new[]
+                    {
+                        CreateFixtureRelic(
+                            "Burning Blood",
+                            "At the end of combat, heal 6 HP.",
+                            "burning_blood"),
+                    },
                     Array.Empty<RuntimePotionState>(),
                     2,
                     DrawPileCards: Array.Empty<RuntimeCard>(),
@@ -542,7 +560,13 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
             2,
             4,
             0,
-            new[] { "Burning Blood" },
+            new[]
+            {
+                CreateFixtureRelic(
+                    "Burning Blood",
+                    "At the end of combat, heal 6 HP.",
+                    "burning_blood"),
+            },
             Array.Empty<RuntimePotionState>(),
             2,
             new[]
@@ -771,6 +795,19 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
             Name: name,
             Description: description,
             CanonicalPotionId: canonicalPotionId,
+            Glossary: CreateFixtureGlossary(keywords));
+    }
+
+    private static RuntimeRelicState CreateFixtureRelic(
+        string name,
+        string description,
+        string canonicalRelicId,
+        params string[] keywords)
+    {
+        return new RuntimeRelicState(
+            Name: name,
+            Description: description,
+            CanonicalRelicId: canonicalRelicId,
             Glossary: CreateFixtureGlossary(keywords));
     }
 

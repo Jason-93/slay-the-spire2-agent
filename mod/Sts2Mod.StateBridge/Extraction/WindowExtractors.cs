@@ -112,7 +112,13 @@ public abstract class WindowExtractorBase : IWindowExtractor
                         Keywords = card.Keywords?.ToArray() ?? Array.Empty<string>(),
                         Glossary = card.Glossary?.ToArray() ?? Array.Empty<GlossaryAnchor>(),
                     }).ToArray() ?? Array.Empty<object>(),
-                    Relics = context.Player.Relics.ToArray(),
+                    Relics = context.Player.Relics.Select(relic => new
+                    {
+                        relic.Name,
+                        relic.Description,
+                        relic.CanonicalRelicId,
+                        Glossary = relic.Glossary?.ToArray() ?? Array.Empty<GlossaryAnchor>(),
+                    }).ToArray(),
                     Potions = context.Player.Potions.Select(potion => new
                     {
                         potion.Name,
@@ -246,7 +252,7 @@ public abstract class WindowExtractorBase : IWindowExtractor
             player.DrawPile,
             player.DiscardPile,
             player.ExhaustPile,
-            player.Relics.ToArray(),
+            player.Relics.Select(Convert).ToArray(),
             player.Potions.Select(Convert).ToArray(),
             player.PotionCapacity,
             Convert(player.Powers),
@@ -324,6 +330,15 @@ public abstract class WindowExtractorBase : IWindowExtractor
             potion.Description,
             potion.CanonicalPotionId,
             potion.Glossary?.ToArray() ?? Array.Empty<GlossaryAnchor>());
+    }
+
+    protected static RelicView Convert(RuntimeRelicState relic)
+    {
+        return new RelicView(
+            relic.Name,
+            relic.Description,
+            relic.CanonicalRelicId,
+            relic.Glossary?.ToArray() ?? Array.Empty<GlossaryAnchor>());
     }
 
     protected static RunState Convert(RuntimeRunState runState)

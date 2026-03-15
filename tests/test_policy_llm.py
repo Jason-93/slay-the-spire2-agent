@@ -14,6 +14,7 @@ from sts2_agent.models import (
     PlayerState,
     PotionView,
     PowerView,
+    RelicView,
     RunMapState,
     RunState,
 )
@@ -109,7 +110,13 @@ def build_snapshot() -> DecisionSnapshot:
                     keywords=["damage"],
                 )
             ],
-            relics=["燃烧之血"],
+            relics=[
+                RelicView(
+                    name="燃烧之血",
+                    description="战斗结束时，回复6点生命。",
+                    canonical_relic_id="burning_blood",
+                )
+            ],
             potions=[
                 PotionView(
                     name="力量药水",
@@ -380,6 +387,8 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
         self.assertEqual(payload["player"]["exhaust_pile_cards"], [])
         self.assertEqual(payload["player"]["potion_capacity"], 2)
         self.assertEqual(payload["player"]["potions"][0]["canonical_potion_id"], "strength_potion")
+        self.assertEqual(payload["player"]["relics"][0]["canonical_relic_id"], "burning_blood")
+        self.assertEqual(payload["player"]["relics"][0]["description"], "战斗结束时，回复6点生命。")
         self.assertEqual(payload["player"]["powers"][0]["amount"], 3)
         self.assertEqual(payload["enemies"][0]["intent_damage"], 11)
         self.assertEqual(payload["enemies"][0]["move_name"], "撕咬")

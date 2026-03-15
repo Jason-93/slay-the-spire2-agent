@@ -44,6 +44,12 @@ public sealed record PotionView(
     string? CanonicalPotionId = null,
     IReadOnlyList<GlossaryAnchor>? Glossary = null);
 
+public sealed record RelicView(
+    string Name,
+    string? Description = null,
+    string? CanonicalRelicId = null,
+    IReadOnlyList<GlossaryAnchor>? Glossary = null);
+
 public sealed record RunMapState(
     string? CurrentCoord = null,
     string? CurrentNodeType = null,
@@ -86,7 +92,7 @@ public sealed record PlayerState(
     int DrawPile,
     int DiscardPile,
     int ExhaustPile,
-    IReadOnlyList<string> Relics,
+    IReadOnlyList<RelicView> Relics,
     IReadOnlyList<PotionView> Potions,
     int PotionCapacity,
     IReadOnlyList<PowerView>? Powers = null,

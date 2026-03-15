@@ -267,7 +267,7 @@ class ChatCompletionsPolicy:
                 "draw_pile_cards": [ChatCompletionsPolicy._summarize_card(card) for card in snapshot.player.draw_pile_cards],
                 "discard_pile_cards": [ChatCompletionsPolicy._summarize_card(card) for card in snapshot.player.discard_pile_cards],
                 "exhaust_pile_cards": [ChatCompletionsPolicy._summarize_card(card) for card in snapshot.player.exhaust_pile_cards],
-                "relics": list(snapshot.player.relics),
+                "relics": [ChatCompletionsPolicy._summarize_relic(relic) for relic in snapshot.player.relics],
                 "potions": [ChatCompletionsPolicy._summarize_potion(potion) for potion in snapshot.player.potions],
                 "potion_capacity": snapshot.player.potion_capacity,
                 "powers": [ChatCompletionsPolicy._summarize_power(power) for power in snapshot.player.powers],
@@ -358,6 +358,22 @@ class ChatCompletionsPolicy:
         canonical_potion_id = getattr(potion, "canonical_potion_id", None)
         if isinstance(canonical_potion_id, str) and canonical_potion_id:
             payload["canonical_potion_id"] = canonical_potion_id
+        return payload
+
+    @staticmethod
+    def _summarize_relic(relic: Any) -> dict[str, Any]:
+        payload = {
+            "name": relic.name,
+        }
+        preferred_description = ChatCompletionsPolicy._preferred_description_text(relic)
+        if preferred_description:
+            payload["description"] = preferred_description
+        glossary = ChatCompletionsPolicy._summarize_glossary(getattr(relic, "glossary", []))
+        if glossary:
+            payload["glossary"] = glossary
+        canonical_relic_id = getattr(relic, "canonical_relic_id", None)
+        if isinstance(canonical_relic_id, str) and canonical_relic_id:
+            payload["canonical_relic_id"] = canonical_relic_id
         return payload
 
     @staticmethod

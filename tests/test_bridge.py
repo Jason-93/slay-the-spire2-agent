@@ -36,6 +36,8 @@ class MockBridgeTests(unittest.TestCase):
         self.assertEqual(snapshot.player.discard_pile, len(snapshot.player.discard_pile_cards))
         self.assertEqual(snapshot.player.exhaust_pile, len(snapshot.player.exhaust_pile_cards))
         self.assertEqual(snapshot.player.potion_capacity, 2)
+        self.assertEqual(snapshot.player.relics[0].name, "Burning Blood")
+        self.assertEqual(snapshot.player.relics[0].canonical_relic_id, "burning_blood")
         self.assertEqual(snapshot.player.potions[0].name, "Strength Potion")
         self.assertEqual(snapshot.player.potions[0].canonical_potion_id, "strength_potion")
         use_potion = next(action for action in actions if action.type == "use_potion")
@@ -284,7 +286,13 @@ class HttpBridgeTests(unittest.TestCase):
                 "draw_pile": 10,
                 "discard_pile": 2,
                 "exhaust_pile": 0,
-                "relics": ["Burning Blood"],
+                "relics": [
+                    {
+                        "name": "Burning Blood",
+                        "description": "At the end of combat, heal 6 HP.",
+                        "canonical_relic_id": "burning_blood",
+                    }
+                ],
                 "potions": [
                     {
                         "name": "Strength Potion",
@@ -448,6 +456,8 @@ class HttpBridgeTests(unittest.TestCase):
         self.assertEqual(snapshot.player.hand[0].canonical_card_id, "strike_red")
         self.assertEqual(snapshot.player.hand[0].description, "Deal 6 **damage**.")
         self.assertEqual(snapshot.player.hand[0].glossary[0].glossary_id, "damage")
+        self.assertEqual(snapshot.player.relics[0].name, "Burning Blood")
+        self.assertEqual(snapshot.player.relics[0].description, "At the end of combat, heal 6 HP.")
         self.assertEqual(snapshot.player.draw_pile_cards[0].canonical_card_id, "pommel_strike")
         self.assertEqual(snapshot.player.draw_pile_cards[0].description, "Deal 9 **damage**. Draw 1 card.")
         self.assertEqual(snapshot.player.discard_pile_cards[0].glossary[0].glossary_id, "block")
@@ -492,6 +502,7 @@ class HttpBridgeTests(unittest.TestCase):
         self.assertEqual(snapshot.enemies[0].keywords, [])
         self.assertEqual(snapshot.player.potions, [])
         self.assertEqual(snapshot.player.potion_capacity, 0)
+        self.assertEqual(snapshot.player.relics, [])
         self.assertEqual(snapshot.player.hand, [])
         self.assertEqual(snapshot.player.draw_pile_cards, [])
         self.assertEqual(snapshot.player.discard_pile_cards, [])

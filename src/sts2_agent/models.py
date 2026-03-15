@@ -78,6 +78,14 @@ class PotionView:
 
 
 @dataclass(slots=True)
+class RelicView:
+    name: str
+    description: str | None = None
+    canonical_relic_id: str | None = None
+    glossary: list[GlossaryAnchor] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class RunMapState:
     current_coord: str | None = None
     current_node_type: str | None = None
@@ -107,7 +115,7 @@ class PlayerState:
     draw_pile: int = 0
     discard_pile: int = 0
     exhaust_pile: int = 0
-    relics: list[str] = field(default_factory=list)
+    relics: list[RelicView] = field(default_factory=list)
     potions: list[PotionView] = field(default_factory=list)
     potion_capacity: int = 0
     powers: list[PowerView] = field(default_factory=list)

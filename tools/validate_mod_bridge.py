@@ -108,6 +108,12 @@ def main() -> int:
         assert "description_quality" not in combat_snapshot["player"]["hand"][0]
         assert "description_source" not in combat_snapshot["player"]["hand"][0]
         assert "description_vars" not in combat_snapshot["player"]["hand"][0]
+        assert combat_snapshot["player"]["relics"][0]["name"] == "Burning Blood"
+        assert combat_snapshot["player"]["relics"][0]["description"] == "At the end of combat, heal 6 HP."
+        assert combat_snapshot["player"]["relics"][0]["canonical_relic_id"] == "burning_blood"
+        assert "description_quality" not in combat_snapshot["player"]["relics"][0]
+        assert "description_source" not in combat_snapshot["player"]["relics"][0]
+        assert "description_vars" not in combat_snapshot["player"]["relics"][0]
         assert isinstance(combat_snapshot["player"]["draw_pile_cards"], list)
         assert isinstance(combat_snapshot["player"]["discard_pile_cards"], list)
         assert isinstance(combat_snapshot["player"]["exhaust_pile_cards"], list)

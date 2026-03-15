@@ -27,6 +27,7 @@ from sts2_agent.models import (
     PlayerState,
     PotionView,
     PowerView,
+    RelicView,
     RunMapState,
     RunState,
 )
@@ -190,7 +191,11 @@ class MockGameBridge(GameBridge):
             draw_pile=int(raw.get("draw_pile") or 0),
             discard_pile=int(raw.get("discard_pile") or 0),
             exhaust_pile=int(raw.get("exhaust_pile") or 0),
-            relics=list(raw.get("relics") or []),
+            relics=[
+                MockGameBridge._build_relic(relic)
+                for relic in raw.get("relics", [])
+                if isinstance(relic, (dict, str))
+            ],
             potions=[
                 MockGameBridge._build_potion(potion)
                 for potion in raw.get("potions", [])
@@ -254,6 +259,17 @@ class MockGameBridge(GameBridge):
             name=str(raw.get("name") or ""),
             description=MockGameBridge._optional_str(raw.get("description")),
             canonical_potion_id=MockGameBridge._optional_str(raw.get("canonical_potion_id")),
+            glossary=MockGameBridge._build_glossary(raw.get("glossary")),
+        )
+
+    @staticmethod
+    def _build_relic(raw: dict[str, Any] | str) -> RelicView:
+        if isinstance(raw, str):
+            return RelicView(name=raw)
+        return RelicView(
+            name=str(raw.get("name") or ""),
+            description=MockGameBridge._optional_str(raw.get("description")),
+            canonical_relic_id=MockGameBridge._optional_str(raw.get("canonical_relic_id")),
             glossary=MockGameBridge._build_glossary(raw.get("glossary")),
         )
 

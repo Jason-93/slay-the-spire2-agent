@@ -252,6 +252,7 @@ def audit_card_descriptions(
     placeholder_paths: list[str] = []
     preview_mismatches: list[dict[str, str]] = []
     audited_card_count = 0
+    audited_relic_count = 0
 
     player = snapshot.get("player")
     player = player if isinstance(player, dict) else {}
@@ -271,6 +272,16 @@ def audit_card_descriptions(
             card_id = card.get("card_id")
             if pile_name == "hand" and isinstance(card_id, str) and isinstance(description, str) and description:
                 hand_descriptions_by_id[card_id] = description
+
+    relics = player.get("relics")
+    relics = relics if isinstance(relics, list) else []
+    for index, relic in enumerate(relics):
+        if not isinstance(relic, dict):
+            continue
+        audited_relic_count += 1
+        description = relic.get("description")
+        if contains_description_placeholder(description):
+            placeholder_paths.append(f"snapshot.player.relics[{index}].description")
 
     for index, action in enumerate(actions):
         if not isinstance(action, dict):
@@ -300,6 +311,7 @@ def audit_card_descriptions(
 
     return {
         "audited_card_count": audited_card_count,
+        "audited_relic_count": audited_relic_count,
         "placeholder_description_count": len(placeholder_paths),
         "placeholder_description_paths": placeholder_paths[:20],
         "preview_mismatch_count": len(preview_mismatches),
@@ -322,6 +334,10 @@ def summarize_snapshot_schema(snapshot: dict[str, Any]) -> dict[str, Any]:
     cards_with_description = 0
     cards_with_glossary = 0
     cards_without_description_diagnostics = 0
+    relic_count = 0
+    relics_with_description = 0
+    relics_with_glossary = 0
+    relics_without_description_diagnostics = 0
     enemies_with_move_name = 0
     enemies_with_move_description = 0
     enemies_with_move_glossary = 0
@@ -340,6 +356,18 @@ def summarize_snapshot_schema(snapshot: dict[str, Any]) -> dict[str, Any]:
                 cards_with_glossary += 1
             if all(key not in card for key in ("description_quality", "description_source", "description_vars")):
                 cards_without_description_diagnostics += 1
+    relics = player.get("relics") if isinstance(player, dict) else []
+    relics = relics if isinstance(relics, list) else []
+    for relic in relics:
+        if not isinstance(relic, dict):
+            continue
+        relic_count += 1
+        if relic.get("description"):
+            relics_with_description += 1
+        if isinstance(relic.get("glossary"), list) and relic.get("glossary"):
+            relics_with_glossary += 1
+        if all(key not in relic for key in ("description_quality", "description_source", "description_vars")):
+            relics_without_description_diagnostics += 1
     for enemy in enemies:
         if not isinstance(enemy, dict):
             continue
@@ -370,6 +398,10 @@ def summarize_snapshot_schema(snapshot: dict[str, Any]) -> dict[str, Any]:
         "cards_with_description": cards_with_description,
         "cards_with_glossary": cards_with_glossary,
         "cards_without_description_diagnostics": cards_without_description_diagnostics,
+        "relic_count": relic_count,
+        "relics_with_description": relics_with_description,
+        "relics_with_glossary": relics_with_glossary,
+        "relics_without_description_diagnostics": relics_without_description_diagnostics,
     }
 
 

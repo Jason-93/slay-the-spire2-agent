@@ -96,7 +96,12 @@
     "discard_pile": 4,
     "exhaust_pile": 0,
     "relics": [
-      "Burning Blood"
+      {
+        "name": "Burning Blood",
+        "description": "At the end of combat, heal 6 HP.",
+        "canonical_relic_id": "burning_blood",
+        "glossary": []
+      }
     ],
     "potions": [
       {

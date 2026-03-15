@@ -1740,7 +1740,7 @@ internal sealed class Sts2RuntimeReflectionReader
             "exhaust_pile",
             exhaustPileCount,
             CardDescriptionContext.ExhaustPile);
-        var relics = ExtractLabels(GetMemberValue(player, "Relics"), "player.relics", textDiagnostics);
+        var relics = ExtractRelics(GetMemberValue(player, "Relics"), "player.relics", textDiagnostics);
         var potionCollection = ResolvePotionCollection(player);
         var potions = ExtractPotions(potionCollection, "player.potions", textDiagnostics);
         var potionCapacity = GetNullableInt(player, "MaxPotionCount")
@@ -3681,6 +3681,35 @@ internal sealed class Sts2RuntimeReflectionReader
                ?? GetTypeName(potion);
     }
 
+    private static string? ResolveRelicCanonicalId(object? source, object? fallback = null)
+    {
+        var canonicalInstance = GetMemberValue(source, "CanonicalInstance")
+                                ?? GetMemberValue(fallback, "CanonicalInstance");
+        var definition = GetMemberValue(source, "Definition")
+                         ?? GetMemberValue(fallback, "Definition");
+        var model = GetMemberValue(source, "Model")
+                    ?? GetMemberValue(fallback, "Model");
+        return ConvertToText(
+                   GetMemberValue(source, "RelicId")
+                   ?? GetMemberValue(source, "InternalName")
+                   ?? GetMemberValue(source, "Id")
+                   ?? GetMemberValue(source, "Key")
+                   ?? GetMemberValue(source, "TemplateId")
+                   ?? GetMemberValue(source, "CanonicalId")
+                   ?? GetMemberValue(definition, "RelicId")
+                   ?? GetMemberValue(definition, "Id")
+                   ?? GetMemberValue(definition, "Key")
+                   ?? GetMemberValue(model, "RelicId")
+                   ?? GetMemberValue(model, "Id")
+                   ?? GetMemberValue(model, "Key")
+                   ?? GetMemberValue(canonicalInstance, "RelicId")
+                   ?? GetMemberValue(canonicalInstance, "Id")
+                   ?? GetMemberValue(canonicalInstance, "Key")
+                   ?? canonicalInstance)
+               ?? GetTypeName(source)
+               ?? GetTypeName(fallback);
+    }
+
     private static EnemyIntentDescriptor ResolveEnemyIntent(object enemy, object? playerTargets, string path, TextDiagnosticsCollector textDiagnostics)
     {
         var raw = ConvertToText(
@@ -4300,6 +4329,15 @@ internal sealed class Sts2RuntimeReflectionReader
             .ToArray();
     }
 
+    private IReadOnlyList<RuntimeRelicState> ExtractRelics(object? collection, string path, TextDiagnosticsCollector textDiagnostics)
+    {
+        return EnumerateObjects(collection)
+            .Select((relic, index) => DescribeRelic(relic, $"{path}[{index}]", textDiagnostics))
+            .Where(relic => relic is not null)
+            .Cast<RuntimeRelicState>()
+            .ToArray();
+    }
+
     private static object? ResolvePotionCollection(object? player)
     {
         if (player is null)
@@ -4310,6 +4348,137 @@ internal sealed class Sts2RuntimeReflectionReader
         return GetMemberValue(player, "PotionSlots")
                ?? GetMemberValue(player, "Potions")
                ?? GetMemberValue(player, "PotionModels");
+    }
+
+    private RuntimeRelicState? DescribeRelic(object? relic, string path, TextDiagnosticsCollector textDiagnostics)
+    {
+        var source = GetMemberValue(relic, "Relic")
+                     ?? GetMemberValue(relic, "Model")
+                     ?? GetMemberValue(relic, "RelicModel")
+                     ?? GetMemberValue(relic, "Definition")
+                     ?? GetMemberValue(relic, "CanonicalInstance")
+                     ?? relic;
+        var hoverTip = GetMemberValue(source, "HoverTip")
+                       ?? GetMemberValue(relic, "HoverTip");
+        var name = ConvertToText(
+            GetFirstMemberValue(
+                source,
+                "Title",
+                "Name",
+                "DisplayName",
+                "Label")
+            ?? GetFirstMemberValue(
+                relic,
+                "Title",
+                "Name",
+                "DisplayName",
+                "Label")
+            ?? source,
+            $"{path}.name",
+            textDiagnostics,
+            "Title",
+            "Name",
+            "DisplayName",
+            "Label");
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return null;
+        }
+
+        var descriptionValue =
+            GetFirstMemberValue(
+                source,
+                "Description",
+                "SmartDescription",
+                "DynamicDescription",
+                "StaticDescription",
+                "RulesText",
+                "Text",
+                "TooltipText",
+                "LocString")
+            ?? GetFirstMemberValue(
+                relic,
+                "Description",
+                "SmartDescription",
+                "DynamicDescription",
+                "StaticDescription",
+                "RulesText",
+                "Text",
+                "TooltipText",
+                "LocString")
+            ?? GetMemberValue(hoverTip, "Description");
+        var boundDescriptionValue = TryBindLocStringWithDynamicVars(descriptionValue, source);
+        var raw = ConvertDescriptionTemplateToText(
+            descriptionValue,
+            $"{path}.description",
+            textDiagnostics,
+            "Description",
+            "SmartDescription",
+            "DynamicDescription",
+            "StaticDescription",
+            "RulesText",
+            "Text",
+            "TooltipText");
+        var rendered = ConvertToText(
+            GetFirstMemberValue(
+                source,
+                "RenderedDescription",
+                "RenderedText",
+                "DisplayDescription",
+                "DescriptionRendered")
+            ?? GetFirstMemberValue(
+                relic,
+                "RenderedDescription",
+                "RenderedText",
+                "DisplayDescription",
+                "DescriptionRendered")
+            ?? GetMemberValue(hoverTip, "Description")
+            ?? boundDescriptionValue,
+            $"{path}.rendered",
+            textDiagnostics,
+            "RenderedDescription",
+            "RenderedText",
+            "DisplayDescription",
+            "DescriptionRendered");
+        var canonicalRelicId = ResolveRelicCanonicalId(source, relic);
+        var vars = ExtractDescriptionVariables(
+            source,
+            raw,
+            ExtractDescriptionVariablesFromLocString(descriptionValue, "loc_string")
+                .Concat(ExtractDescriptionVariablesFromLocString(boundDescriptionValue, "bound_loc_string"))
+                .ToArray());
+        var renderOutcome = RenderDescription(raw, rendered, vars);
+        var canonicalDescription = ChooseCanonicalDescription(renderOutcome.Text, raw);
+        var glossary = ExtractGlossaryAnchors(
+            canonicalRelicId,
+            name,
+            new[] { canonicalDescription, raw, name },
+            keywords: null,
+            traits: null,
+            path: $"{path}.glossary",
+            source,
+            relic,
+            hoverTip);
+        LogDescriptionDiagnostics(
+            kind: "relic",
+            identifier: canonicalRelicId ?? name,
+            path: path,
+            raw: raw,
+            rendered: canonicalDescription,
+            quality: renderOutcome.Quality,
+            source: renderOutcome.Source,
+            variables: vars,
+            glossary: glossary);
+        if (string.IsNullOrWhiteSpace(canonicalDescription))
+        {
+            _logger?.Warn($"Relic description unavailable relic={canonicalRelicId ?? name} path={path} stage=no_runtime_description");
+        }
+
+        return new RuntimeRelicState(
+            Name: name,
+            Description: canonicalDescription,
+            CanonicalRelicId: canonicalRelicId,
+            Glossary: glossary);
     }
 
     private static object? ResolvePowerCollection(object? source)
