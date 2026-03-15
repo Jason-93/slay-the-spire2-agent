@@ -62,30 +62,38 @@
 - **THEN** `action_id` MUST 反映该 `card_id` 所代表的实例级差异
 
 ### Requirement: live snapshot 与 actions 必须导出可读的用户向文本
-系统 MUST 对 in-game runtime bridge 中的主要文本字段执行统一解析，至少覆盖 relics、potions、rewards、map nodes、cards、enemies 与 action labels。当字段背后存在 `LocString` 或类似本地化容器时，bridge MUST 优先输出面向玩家的本地化文本，而不得将类名、原始对象名或无意义 `ToString()` 结果直接作为对外值。
+系统 MUST 对 in-game runtime bridge 中的主要文本字段执行统一解析，至少覆盖 relics、potions、rewards、map nodes、cards、powers、enemies 与 action labels。当字段背后存在 `LocString`、动态变量或类似本地化容器时，bridge MUST 在 mod 端直接输出面向玩家的最终可读文本，而不得把模板替换职责下放给 Python client、policy 或其他外部调用方。对于带说明的实体，对外协议中的 `description` MUST 作为唯一 canonical 文本字段；bridge MUST NOT 再要求调用方在 `description`、`description_rendered`、`description_raw` 之间自行挑选真实语义。若原始文本包含 `[gold]格挡[/gold]` 这类 glossary 富文本高亮，bridge MUST 在对外 `description` 中将其规范化为 `**格挡**` 这类稳定标记。
 
-#### Scenario: relics 与 potions 使用本地化文本导出
-- **WHEN** 玩家状态中包含 relics 或 potions，且对应对象可以解析到本地化显示文本
-- **THEN** `/snapshot.player.relics` 与 `/snapshot.player.potions` MUST 返回可读的本地化名称
-- **THEN** 返回值 MUST NOT 是 `MegaCrit.Sts2.Core.Localization.LocString` 或类似类名字符串
+#### Scenario: 基础手牌说明由 mod 端直接解析为 canonical description
+- **WHEN** 玩家手牌中的 `Strike`、`Defend` 等卡牌说明包含 `{Damage:diff()}`、`{Block:diff()}` 或等效模板占位符
+- **THEN** `snapshot.player.hand[].description` MUST 由 mod 端直接导出最终可读文本
+- **THEN** 对应的 `actions[].metadata.card_preview.description` MUST 与快照语义一致
+- **THEN** 外部 client MUST NOT 需要再次执行模板替换或在多个说明字段间自行兜底
 
-#### Scenario: reward 与 action label 优先使用用户向文本
-- **WHEN** reward 按钮或 legal action 背后同时存在本地化文本与开发者内部标识
-- **THEN** `/snapshot.rewards` 与 `/actions[].label` MUST 优先输出用户实际看到的可读文本
-- **THEN** 若需要稳定行为参数，bridge MUST 通过 `params` 或 metadata 保留结构化标识，而不是仅依赖 label
+#### Scenario: power 说明由 mod 端统一给出可消费语义
+- **WHEN** 玩家或敌人 powers 的说明文本依赖 runtime 数值、富文本标签或本地化变量
+- **THEN** `snapshot.player.powers[]` 与 `snapshot.enemies[].powers[]` MUST 直接导出可读的 `description`
+- **THEN** bridge MUST 同时保留结构化数值来源，便于外部 agent 判断说明可信度
+
+#### Scenario: glossary 高亮以 markdown 风格导出
+- **WHEN** 某条说明文本中包含 glossary 词条高亮，例如 `[gold]格挡[/gold]`
+- **THEN** 对外 `description` MUST 导出为 `**格挡**`
+- **THEN** bridge MUST NOT 在公共文本字段中继续暴露游戏内部富文本标签
 
 ### Requirement: 文本解析失败时必须提供可诊断的降级信息
-系统 MUST 在文本解析失败或只能使用 fallback 时保持 fail-safe，并在 metadata 或等效 diagnostics 结构中暴露足够的调试信息。bridge MUST NOT 因为个别文本字段解析失败而使整个 `snapshot` 或 `actions` 构建失败。
+系统 MUST 在文本解析失败、只能拿到模板、或仅能部分解析时保持 fail-safe，并在 metadata 或等效 diagnostics 结构中暴露足够的调试信息。bridge MUST 将“最终可读文本”“质量等级”“解析来源”“变量表”作为服务端语义统一导出，而不是让客户端通过猜测字符串内容来判断是否仍含占位符。bridge MAY 在 diagnostics 中保留调试原文，但 MUST NOT 依赖公共 schema 中的重复兼容文本字段。bridge MUST NOT 因为个别文本字段解析失败而使整个 `snapshot` 或 `actions` 构建失败。
 
-#### Scenario: 无法解析本地化文本时仍返回稳定快照
-- **WHEN** 某个 runtime 对象的文本字段无法通过本地化或预定字段解析
+#### Scenario: 仍含模板占位符时导出 template_fallback 诊断
+- **WHEN** 某张卡牌或 power 的说明文本在 mod 端仍无法完全解析，最终 `description` 仍保留模板占位符
+- **THEN** 对应对象 MUST 导出 `description_quality="template_fallback"` 或等效稳定值
+- **THEN** 对应对象 MUST 导出 `description_source` 与可诊断的 `description_vars`
+- **THEN** 外部 client MUST 能仅通过这些服务端字段识别当前文本不可完全信任，而不需要自行扫描模板语法
+
+#### Scenario: 解析失败时快照仍可稳定返回
+- **WHEN** 某个 runtime 对象的文本字段无法通过本地化、动态变量或约定字段解析
 - **THEN** bridge MUST 仍然返回可序列化的 `snapshot` 或 `actions` 响应
-- **THEN** bridge MUST 在 metadata 中指出对应字段使用了 fallback 或存在 unresolved 情况
-
-#### Scenario: diagnostics 不得污染面向 Agent 的主字段
-- **WHEN** bridge 需要暴露文本解析来源或失败原因
-- **THEN** diagnostics MUST 优先放在 metadata 或等效辅助字段中
-- **THEN** `name`、`label`、`relics`、`rewards` 等面向 Agent 的主字段 MUST 保持简洁、稳定和可读
+- **THEN** diagnostics MUST 指出该字段使用了 fallback、partial 或 unresolved 语义
+- **THEN** 面向 agent 的主字段仍 MUST 保持稳定可读，不得退化为对象类名或不可序列化值
 
 ### Requirement: 卡牌奖励选择界面必须作为 reward phase 导出并可连续决策
 当奖励链路进入“选牌二级界面”（卡牌奖励选择）时，bridge MUST 将当前窗口导出为 `snapshot.phase="reward"`，并导出可选卡牌的用户向文本到 `snapshot.rewards`，同时生成对应的 `choose_reward` legal actions，使外部 agent 可以在同一 reward 链路中继续选择具体卡牌或完成该奖励步骤。
@@ -260,4 +268,18 @@ bridge MUST 在 reward 收尾、提交前进动作、进入地图三个阶段导
 - **WHEN** glossary `hint` 来自 built-in fallback 或根本缺失
 - **THEN** glossary `source` MUST 标识为 `fallback_builtin`、`missing_hint` 或等效可区分来源
 - **THEN** 调用方 MUST 能据此区分“真实游戏说明”和“bridge 临时兜底”
+
+### Requirement: live runtime bridge 必须将手牌描述绑定到当前卡牌实例的动态值
+系统 MUST 在真实 STS2 进程内，优先基于当前手牌实例的 live runtime 状态解析卡牌描述所需的动态值，而不是长期依赖模板文本或静态定义。对于同名重复手牌，bridge MUST 以实例级语义读取数值，确保导出的描述与该 `card_id` 所代表的当前卡牌一致。
+
+#### Scenario: 同名重复手牌也按实例级动态值读取
+- **WHEN** 玩家手牌中同时存在多张同名卡牌，且其中部分实例因战斗效果产生不同的当前数值
+- **THEN** bridge MUST 按实例读取每张卡牌的动态值
+- **THEN** 每张卡牌导出的描述与变量值 MUST 与其自身 `card_id` 对应，而不是混用模板或共享静态值
+
+#### Scenario: live runtime 找不到动态值时保持 fail-safe
+- **WHEN** runtime bridge 无法从当前卡牌实例上稳定读取某个动态值
+- **THEN** bridge MUST 回退到模板导出路径
+- **THEN** bridge MUST 在 diagnostics 或等效辅助字段中指出该值未成功解析
+- **THEN** bridge MUST NOT 因单张卡牌的动态值读取失败而使整个 live snapshot 构建失败
 

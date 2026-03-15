@@ -2,11 +2,9 @@
 
 ## Purpose
 定义基于本地 HTTP bridge 和 OpenAI 兼容模型接口的自动打牌执行闭环，确保 STS2 live runtime 可以安全地完成“读状态、调模型、提动作、记录 trace”的端到端自动决策流程。
-
 ## Requirements
-
-### Requirement: runner 必须用当前 legal actions 驱动模型连续决策
-系统 MUST 提供一个 `llm-autoplay-runner`，在每一步从 bridge 读取当前 `snapshot` 与 `legal actions`，再调用 LLM policy 生成动作决策。runner MUST 只允许模型从当前 legal set 中选择动作，并在提交前完成本地校验。在 `combat` 中，runner MUST 能跨多个玩家回合连续执行，而不是在单个玩家回合结束后默认退出。
+### Requirement: runner 必须用当前 legal actions 与 richer snapshot 驱动模型连续决策
+系统 MUST 提供一个 `llm-autoplay-runner`，在每一步从 bridge 读取当前 `snapshot` 与 `legal actions`，再调用 LLM policy 生成动作决策。runner MUST 只允许模型从当前 legal set 中选择动作，并在提交前完成本地校验。在 `combat` 中，runner MUST 能跨多个玩家回合连续执行，而不是在单个玩家回合结束后默认退出。当 bridge 已提供 richer runtime state 时，runner MUST 将对战斗决策有价值的 richer fields 一并提供给策略层；当这些字段部分缺失时，runner MUST 退化到基础 snapshot，而不是直接中断运行。
 
 #### Scenario: 模型选择当前合法动作
 - **WHEN** runner 拿到当前 decision 的 `legal actions`
@@ -18,10 +16,15 @@
 - **THEN** runner MUST 将该结果视为无效模型输出
 - **THEN** runner MUST NOT 直接调用 `/apply`
 
-#### Scenario: 同一战斗内跨回合连续执行
-- **WHEN** 当前 encounter 仍处于 `combat`，且前一个玩家回合已结束
-- **THEN** runner MUST 在下一次重新进入玩家回合时继续读取最新 `snapshot` 与 `legal actions`
-- **THEN** runner MUST 基于最新 live state 恢复模型决策，而不是要求调用方重新启动 runner
+#### Scenario: richer snapshot 可用时进入策略输入
+- **WHEN** bridge 在 combat snapshot 中导出了卡牌描述、结构化 intent、powers 或等效 richer fields
+- **THEN** runner MUST 将这些高价值字段纳入策略输入摘要
+- **THEN** 策略层 MUST 不再只能依赖卡名与模糊 intent 做判断
+
+#### Scenario: richer 字段缺失时保持兼容运行
+- **WHEN** 某次 snapshot 只包含基础字段，而 richer fields 缺失或为空
+- **THEN** runner MUST 仍能继续执行当前 autoplay
+- **THEN** 运行结果 MUST 体现为“降级运行”，而不是协议错误或强制中断
 
 ### Requirement: runner 必须支持 battle 级停止条件、dry-run 与失败回退
 runner MUST 支持 dry-run 模式、`max_steps` 限制、人工停止和模型失败中断。dry-run 模式下，runner MUST 完整执行读取与模型决策流程，但 MUST NOT 真的向 bridge 发送 `/apply`。在整场战斗 autoplay 场景下，runner MUST 额外支持 battle 级停止条件，例如战斗结束、最大回合数、最大总动作数、下一玩家回合等待超时、模型 halt、bridge 拒绝或连续失败超过预算。
@@ -86,3 +89,16 @@ runner MUST 为每一步保存结构化 trace，至少包含当前 snapshot、le
 - **WHEN** 调用方在命令行显式传入 battle 级参数，如最大回合数、最大总动作数或下一玩家回合等待超时
 - **THEN** 调试入口 MUST 使用这些参数覆盖默认值
 - **THEN** 实际运行配置 MUST 可在 trace、摘要或启动输出中被确认
+
+### Requirement: runner 必须基于卡牌描述质量做策略输入降级
+当 snapshot 中的卡牌 `description_rendered`、`description_vars` 或等效质量字段显示该描述仍处于模板回退时，runner MUST 采用安全降级策略组织模型输入，而不是把模板占位符文本直接当作高置信事实。若描述已经完成真实值解析，runner MUST 优先向策略层提供这些高质量字段。
+
+#### Scenario: 已解析真实值的卡牌优先进入策略输入
+- **WHEN** 当前 snapshot 中某张卡牌已提供不含模板占位符的 `description_rendered` 与可用的 `description_vars`
+- **THEN** runner MUST 优先将这些字段纳入策略输入摘要
+- **THEN** 策略层 MUST 不再只依赖卡名和 glossary 猜测效果
+
+#### Scenario: 模板回退卡牌触发安全降级
+- **WHEN** 当前 snapshot 中某张卡牌的 `description_rendered` 仍含模板占位符，或 `description_vars` 缺少真实值
+- **THEN** runner MUST 将其视为低质量描述输入
+- **THEN** runner MUST 优先回退到卡名、traits、glossary 与其他稳定事实，而不是把未解析模板原样提升为高置信描述
