@@ -6,6 +6,7 @@ from unittest.mock import patch
 from urllib.error import URLError
 
 from sts2_agent.models import (
+    BattleContext,
     CardView,
     DecisionSnapshot,
     EnemyState,
@@ -218,7 +219,7 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
                 {
                     "message": {
                         "content": json.dumps(
-                            {"action_id": "act-1", "reason": "先出防御更稳", "halt": False},
+                            {"action_id": "act-1", "reason": "先出防御更稳", "halt": False, "confidence": "high"},
                             ensure_ascii=False,
                         )
                     }
@@ -231,6 +232,8 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
 
         self.assertEqual(decision.action_id, "act-1")
         self.assertFalse(decision.halt)
+        self.assertEqual(decision.confidence, "high")
+        self.assertEqual(decision.metadata["confidence"], "high")
         self.assertEqual(decision.metadata["provider"], "chat_completions")
         self.assertIn("raw_response_text", decision.metadata)
 
@@ -256,7 +259,7 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
             "choices": [
                 {
                     "message": {
-                        "content": "{\"action_id\": null, \"reason\": \"交还人工\", \"halt\": true}"
+                        "content": "{\"action_id\": null, \"reason\": \"交还人工\", \"halt\": true, \"confidence\": \"low\"}"
                     }
                 }
             ]
@@ -273,7 +276,7 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
             "choices": [
                 {
                     "message": {
-                        "content": "```json\n{\"action_id\": \"act-1\", \"reason\": \"先出防御\", \"halt\": false}\n```"
+                        "content": "```json\n{\"action_id\": \"act-1\", \"reason\": \"先出防御\", \"halt\": false, \"confidence\": \"medium\"}\n```"
                     }
                 }
             ]
@@ -290,7 +293,7 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
             "choices": [
                 {
                     "message": {
-                        "content": "我建议这样操作：\n{\"action_id\": \"act-1\", \"reason\": \"先出防御\", \"halt\": false}\n这样更稳。"
+                        "content": "我建议这样操作：\n{\"action_id\": \"act-1\", \"reason\": \"先出防御\", \"halt\": false, \"confidence\": \"medium\"}\n这样更稳。"
                     }
                 }
             ]
@@ -313,6 +316,7 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
                                 "action_id": "act-1",
                                 "reason": "打击需要明确目标",
                                 "halt": False,
+                                "confidence": "high",
                                 "args": {"target_id": "enemy-2"},
                             },
                             ensure_ascii=False,
@@ -326,6 +330,32 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
             decision = self.policy.decide(build_snapshot(), build_actions())
 
         self.assertEqual(decision.metadata["action_args"]["target_id"], "enemy-2")
+
+    def test_policy_accepts_top_level_target_id(self) -> None:
+        response_payload = {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "action_id": "act-1",
+                                "target_id": "enemy-2",
+                                "reason": "顶层 target_id 也应保留",
+                                "halt": False,
+                                "confidence": 0.9,
+                            },
+                            ensure_ascii=False,
+                        )
+                    }
+                }
+            ]
+        }
+
+        with patch("sts2_agent.policy.llm.urlopen", return_value=FakeHttpResponse(response_payload)):
+            decision = self.policy.decide(build_snapshot(), build_actions())
+
+        self.assertEqual(decision.metadata["action_args"]["target_id"], "enemy-2")
+        self.assertEqual(decision.confidence, 0.9)
 
     def test_policy_raises_timeout(self) -> None:
         with patch("sts2_agent.policy.llm.urlopen", side_effect=TimeoutError()):
@@ -344,12 +374,26 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
             with self.assertRaises(ChatCompletionsParseError):
                 self.policy.decide(build_snapshot(), build_actions())
 
+    def test_policy_rejects_missing_confidence(self) -> None:
+        response_payload = {
+            "choices": [
+                {
+                    "message": {
+                        "content": "{\"action_id\":\"act-1\",\"reason\":\"缺少 confidence\",\"halt\":false}"
+                    }
+                }
+            ]
+        }
+        with patch("sts2_agent.policy.llm.urlopen", return_value=FakeHttpResponse(response_payload)):
+            with self.assertRaises(ChatCompletionsParseError):
+                self.policy.decide(build_snapshot(), build_actions())
+
     def test_policy_rejects_non_object_args(self) -> None:
         response_payload = {
             "choices": [
                 {
                     "message": {
-                        "content": "{\"action_id\":\"act-1\",\"reason\":\"bad args\",\"halt\":false,\"args\":\"enemy-1\"}"
+                        "content": "{\"action_id\":\"act-1\",\"reason\":\"bad args\",\"halt\":false,\"confidence\":\"low\",\"args\":\"enemy-1\"}"
                     }
                 }
             ]
@@ -363,7 +407,7 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
             "choices": [
                 {
                     "message": {
-                        "content": "{\"action_id\":\"act-1\",\"reason\":\"bad args\",\"halt\":false,\"args\":{\"target_id\":1}}"
+                        "content": "{\"action_id\":\"act-1\",\"reason\":\"bad args\",\"halt\":false,\"confidence\":\"low\",\"args\":{\"target_id\":1}}"
                     }
                 }
             ]
@@ -402,6 +446,26 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
         payload = self.policy._summarize_action(build_actions()[1])
 
         self.assertEqual(payload["potion_preview"]["canonical_potion_id"], "strength_potion")
+
+    def test_build_messages_includes_battle_context(self) -> None:
+        battle_context = BattleContext(
+            phase="combat",
+            phase_kind="combat",
+            current_turn_index=2,
+            actions_this_turn=1,
+            total_actions=3,
+            recovery_attempts=1,
+            recovery_successes=1,
+            last_recovery_reason="stale_action",
+            recent_steps=[{"step_index": 2, "action_id": "act-1"}],
+        )
+
+        payload = self.policy._build_messages(build_snapshot(), build_actions(), battle_context=battle_context)
+
+        user_message = json.loads(payload[1]["content"])
+        self.assertEqual(user_message["battle_context"]["current_turn_index"], 2)
+        self.assertEqual(user_message["battle_context"]["last_recovery_reason"], "stale_action")
+        self.assertEqual(user_message["battle_context"]["recent_steps"][0]["action_id"], "act-1")
 
     def test_summarize_snapshot_hides_duplicate_move_name(self) -> None:
         snapshot = build_snapshot()

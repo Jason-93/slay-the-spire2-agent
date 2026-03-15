@@ -25,12 +25,14 @@ class LiveAutoplayConfig:
     max_turns_per_battle: int | None = None
     max_total_actions: int | None = None
     max_consecutive_failures: int = 6
+    max_recovery_attempts: int = 6
     wait_for_next_player_turn_seconds: float = 30.0
     transition_timeout_seconds: float = 15.0
     poll_interval_seconds: float = 0.5
     max_non_combat_steps: int = 24
     unknown_window_fuse: int = 2
     stop_after_next_combat: bool = False
+    battle_context_recent_steps: int = 4
     policy_timeout_seconds: float = 20.0
     temperature: float = 0.2
     max_tokens: int = 256
@@ -71,12 +73,14 @@ def run_live_autoplay(config: LiveAutoplayConfig) -> RunSummary:
             max_turns_per_battle=config.max_turns_per_battle,
             max_total_actions=config.max_total_actions,
             max_consecutive_failures=config.max_consecutive_failures,
+            max_recovery_attempts=config.max_recovery_attempts,
             wait_for_next_player_turn_seconds=config.wait_for_next_player_turn_seconds,
             transition_timeout_seconds=config.transition_timeout_seconds,
             poll_interval_seconds=config.poll_interval_seconds,
             max_non_combat_steps=config.max_non_combat_steps,
             unknown_window_fuse=config.unknown_window_fuse,
             stop_after_next_combat=config.stop_after_next_combat,
+            battle_context_recent_steps=config.battle_context_recent_steps,
             trace_dir=config.trace_dir,
             dry_run=config.dry_run,
         ),

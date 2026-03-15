@@ -202,6 +202,24 @@ class PolicyDecision:
     reason: str
     halt: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)
+    confidence: str | float | None = None
+
+
+@dataclass(slots=True)
+class BattleContext:
+    phase: str = ""
+    phase_kind: str = ""
+    current_turn_index: int = 0
+    actions_this_turn: int = 0
+    total_actions: int = 0
+    waiting_for_player_turn: bool = False
+    recovery_attempts: int = 0
+    recovery_successes: int = 0
+    recovery_streak: int = 0
+    pending_recovery_reason: str = ""
+    last_recovery_reason: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
+    recent_steps: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -214,11 +232,16 @@ class TraceEntry:
     observation: dict[str, Any]
     policy_output: dict[str, Any]
     bridge_result: dict[str, Any]
+    battle_context: dict[str, Any] = field(default_factory=dict)
     step_index: int = 0
     current_turn_index: int = 0
     actions_this_turn: int = 0
     total_actions: int = 0
     waiting_for_player_turn: bool = False
+    recovery_attempts: int = 0
+    recovery_successes: int = 0
+    recovery_streak: int = 0
+    last_recovery_reason: str = ""
     phase_kind: str = ""
     step_kind: str = ""
     transition_elapsed_seconds: float = 0.0
@@ -254,6 +277,11 @@ class RunSummary:
     non_combat_steps: int = 0
     transition_wait_steps: int = 0
     next_combat_entered: bool = False
+    recovery_attempts: int = 0
+    recovery_successes: int = 0
+    recovery_streak: int = 0
+    last_recovery_reason: str = ""
+    battle_context: dict[str, Any] = field(default_factory=dict)
     ended_by: str = ""
 
 

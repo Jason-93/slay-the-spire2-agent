@@ -2,7 +2,7 @@
 
 from typing import Protocol
 
-from sts2_agent.models import DecisionSnapshot, LegalAction, PolicyDecision
+from sts2_agent.models import BattleContext, DecisionSnapshot, LegalAction, PolicyDecision
 
 
 class PolicyError(RuntimeError):
@@ -14,5 +14,10 @@ class PolicyDecisionValidationError(PolicyError):
 
 
 class Policy(Protocol):
-    def decide(self, snapshot: DecisionSnapshot, legal_actions: list[LegalAction]) -> PolicyDecision:
+    def decide(
+        self,
+        snapshot: DecisionSnapshot,
+        legal_actions: list[LegalAction],
+        battle_context: BattleContext | None = None,
+    ) -> PolicyDecision:
         ...

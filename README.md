@@ -125,6 +125,16 @@ http://127.0.0.1:8080/v1
 curl http://127.0.0.1:8080/v1/models
 ```
 
+`chat/completions` 当前要求模型返回严格 JSON，至少包含：
+
+- `action_id`
+- `target_id`：无目标动作可返回 `null`
+- `reason`
+- `halt`
+- `confidence`
+
+其中真正执行仍只依赖当前 legal actions；`target_id` 用于 targeted action 显式对齐目标，`confidence` 主要用于 trace 与恢复诊断。
+
 ### Dry-run
 
 只读取局面并调用模型，不真实提交动作：
@@ -194,11 +204,13 @@ battle 模式下，runner 会在敌方回合和动画窗口持续轮询，直到
 - `--max-turns-per-battle`：限制整场战斗最多完成多少个玩家回合
 - `--max-total-actions`：限制整场战斗最多提交多少个动作
 - `--max-consecutive-failures`：限制连续失败预算
+- `--max-recovery-attempts`：限制 recovery 连续预算，超过后以 `recovery_budget_exhausted` 停止
 - `--wait-for-next-player-turn-seconds`：等待下一玩家回合的超时
 - `--transition-timeout-seconds`：等待 reward/map/房间切换的超时
 - `--poll-interval-seconds`：敌方回合 / 动画窗口的轮询间隔
 - `--max-non-combat-steps`：限制 reward/map/transition 等非战斗步骤预算
 - `--unknown-window-fuse`：未知窗口连续出现多少次后熔断停止
+- `--battle-context-recent-steps`：控制 battle summary 中保留多少条最近步骤
 
 每次运行都会输出 `RunSummary`，并在 `trace_dir` 下保存 JSONL trace。回合级结果重点看：
 
@@ -215,6 +227,9 @@ battle 模式下再重点看：
 - `reward_actions_taken` / `map_actions_taken`：reward 与 map 阶段已提交动作数
 - `non_combat_steps`：本次运行累计经过多少个非战斗步骤
 - `next_combat_entered`：是否成功重新接回下一场战斗
+- `recovery_attempts` / `recovery_successes`：battle 期间 recovery 尝试与恢复成功次数
+- `last_recovery_reason`：最近一次 recovery 原因
+- `battle_context`：最后一次 trace 的 battle 级摘要
 
 单步 trace 至少包含：
 
@@ -230,8 +245,31 @@ battle 模式下再重点看：
 - `actions_this_turn`
 - `phase_kind` / `step_kind`
 - `transition_elapsed_seconds`
+- `battle_context`
+- `recovery_attempts` / `recovery_successes` / `recovery_streak`
 - `is_final_step`
 - `stop_reason`
+
+### 整场战斗 smoke validation
+
+如需把 battle autoplay 的完成度、恢复次数和停止原因稳定落盘，可直接运行：
+
+```bash
+python tools/validate_full_battle_llm.py \
+  --bridge-base-url "http://127.0.0.1:17654" \
+  --base-url "http://127.0.0.1:8080/v1" \
+  --model "Qwen3.5-9B-Q5_K_M.gguf" \
+  --allow-write
+```
+
+脚本会在 `tmp/full-battle-llm-validation/<timestamp>/` 下输出：
+
+- `health.json`
+- `summary.json`
+- `trace_tail.json`
+- `result.json`
+
+其中 `result.json` 会显式记录 `battle_completed`、`turns_completed`、`total_actions`、`recovery_attempts`、`recovery_successes` 和最终 `stop_reason`。
 
 ## 当前进度
 

@@ -11,6 +11,7 @@ from sts2_agent.models import (
     ActionResult,
     ActionStatus,
     ActionSubmission,
+    BattleContext,
     CardView,
     DecisionSnapshot,
     EnemyState,
@@ -25,6 +26,26 @@ from sts2_agent.policy import FirstLegalActionPolicy, PolicyError
 class InvalidActionPolicy:
     def decide(self, snapshot, legal_actions):
         return PolicyDecision(action_id="act-invalid", reason="invalid action")
+
+
+class CapturingBattleContextPolicy:
+    def __init__(self, action_id: str = "act-0-0-play_card") -> None:
+        self.action_id = action_id
+        self.battle_contexts: list[BattleContext | None] = []
+
+    def decide(self, snapshot, legal_actions, battle_context: BattleContext | None = None):
+        self.battle_contexts.append(battle_context)
+        action_id = next((action.action_id for action in legal_actions if action.type != "end_turn"), legal_actions[0].action_id)
+        return PolicyDecision(action_id=action_id, reason="capture battle context", confidence="medium")
+
+
+class LegacyPolicy:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def decide(self, snapshot, legal_actions):
+        self.calls += 1
+        return PolicyDecision(action_id=legal_actions[0].action_id, reason="legacy policy")
 
 
 class MultiTargetPolicy:
@@ -953,6 +974,56 @@ class OrchestratorTests(unittest.TestCase):
             records = [json.loads(line) for line in Path(summary.trace_path).read_text(encoding="utf-8").splitlines()]
             self.assertEqual(records[0]["stop_reason"], "stale_action_retry")
             self.assertFalse(records[0]["is_final_step"])
+            self.assertEqual(summary.recovery_attempts, 1)
+            self.assertEqual(summary.recovery_successes, 1)
+            self.assertEqual(summary.last_recovery_reason, "stale_action")
+
+    def test_orchestrator_passes_battle_context_to_policy_and_trace(self) -> None:
+        bridge = SequencedCombatBridge(
+            [
+                make_window(actions=[{"type": "play_card", "label": "Strike", "params": {"card_id": "card-1"}}]),
+                make_window(phase="reward", actions=[], metadata={}),
+            ]
+        )
+        policy = CapturingBattleContextPolicy()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orchestrator = AutoplayOrchestrator(
+                bridge=bridge,
+                policy=policy,
+                config=OrchestratorConfig(trace_dir=tmpdir),
+            )
+            summary = orchestrator.run(scenario="live")
+
+            self.assertTrue(summary.completed)
+            self.assertEqual(len(policy.battle_contexts), 1)
+            battle_context = policy.battle_contexts[0]
+            assert battle_context is not None
+            self.assertEqual(battle_context.phase, "combat")
+            self.assertEqual(battle_context.current_turn_index, 1)
+            self.assertEqual(battle_context.total_actions, 0)
+            record = json.loads(Path(summary.trace_path).read_text(encoding="utf-8").splitlines()[0])
+            self.assertEqual(record["battle_context"]["phase"], "combat")
+            self.assertEqual(record["battle_context"]["current_turn_index"], 1)
+            self.assertEqual(record["battle_context"]["recent_steps"], [])
+
+    def test_orchestrator_supports_legacy_policy_without_battle_context(self) -> None:
+        bridge = SequencedCombatBridge(
+            [
+                make_window(actions=[{"type": "play_card", "label": "Strike", "params": {"card_id": "card-1"}}]),
+                make_window(phase="reward", actions=[], metadata={}),
+            ]
+        )
+        policy = LegacyPolicy()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orchestrator = AutoplayOrchestrator(
+                bridge=bridge,
+                policy=policy,
+                config=OrchestratorConfig(trace_dir=tmpdir),
+            )
+            summary = orchestrator.run(scenario="live")
+
+            self.assertTrue(summary.completed)
+            self.assertEqual(policy.calls, 1)
 
     def test_orchestrator_retries_stale_auto_end_turn_with_fresh_state(self) -> None:
         bridge = RetryableAutoEndTurnStaleBridge()
@@ -1113,6 +1184,47 @@ class OrchestratorTests(unittest.TestCase):
             records = [json.loads(line) for line in Path(summary.trace_path).read_text(encoding="utf-8").splitlines()]
             self.assertIn("combat_card_selection", {record["step_kind"] for record in records})
 
+    def test_battle_context_keeps_recent_steps_across_combat_selection(self) -> None:
+        bridge = SequencedCombatBridge(
+            [
+                make_window(
+                    actions=[{"type": "play_card", "label": "True Grit", "params": {"card_id": "card-1"}}],
+                    metadata={"window_kind": "player_turn", "current_side": "Player", "round_number": 1},
+                ),
+                make_window(
+                    actions=[
+                        {"type": "choose_combat_card", "label": "消耗 防御", "params": {"card_id": "card-2", "selection_index": 0}},
+                        {"type": "cancel_combat_selection", "label": "取消", "params": {}},
+                    ],
+                    hand=["card-2"],
+                    metadata={
+                        "window_kind": "combat_card_selection",
+                        "current_side": "Player",
+                        "round_number": 1,
+                        "selection_kind": "exhaust_card",
+                        "selection_prompt": "消耗1张牌",
+                    },
+                ),
+                make_window(phase="reward", actions=[], metadata={}),
+            ]
+        )
+        policy = CapturingBattleContextPolicy()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orchestrator = AutoplayOrchestrator(
+                bridge=bridge,
+                policy=policy,
+                config=OrchestratorConfig(trace_dir=tmpdir, stop_after_player_turn=False, max_steps=6),
+            )
+            summary = orchestrator.run(scenario="live")
+
+            self.assertTrue(summary.completed)
+            self.assertGreaterEqual(len(policy.battle_contexts), 2)
+            followup_context = policy.battle_contexts[1]
+            assert followup_context is not None
+            self.assertEqual(followup_context.phase_kind, "combat_card_selection")
+            self.assertTrue(followup_context.recent_steps)
+            self.assertEqual(followup_context.recent_steps[-1]["action_id"], "act-0-0-play_card")
+
     def test_battle_mode_stops_when_waiting_for_next_turn_times_out(self) -> None:
         bridge = SequencedCombatBridge(
             [
@@ -1144,6 +1256,32 @@ class OrchestratorTests(unittest.TestCase):
             records = [json.loads(line) for line in Path(summary.trace_path).read_text(encoding="utf-8").splitlines()]
             self.assertTrue(records[-1]["waiting_for_player_turn"])
             self.assertEqual(records[-1]["battle_stop_reason"], "next_player_turn_timeout")
+
+    def test_battle_mode_stops_when_recovery_budget_exhausted(self) -> None:
+        bridge = SequencedCombatBridge(
+            [
+                make_window(actions=[], hand=[], metadata={"current_side": "Enemy", "round_number": 1}),
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmpdir, patch("sts2_agent.orchestrator.time.sleep", return_value=None):
+            orchestrator = AutoplayOrchestrator(
+                bridge=bridge,
+                policy=FirstLegalActionPolicy(),
+                config=OrchestratorConfig(
+                    trace_dir=tmpdir,
+                    stop_after_player_turn=False,
+                    max_recovery_attempts=1,
+                    wait_for_next_player_turn_seconds=30.0,
+                    max_steps=4,
+                ),
+            )
+            summary = orchestrator.run(scenario="live")
+
+            self.assertFalse(summary.completed)
+            self.assertTrue(summary.interrupted)
+            self.assertEqual(summary.ended_by, "recovery_budget_exhausted")
+            self.assertEqual(summary.recovery_attempts, 1)
+            self.assertEqual(summary.recovery_successes, 0)
 
     def test_battle_mode_respects_max_turns_per_battle(self) -> None:
         bridge = SequencedCombatBridge(

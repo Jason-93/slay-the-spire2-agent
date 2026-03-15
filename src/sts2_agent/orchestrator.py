@@ -4,11 +4,12 @@ import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from datetime import UTC, datetime
+import inspect
 from pathlib import Path
 from typing import Any
 
 from sts2_agent.bridge import BridgeError, GameBridge, InvalidPayloadError, InterruptedSessionError, StaleActionError
-from sts2_agent.models import ActionSubmission, PolicyDecision, RunSummary, TraceEntry, to_dict
+from sts2_agent.models import ActionSubmission, BattleContext, PolicyDecision, RunSummary, TraceEntry, to_dict
 from sts2_agent.policy import PolicyDecisionValidationError, PolicyError
 from sts2_agent.trace import JsonlTraceRecorder
 
@@ -27,12 +28,14 @@ class OrchestratorConfig:
     max_turns_per_battle: int | None = None
     max_total_actions: int | None = None
     max_consecutive_failures: int = 6
+    max_recovery_attempts: int = 6
     wait_for_next_player_turn_seconds: float = 30.0
     transition_timeout_seconds: float = 15.0
     poll_interval_seconds: float = 0.5
     max_non_combat_steps: int = 24
     unknown_window_fuse: int = 2
     stop_after_next_combat: bool = False
+    battle_context_recent_steps: int = 4
     trace_dir: str = "traces"
     dry_run: bool = False
 
@@ -48,6 +51,13 @@ class AutoplayOrchestrator:
         self._non_combat_steps = 0
         self._next_combat_entered = False
         self._transition_attempt = 0
+        self._battle_history: list[dict[str, Any]] = []
+        self._recovery_attempts = 0
+        self._recovery_successes = 0
+        self._recovery_streak = 0
+        self._pending_recovery_reason = ""
+        self._last_recovery_reason = ""
+        self._last_battle_context: dict[str, Any] = {}
 
     def request_stop(self) -> None:
         self._stop_requested = True
@@ -58,6 +68,13 @@ class AutoplayOrchestrator:
         self._non_combat_steps = 0
         self._next_combat_entered = False
         self._transition_attempt = 0
+        self._battle_history = []
+        self._recovery_attempts = 0
+        self._recovery_successes = 0
+        self._recovery_streak = 0
+        self._pending_recovery_reason = ""
+        self._last_recovery_reason = ""
+        self._last_battle_context = {}
 
     def run(self, scenario: str = "combat_reward_map_terminal") -> RunSummary:
         self._reset_run_state()
@@ -115,6 +132,8 @@ class AutoplayOrchestrator:
                 pending_end_turn_transition=pending_end_turn_transition,
                 previous_phase=previous_phase,
             )
+            if self._pending_recovery_reason and self._is_actionable_phase_kind(phase_kind, legal_actions):
+                self._mark_recovery_resolved()
             if self._is_non_combat_phase_kind(phase_kind):
                 self._non_combat_steps += 1
 
@@ -398,6 +417,28 @@ class AutoplayOrchestrator:
                 previous_phase = phase
                 continue
 
+            empty_actions_outcome = self._handle_empty_player_actions(
+                recorder=recorder,
+                snapshot=snapshot,
+                legal_actions=legal_actions,
+                step_index=step_index,
+                current_turn_index=current_turn_index,
+                current_turn_actions=current_turn_actions,
+                total_actions=total_actions,
+                turns_completed=turns_completed,
+                trace_path=trace_path,
+                session_id=session.session_id,
+                waiting_since=waiting_since,
+            )
+            if empty_actions_outcome is not None:
+                step_index = empty_actions_outcome["step_index"]
+                waiting_since = empty_actions_outcome["waiting_since"]
+                consecutive_failures = empty_actions_outcome["consecutive_failures"]
+                if empty_actions_outcome["summary"] is not None:
+                    return empty_actions_outcome["summary"]
+                previous_phase = phase
+                continue
+
             waiting_since = None
 
             preflight_summary = self._player_turn_preflight(
@@ -451,6 +492,14 @@ class AutoplayOrchestrator:
                 consecutive_failures=consecutive_failures,
                 trace_path=trace_path,
                 session_id=session.session_id,
+                battle_context=self._build_battle_context(
+                    snapshot=snapshot,
+                    current_turn_index=current_turn_index,
+                    actions_this_turn=current_turn_actions,
+                    total_actions=total_actions,
+                    waiting_for_player_turn=False,
+                    phase_kind=phase_kind,
+                ),
             )
             step_index = action_result["step_index"]
             current_turn_actions = action_result["current_turn_actions"]
@@ -1156,6 +1205,7 @@ class AutoplayOrchestrator:
         if waiting_since is None:
             waiting_since = time.monotonic()
             self._transition_attempt += 1
+            self._note_recovery_attempt(wait_reason)
         elapsed = time.monotonic() - waiting_since
         if elapsed > self.config.transition_timeout_seconds:
             self._record(
@@ -1256,6 +1306,7 @@ class AutoplayOrchestrator:
         step_index += 1
         if waiting_since is None:
             waiting_since = time.monotonic()
+            self._note_recovery_attempt("enemy_turn_wait")
         if time.monotonic() - waiting_since > self.config.wait_for_next_player_turn_seconds:
             self._record(
                 recorder=recorder,
@@ -1334,6 +1385,7 @@ class AutoplayOrchestrator:
         step_index += 1
         if waiting_since is None:
             waiting_since = time.monotonic()
+            self._note_recovery_attempt("pending_end_turn_transition")
         if time.monotonic() - waiting_since > self.config.wait_for_next_player_turn_seconds:
             self._record(
                 recorder=recorder,
@@ -1434,6 +1486,97 @@ class AutoplayOrchestrator:
             )
         return None
 
+    def _handle_empty_player_actions(
+        self,
+        *,
+        recorder: JsonlTraceRecorder,
+        snapshot,
+        legal_actions,
+        step_index: int,
+        current_turn_index: int,
+        current_turn_actions: int,
+        total_actions: int,
+        turns_completed: int,
+        trace_path: Path,
+        session_id: str,
+        waiting_since: float | None,
+    ) -> dict[str, object] | None:
+        if legal_actions:
+            return None
+        if self.config.stop_after_player_turn:
+            return None
+
+        recovery_reason = "empty_player_actions"
+        if waiting_since is None:
+            waiting_since = time.monotonic()
+            self._note_recovery_attempt(recovery_reason)
+        elapsed = time.monotonic() - waiting_since
+        if elapsed >= self.config.wait_for_next_player_turn_seconds:
+            step_index += 1
+            self._record(
+                recorder=recorder,
+                snapshot=snapshot,
+                legal_actions=legal_actions,
+                policy_output=PolicyDecision(action_id=None, reason="waiting for playable actions", halt=True),
+                bridge_result={"status": "waiting", "reason": recovery_reason, "elapsed_seconds": elapsed},
+                interrupted=True,
+                step_index=step_index,
+                current_turn_index=current_turn_index,
+                actions_this_turn=current_turn_actions,
+                total_actions=total_actions,
+                waiting_for_player_turn=True,
+                is_final_step=True,
+                stop_reason="no_legal_actions",
+                battle_stop_reason="no_legal_actions",
+                step_kind="empty_player_actions",
+                phase_kind="empty_player_actions",
+            )
+            return {
+                "step_index": step_index,
+                "waiting_since": waiting_since,
+                "consecutive_failures": 1,
+                "summary": self._finish(
+                    session_id=session_id,
+                    trace_path=trace_path,
+                    reason="no_legal_actions",
+                    completed=total_actions > 0,
+                    interrupted=total_actions == 0,
+                    turn_completed=total_actions > 0,
+                    battle_completed=False,
+                    actions_this_turn=current_turn_actions,
+                    turns_completed=turns_completed,
+                    total_actions=total_actions,
+                    current_turn_index=current_turn_index,
+                ),
+            }
+
+        step_index += 1
+        self._record(
+            recorder=recorder,
+            snapshot=snapshot,
+            legal_actions=legal_actions,
+            policy_output=PolicyDecision(action_id=None, reason="waiting for playable actions", halt=True),
+            bridge_result={"status": "waiting", "reason": recovery_reason, "elapsed_seconds": elapsed},
+            interrupted=False,
+            step_index=step_index,
+            current_turn_index=current_turn_index,
+            actions_this_turn=current_turn_actions,
+            total_actions=total_actions,
+            waiting_for_player_turn=True,
+            is_final_step=False,
+            stop_reason="",
+            battle_stop_reason="",
+            step_kind="empty_player_actions",
+            phase_kind="empty_player_actions",
+        )
+        time.sleep(self.config.poll_interval_seconds)
+        return {
+            "step_index": step_index,
+            "waiting_since": waiting_since,
+            "consecutive_failures": 0,
+            "summary": None,
+        }
+
     def _handle_auto_end_turn(
         self,
         *,
@@ -1501,10 +1644,12 @@ class AutoplayOrchestrator:
                     stop_reason=stop_reason,
                     battle_stop_reason=stop_reason,
                 )
+                self._mark_recovery_resolved()
             except StaleActionError as exc:
                 stale_action_attempts += 1
                 consecutive_failures += 1
                 retrying = stale_action_attempts <= self.config.stale_action_retries
+                self._note_recovery_attempt(getattr(exc, "error_code", "stale_action"))
                 self._record(
                     recorder=recorder,
                     snapshot=snapshot,
@@ -1648,10 +1793,11 @@ class AutoplayOrchestrator:
         consecutive_failures: int,
         trace_path: Path,
         session_id: str,
+        battle_context: BattleContext | None = None,
     ) -> dict[str, object]:
         try:
             step_index += 1
-            policy_output = self._decide(snapshot, legal_actions)
+            policy_output = self._decide(snapshot, legal_actions, battle_context=battle_context)
             if policy_output.halt or not policy_output.action_id:
                 self._record(
                     recorder=recorder,
@@ -1765,6 +1911,7 @@ class AutoplayOrchestrator:
                 stop_reason=stop_reason,
                 battle_stop_reason=stop_reason,
             )
+            self._mark_recovery_resolved()
             if stop_reason:
                 return self._step_result(
                     step_index=step_index,
@@ -1800,6 +1947,7 @@ class AutoplayOrchestrator:
             stale_action_attempts += 1
             consecutive_failures += 1
             retrying = stale_action_attempts <= self.config.stale_action_retries
+            self._note_recovery_attempt(getattr(exc, "error_code", "stale_action"))
             interrupted_payload = {
                 "status": "interrupted",
                 "error_code": getattr(exc, "error_code", "stale_action"),
@@ -1985,9 +2133,125 @@ class AutoplayOrchestrator:
             "summary": summary,
         }
 
-    def _decide(self, snapshot, legal_actions):
+    def _build_battle_context(
+        self,
+        *,
+        snapshot,
+        current_turn_index: int,
+        actions_this_turn: int,
+        total_actions: int,
+        waiting_for_player_turn: bool,
+        phase_kind: str,
+    ) -> BattleContext:
+        metadata = getattr(snapshot, "metadata", {}) or {}
+        metadata_summary = {
+            key: metadata[key]
+            for key in (
+                "window_kind",
+                "current_side",
+                "selection_kind",
+                "selection_prompt",
+                "selection_choice_count",
+                "selection_cancel_available",
+                "reward_subphase",
+                "transition_kind",
+            )
+            if key in metadata
+        }
+        return BattleContext(
+            phase=getattr(snapshot, "phase", ""),
+            phase_kind=phase_kind,
+            current_turn_index=current_turn_index,
+            actions_this_turn=actions_this_turn,
+            total_actions=total_actions,
+            waiting_for_player_turn=waiting_for_player_turn,
+            recovery_attempts=self._recovery_attempts,
+            recovery_successes=self._recovery_successes,
+            recovery_streak=self._recovery_streak,
+            pending_recovery_reason=self._pending_recovery_reason,
+            last_recovery_reason=self._last_recovery_reason,
+            metadata=metadata_summary,
+            recent_steps=list(self._battle_history[-self.config.battle_context_recent_steps :]),
+        )
+
+    def _append_battle_history(
+        self,
+        *,
+        snapshot,
+        policy_output,
+        bridge_result,
+        current_turn_index: int,
+        actions_this_turn: int,
+        total_actions: int,
+        waiting_for_player_turn: bool,
+        phase_kind: str,
+        step_kind: str,
+        step_index: int,
+    ) -> None:
+        entry = {
+            "step_index": step_index,
+            "phase": getattr(snapshot, "phase", ""),
+            "phase_kind": phase_kind,
+            "step_kind": step_kind,
+            "current_turn_index": current_turn_index,
+            "actions_this_turn": actions_this_turn,
+            "total_actions": total_actions,
+            "waiting_for_player_turn": waiting_for_player_turn,
+            "action_id": getattr(policy_output, "action_id", None),
+            "reason": getattr(policy_output, "reason", ""),
+            "confidence": getattr(policy_output, "confidence", None),
+            "bridge_status": bridge_result.get("status") if isinstance(bridge_result, dict) else None,
+            "bridge_reason": (
+                bridge_result.get("reason") or bridge_result.get("error_code")
+                if isinstance(bridge_result, dict)
+                else None
+            ),
+        }
+        self._battle_history.append(entry)
+        max_history = max(1, self.config.battle_context_recent_steps * 2)
+        if len(self._battle_history) > max_history:
+            self._battle_history = self._battle_history[-max_history:]
+
+    def _note_recovery_attempt(self, reason: str) -> None:
+        self._recovery_attempts += 1
+        self._recovery_streak += 1
+        self._pending_recovery_reason = reason
+        self._last_recovery_reason = reason
+
+    def _mark_recovery_resolved(self) -> None:
+        if not self._pending_recovery_reason:
+            return
+        self._recovery_successes += 1
+        self._recovery_streak = 0
+        self._pending_recovery_reason = ""
+
+    def _supports_battle_context(self) -> bool:
+        try:
+            parameters = inspect.signature(self.policy.decide).parameters.values()
+        except (TypeError, ValueError):
+            return True
+        return any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters) or "battle_context" in {
+            parameter.name for parameter in parameters
+        }
+
+    @staticmethod
+    def _is_actionable_phase_kind(phase_kind: str, legal_actions) -> bool:
+        return bool(legal_actions) and phase_kind not in {
+            "combat_wait",
+            "pending_end_turn_transition",
+            "transition_wait",
+            "empty_player_actions",
+            "unknown_window",
+        }
+
+    def _decide(self, snapshot, legal_actions, battle_context: BattleContext | None = None):
+        def invoke_policy():
+            if battle_context is not None and self._supports_battle_context():
+                return self.policy.decide(snapshot, legal_actions, battle_context=battle_context)
+            return self.policy.decide(snapshot, legal_actions)
+
         with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(self.policy.decide, snapshot, legal_actions)
+            future = executor.submit(invoke_policy)
             try:
                 return future.result(timeout=self.config.timeout_seconds)
             except FutureTimeoutError as exc:
@@ -2022,6 +2286,14 @@ class AutoplayOrchestrator:
             previous_phase=None,
         )
         effective_step_kind = step_kind or effective_phase_kind
+        battle_context = self._build_battle_context(
+            snapshot=snapshot,
+            current_turn_index=current_turn_index,
+            actions_this_turn=actions_this_turn,
+            total_actions=total_actions,
+            waiting_for_player_turn=waiting_for_player_turn,
+            phase_kind=effective_phase_kind,
+        )
         recorder.append(
             TraceEntry(
                 session_id=snapshot.session_id,
@@ -2032,11 +2304,16 @@ class AutoplayOrchestrator:
                 observation=to_dict(snapshot),
                 policy_output=to_dict(policy_output),
                 bridge_result=to_dict(bridge_result),
+                battle_context=to_dict(battle_context),
                 step_index=step_index,
                 current_turn_index=current_turn_index,
                 actions_this_turn=actions_this_turn,
                 total_actions=total_actions,
                 waiting_for_player_turn=waiting_for_player_turn,
+                recovery_attempts=self._recovery_attempts,
+                recovery_successes=self._recovery_successes,
+                recovery_streak=self._recovery_streak,
+                last_recovery_reason=self._last_recovery_reason,
                 phase_kind=effective_phase_kind,
                 step_kind=effective_step_kind,
                 transition_elapsed_seconds=transition_elapsed_seconds,
@@ -2051,6 +2328,19 @@ class AutoplayOrchestrator:
                 interrupted=interrupted,
                 timestamp=datetime.now(UTC).isoformat(),
             )
+        )
+        self._last_battle_context = to_dict(battle_context)
+        self._append_battle_history(
+            snapshot=snapshot,
+            policy_output=policy_output,
+            bridge_result=bridge_result if isinstance(bridge_result, dict) else to_dict(bridge_result),
+            current_turn_index=current_turn_index,
+            actions_this_turn=actions_this_turn,
+            total_actions=total_actions,
+            waiting_for_player_turn=waiting_for_player_turn,
+            phase_kind=effective_phase_kind,
+            step_kind=effective_step_kind,
+            step_index=step_index,
         )
 
     def _finish(
@@ -2085,6 +2375,11 @@ class AutoplayOrchestrator:
             map_actions_taken=self._map_actions_taken,
             non_combat_steps=self._non_combat_steps,
             next_combat_entered=self._next_combat_entered,
+            recovery_attempts=self._recovery_attempts,
+            recovery_successes=self._recovery_successes,
+            recovery_streak=self._recovery_streak,
+            last_recovery_reason=self._last_recovery_reason,
+            battle_context=dict(self._last_battle_context),
             ended_by=reason,
         )
 
@@ -2192,6 +2487,8 @@ class AutoplayOrchestrator:
         if self.config.max_turns_per_battle is not None:
             if turns_completed >= self.config.max_turns_per_battle or current_turn_index > self.config.max_turns_per_battle:
                 return "max_turns_per_battle"
+        if self.config.max_recovery_attempts >= 0 and self._recovery_streak >= self.config.max_recovery_attempts:
+            return "recovery_budget_exhausted"
         if self.config.max_consecutive_failures >= 0 and consecutive_failures >= self.config.max_consecutive_failures:
             return "max_consecutive_failures"
         return ""

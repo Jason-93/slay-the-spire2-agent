@@ -26,6 +26,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-turns-per-battle", type=int, default=_read_optional_int("STS2_MAX_TURNS_PER_BATTLE"))
     parser.add_argument("--max-total-actions", type=int, default=_read_optional_int("STS2_MAX_TOTAL_ACTIONS"))
     parser.add_argument("--max-consecutive-failures", type=int, default=int(os.environ.get("STS2_MAX_CONSECUTIVE_FAILURES", "6")))
+    parser.add_argument("--max-recovery-attempts", type=int, default=int(os.environ.get("STS2_MAX_RECOVERY_ATTEMPTS", "6")))
     parser.add_argument(
         "--wait-for-next-player-turn-seconds",
         type=float,
@@ -43,6 +44,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--max-non-combat-steps", type=int, default=int(os.environ.get("STS2_MAX_NON_COMBAT_STEPS", "24")))
     parser.add_argument("--unknown-window-fuse", type=int, default=int(os.environ.get("STS2_UNKNOWN_WINDOW_FUSE", "2")))
+    parser.add_argument(
+        "--battle-context-recent-steps",
+        type=int,
+        default=int(os.environ.get("STS2_BATTLE_CONTEXT_RECENT_STEPS", "4")),
+    )
     parser.add_argument("--policy-timeout-seconds", type=float, default=float(os.environ.get("STS2_POLICY_TIMEOUT_SECONDS", "20")))
     parser.add_argument("--temperature", type=float, default=float(os.environ.get("STS2_LLM_TEMPERATURE", "0.2")))
     parser.add_argument("--max-tokens", type=int, default=int(os.environ.get("STS2_LLM_MAX_TOKENS", "256")))
@@ -105,11 +111,13 @@ def main(argv: list[str] | None = None) -> int:
             max_turns_per_battle=args.max_turns_per_battle,
             max_total_actions=args.max_total_actions,
             max_consecutive_failures=args.max_consecutive_failures,
+            max_recovery_attempts=args.max_recovery_attempts,
             wait_for_next_player_turn_seconds=args.wait_for_next_player_turn_seconds,
             transition_timeout_seconds=args.transition_timeout_seconds,
             poll_interval_seconds=args.poll_interval_seconds,
             max_non_combat_steps=args.max_non_combat_steps,
             unknown_window_fuse=args.unknown_window_fuse,
+            battle_context_recent_steps=args.battle_context_recent_steps,
             policy_timeout_seconds=args.policy_timeout_seconds,
             temperature=args.temperature,
             max_tokens=args.max_tokens,

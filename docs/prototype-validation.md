@@ -25,6 +25,18 @@ dotnet build mod/Sts2Mod.StateBridge.sln
 python tools/validate_mod_bridge.py
 ```
 
+整场战斗 LLM autoplay 的 live 冒烟可额外使用：
+
+```bash
+python tools/validate_full_battle_llm.py \
+  --bridge-base-url "http://127.0.0.1:17654" \
+  --base-url "http://127.0.0.1:8080/v1" \
+  --model "default" \
+  --allow-write
+```
+
+该脚本会把 battle 完成度、回合数、总动作数、recovery 次数、停止原因和 trace 尾部摘要写入 `tmp/full-battle-llm-validation/<timestamp>/`。
+
 ## 当前边界
 
 - 该脚本仍基于 `fixture`，用于快速回归协议与写接口行为。

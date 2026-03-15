@@ -6,7 +6,7 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from sts2_agent.models import DecisionSnapshot, LegalAction, PolicyDecision, to_dict
+from sts2_agent.models import BattleContext, DecisionSnapshot, LegalAction, PolicyDecision, to_dict
 from sts2_agent.policy.base import PolicyError
 
 
@@ -36,8 +36,13 @@ class ChatCompletionsPolicy:
     def __init__(self, config: ChatCompletionsConfig | None = None) -> None:
         self.config = config or ChatCompletionsConfig()
 
-    def decide(self, snapshot: DecisionSnapshot, legal_actions: list[LegalAction]) -> PolicyDecision:
-        messages = self._build_messages(snapshot, legal_actions)
+    def decide(
+        self,
+        snapshot: DecisionSnapshot,
+        legal_actions: list[LegalAction],
+        battle_context: BattleContext | None = None,
+    ) -> PolicyDecision:
+        messages = self._build_messages(snapshot, legal_actions, battle_context=battle_context)
         request_payload = {
             "model": self.config.model,
             "messages": messages,
@@ -60,21 +65,32 @@ class ChatCompletionsPolicy:
                     "message_count": len(messages),
                     "legal_action_count": len(legal_actions),
                     "phase": snapshot.phase,
+                    "battle_context_present": battle_context is not None,
                 },
                 "raw_response_text": raw_content,
             },
+            confidence=parsed["confidence"],
         )
         if parsed["args"]:
             decision.metadata["action_args"] = parsed["args"]
+        if parsed["confidence"] is not None:
+            decision.metadata["confidence"] = parsed["confidence"]
         return decision
 
-    def _build_messages(self, snapshot: DecisionSnapshot, legal_actions: list[LegalAction]) -> list[dict[str, str]]:
+    def _build_messages(
+        self,
+        snapshot: DecisionSnapshot,
+        legal_actions: list[LegalAction],
+        *,
+        battle_context: BattleContext | None = None,
+    ) -> list[dict[str, str]]:
         system_prompt = (
             "你是 Slay the Spire 2 自动打牌 agent。"
             "只能从给定 legal actions 中选择一个 action_id。"
-            "必须返回 JSON，字段为 action_id、reason、halt、args。"
+            "必须返回 JSON，字段为 action_id、target_id、reason、halt、confidence。"
             "如果你认为当前不应继续自动操作，可以返回 halt=true 且 action_id=null。"
-            "args 可省略或填空对象；若所选动作有多个 target_constraints，必须在 args.target_id 中返回其中一个合法目标。"
+            "若所选动作有多个 target_constraints，必须显式返回一个合法 target_id。"
+            "confidence 必须返回你对本次决策把握度的简短分级，例如 high、medium、low。"
             "snapshot 里的手牌、敌人、powers、intent 和 run_state 都是当前局面的事实层信息，应优先基于这些字段判断，而不是只猜卡名。"
             "当 snapshot.phase=combat 且 metadata.window_kind=combat_card_selection 时，说明当前不是普通出牌窗口，而是在处理战斗中的额外选牌；"
             "此时应优先在 choose_combat_card 或 cancel_combat_selection 中决策，而不是继续选择 play_card。"
@@ -88,13 +104,14 @@ class ChatCompletionsPolicy:
             "legal_actions": [self._summarize_action(action) for action in legal_actions],
             "output_schema": {
                 "action_id": "string|null",
+                "target_id": "string|null, required when selected action has multiple target_constraints",
                 "reason": "string",
                 "halt": "boolean",
-                "args": {
-                    "target_id": "string, required when selected action has multiple target_constraints",
-                },
+                "confidence": "string|number",
             },
         }
+        if battle_context is not None:
+            user_payload["battle_context"] = to_dict(battle_context)
         return [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
@@ -173,29 +190,38 @@ class ChatCompletionsPolicy:
         if not isinstance(payload, dict):
             raise ChatCompletionsParseError("chat completions response JSON must be an object")
         action_id = payload.get("action_id")
+        target_id = payload.get("target_id")
         reason = payload.get("reason")
         halt = payload.get("halt")
+        confidence = payload.get("confidence")
         args = payload.get("args")
         if action_id is not None and not isinstance(action_id, str):
             raise ChatCompletionsParseError("action_id must be a string or null")
+        if target_id is not None and not isinstance(target_id, str):
+            raise ChatCompletionsParseError("target_id must be a string or null")
         if not isinstance(reason, str) or not reason.strip():
             raise ChatCompletionsParseError("reason must be a non-empty string")
         if not isinstance(halt, bool):
             raise ChatCompletionsParseError("halt must be a boolean")
+        if confidence is None or not isinstance(confidence, (str, int, float)) or isinstance(confidence, bool):
+            raise ChatCompletionsParseError("confidence must be a string or number")
         if args is None:
             normalized_args: dict[str, Any] = {}
         else:
             if not isinstance(args, dict):
                 raise ChatCompletionsParseError("args must be an object when provided")
             normalized_args = dict(args)
-            target_id = normalized_args.get("target_id")
-            if target_id is not None and not isinstance(target_id, str):
+            nested_target_id = normalized_args.get("target_id")
+            if nested_target_id is not None and not isinstance(nested_target_id, str):
                 raise ChatCompletionsParseError("args.target_id must be a string when provided")
+        if target_id is not None:
+            normalized_args["target_id"] = target_id
         return {
             "action_id": action_id,
             "reason": reason.strip(),
             "halt": halt,
             "args": normalized_args,
+            "confidence": confidence,
         }
 
     @staticmethod

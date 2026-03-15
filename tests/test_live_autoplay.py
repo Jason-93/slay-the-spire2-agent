@@ -53,11 +53,13 @@ class LiveAutoplayTests(unittest.TestCase):
                     max_turns_per_battle=3,
                     max_total_actions=9,
                     max_consecutive_failures=5,
+                    max_recovery_attempts=4,
                     wait_for_next_player_turn_seconds=12.5,
                     transition_timeout_seconds=8.0,
                     poll_interval_seconds=0.2,
                     max_non_combat_steps=11,
                     unknown_window_fuse=3,
+                    battle_context_recent_steps=5,
                     reward_mode="safe-default",
                     map_mode="safe-default",
                     stop_after_next_combat=True,
@@ -76,11 +78,13 @@ class LiveAutoplayTests(unittest.TestCase):
         self.assertEqual(captured["config"].max_turns_per_battle, 3)
         self.assertEqual(captured["config"].max_total_actions, 9)
         self.assertEqual(captured["config"].max_consecutive_failures, 5)
+        self.assertEqual(captured["config"].max_recovery_attempts, 4)
         self.assertEqual(captured["config"].wait_for_next_player_turn_seconds, 12.5)
         self.assertEqual(captured["config"].transition_timeout_seconds, 8.0)
         self.assertEqual(captured["config"].poll_interval_seconds, 0.2)
         self.assertEqual(captured["config"].max_non_combat_steps, 11)
         self.assertEqual(captured["config"].unknown_window_fuse, 3)
+        self.assertEqual(captured["config"].battle_context_recent_steps, 5)
         self.assertEqual(captured["config"].reward_mode, "safe-default")
         self.assertEqual(captured["config"].map_mode, "safe-default")
         self.assertTrue(captured["config"].stop_after_next_combat)
@@ -123,12 +127,16 @@ class LiveAutoplayTests(unittest.TestCase):
                         "5",
                         "--max-total-actions",
                         "12",
+                        "--max-recovery-attempts",
+                        "5",
                         "--transition-timeout-seconds",
                         "9",
                         "--max-non-combat-steps",
                         "10",
                         "--unknown-window-fuse",
                         "3",
+                        "--battle-context-recent-steps",
+                        "6",
                         "--reward-mode",
                         "safe-default",
                         "--map-mode",
@@ -163,6 +171,8 @@ class LiveAutoplayTests(unittest.TestCase):
                 "10",
                 "--max-consecutive-failures",
                 "4",
+                "--max-recovery-attempts",
+                "3",
                 "--wait-for-next-player-turn-seconds",
                 "9",
                 "--transition-timeout-seconds",
@@ -173,6 +183,8 @@ class LiveAutoplayTests(unittest.TestCase):
                 "12",
                 "--unknown-window-fuse",
                 "3",
+                "--battle-context-recent-steps",
+                "5",
                 "--reward-mode",
                 "safe-default",
                 "--map-mode",
@@ -188,11 +200,13 @@ class LiveAutoplayTests(unittest.TestCase):
         self.assertEqual(args.max_turns_per_battle, 3)
         self.assertEqual(args.max_total_actions, 10)
         self.assertEqual(args.max_consecutive_failures, 4)
+        self.assertEqual(args.max_recovery_attempts, 3)
         self.assertEqual(args.wait_for_next_player_turn_seconds, 9)
         self.assertEqual(args.transition_timeout_seconds, 7)
         self.assertEqual(args.poll_interval_seconds, 0.25)
         self.assertEqual(args.max_non_combat_steps, 12)
         self.assertEqual(args.unknown_window_fuse, 3)
+        self.assertEqual(args.battle_context_recent_steps, 5)
         self.assertEqual(args.reward_mode, "safe-default")
         self.assertEqual(args.map_mode, "safe-default")
         self.assertTrue(args.stop_after_next_combat)
