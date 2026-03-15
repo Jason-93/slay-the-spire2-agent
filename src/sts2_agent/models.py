@@ -17,6 +17,8 @@ class Phase(StrEnum):
 class ActionType(StrEnum):
     PLAY_CARD = "play_card"
     END_TURN = "end_turn"
+    CHOOSE_COMBAT_CARD = "choose_combat_card"
+    CANCEL_COMBAT_SELECTION = "cancel_combat_selection"
     CHOOSE_REWARD = "choose_reward"
     ADVANCE_REWARD = "advance_reward"
     CHOOSE_MAP_NODE = "choose_map_node"

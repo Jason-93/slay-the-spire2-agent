@@ -109,6 +109,121 @@ public sealed class RewardPhaseDetectionTests
     }
 
     [Fact]
+    public void BuildCombatWindow_ExportsCombatCardSelectionWindow()
+    {
+        var reader = CreateReader();
+        var selectionScreen = new FakeCombatCardSelectionScreen(
+            "消耗1张牌",
+            new FakeCardChoice(new FakeCard("Strike") { CardId = "strike_red" }),
+            new FakeCardChoice(new FakeCard("Defend") { CardId = "defend_red", TargetType = "Self", CardType = "Skill" }));
+        var runNode = new FakeRunNode(
+            new FakeScreenTracker(),
+            new FakeGlobalUi(new FakeOverlayStack(selectionScreen)));
+        var runState = new FakeRunState(new[] { new FakeEnemy("enemy-1", true) });
+
+        var window = InvokeBuildCombatWindow(reader, runNode, runState);
+        var exported = new CombatWindowExtractor().Export(window, new BridgeSessionState(new BridgeOptions()));
+
+        Assert.Equal(DecisionPhase.Combat, window.Phase);
+        Assert.Equal("combat_card_selection", exported.Snapshot.Metadata["window_kind"]);
+        Assert.Equal("exhaust_card", exported.Snapshot.Metadata["selection_kind"]);
+        Assert.Equal("消耗1张牌", exported.Snapshot.Metadata["selection_prompt"]);
+        Assert.Contains(window.Actions, action => action.Type == "choose_combat_card");
+        Assert.Contains(window.Actions, action => action.Type == "cancel_combat_selection");
+        Assert.DoesNotContain(window.Actions, action => action.Type == "end_turn");
+    }
+
+    [Fact]
+    public void BuildCombatWindow_DoesNotExportCancelWhenCombatSelectionCannotCancel()
+    {
+        var reader = CreateReader();
+        var selectionScreen = new FakeCombatCardSelectionScreenNoCancel(
+            "消耗1张牌",
+            new FakeCardChoice(new FakeCard("Strike") { CardId = "strike_red" }));
+        var runNode = new FakeRunNode(
+            new FakeScreenTracker(),
+            new FakeGlobalUi(new FakeOverlayStack(selectionScreen)));
+        var runState = new FakeRunState(new[] { new FakeEnemy("enemy-1", true) });
+
+        var window = InvokeBuildCombatWindow(reader, runNode, runState);
+        var exported = new CombatWindowExtractor().Export(window, new BridgeSessionState(new BridgeOptions()));
+
+        Assert.DoesNotContain(window.Actions, action => action.Type == "cancel_combat_selection");
+        Assert.Equal(false, exported.Snapshot.Metadata["selection_cancel_available"]);
+        Assert.Equal("cancel_hook_not_found", exported.Snapshot.Metadata["selection_cancel_reason"]);
+    }
+
+    [Fact]
+    public void ExecuteChooseCombatCard_SelectsCurrentChoice()
+    {
+        var reader = CreateReader();
+        var selectionScreen = new FakeCombatCardSelectionScreen(
+            "消耗1张牌",
+            new FakeCardChoice(new FakeCard("Strike") { CardId = "strike_red" }),
+            new FakeCardChoice(new FakeCard("Defend") { CardId = "defend_red", TargetType = "Self", CardType = "Skill" }));
+        var runNode = new FakeRunNode(
+            new FakeScreenTracker(),
+            new FakeGlobalUi(new FakeOverlayStack(selectionScreen)));
+        var runState = new FakeRunState(new[] { new FakeEnemy("enemy-1", true) });
+        var window = InvokeBuildCombatWindow(reader, runNode, runState);
+        var runtimeAction = Assert.Single(window.Actions, candidate =>
+            candidate.Type == "choose_combat_card" &&
+            Equals(candidate.Parameters["selection_index"], 1));
+        var action = new LegalAction(
+            "act-select",
+            runtimeAction.Type,
+            runtimeAction.Label,
+            runtimeAction.Parameters,
+            runtimeAction.TargetConstraints ?? Array.Empty<string>(),
+            runtimeAction.Metadata ?? new Dictionary<string, object?>());
+        var request = new ActionRequest("dec-1", "act-select", null, action.Params, Guid.NewGuid().ToString("N"));
+
+        var result = InvokeExecuteChooseCombatCard(reader, runNode, runState, request, action);
+        var accepted = (bool)result.GetType().GetProperty("Accepted")!.GetValue(result)!;
+        var metadata = (IReadOnlyDictionary<string, object?>)result.GetType().GetProperty("Metadata")!.GetValue(result)!;
+
+        Assert.True(accepted);
+        Assert.NotNull(selectionScreen.SelectedChoice);
+        Assert.Equal("Defend", selectionScreen.SelectedChoice!.Card.Title);
+        Assert.Equal("choose_combat_card", metadata["action_type"]);
+        Assert.Equal(1, metadata["selection_index"]);
+    }
+
+    [Fact]
+    public void ExecuteChooseCombatCard_RejectsWhenSelectionWindowChanges()
+    {
+        var reader = CreateReader();
+        var selectionScreen = new FakeCombatCardSelectionScreen(
+            "消耗1张牌",
+            new FakeCardChoice(new FakeCard("Strike") { CardId = "strike_red" }),
+            new FakeCardChoice(new FakeCard("Defend") { CardId = "defend_red", TargetType = "Self", CardType = "Skill" }));
+        var runNode = new FakeRunNode(
+            new FakeScreenTracker(),
+            new FakeGlobalUi(new FakeOverlayStack(selectionScreen)));
+        var runState = new FakeRunState(new[] { new FakeEnemy("enemy-1", true) });
+        var action = new LegalAction(
+            "act-select",
+            "choose_combat_card",
+            "Choose Defend",
+            new Dictionary<string, object?>
+            {
+                ["selection_index"] = 1,
+                ["card_id"] = "card-mismatched",
+                ["card_name"] = "Defend",
+            },
+            Array.Empty<string>(),
+            new Dictionary<string, object?>());
+        var request = new ActionRequest("dec-1", "act-select", null, action.Params, Guid.NewGuid().ToString("N"));
+
+        var result = InvokeExecuteChooseCombatCard(reader, runNode, runState, request, action);
+        var accepted = (bool)result.GetType().GetProperty("Accepted")!.GetValue(result)!;
+        var errorCode = (string?)result.GetType().GetProperty("ErrorCode")!.GetValue(result);
+
+        Assert.False(accepted);
+        Assert.Equal("selection_window_changed", errorCode);
+    }
+
+    [Fact]
     public void BuildCombatWindow_ExportsRichCardsEnemiesPowersAndRunState()
     {
         var reader = CreateReader();
@@ -696,6 +811,12 @@ public sealed class RewardPhaseDetectionTests
         return method.Invoke(reader, new object[] { runNode, request, action })!;
     }
 
+    private static object InvokeExecuteChooseCombatCard(Sts2RuntimeReflectionReader reader, object runNode, object runState, ActionRequest request, LegalAction action)
+    {
+        var method = typeof(Sts2RuntimeReflectionReader).GetMethod("ExecuteChooseCombatCard", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        return method.Invoke(reader, new[] { runNode, runState, request, action })!;
+    }
+
     private sealed class FakeRunNode(FakeScreenTracker screenStateTracker, FakeGlobalUi? globalUi = null)
     {
         public FakeScreenTracker ScreenStateTracker { get; } = screenStateTracker;
@@ -842,6 +963,36 @@ public sealed class RewardPhaseDetectionTests
 
         public void SelectCard(FakeCardChoice choice)
         {
+        }
+    }
+
+    private sealed class FakeCombatCardSelectionScreen(string prompt, params FakeCardChoice[] choices)
+    {
+        public string Prompt { get; } = prompt;
+        public List<FakeCardChoice> Cards { get; } = new(choices);
+        public FakeCardChoice? SelectedChoice { get; private set; }
+        public bool Cancelled { get; private set; }
+
+        public void SelectCard(FakeCardChoice choice)
+        {
+            SelectedChoice = choice;
+        }
+
+        public void Cancel()
+        {
+            Cancelled = true;
+        }
+    }
+
+    private sealed class FakeCombatCardSelectionScreenNoCancel(string prompt, params FakeCardChoice[] choices)
+    {
+        public string Prompt { get; } = prompt;
+        public List<FakeCardChoice> Cards { get; } = new(choices);
+        public FakeCardChoice? SelectedChoice { get; private set; }
+
+        public void SelectCard(FakeCardChoice choice)
+        {
+            SelectedChoice = choice;
         }
     }
 

@@ -1075,6 +1075,44 @@ class OrchestratorTests(unittest.TestCase):
             self.assertTrue(any(record["waiting_for_player_turn"] for record in records))
             self.assertTrue(any(record["current_turn_index"] == 2 for record in records))
 
+    def test_orchestrator_handles_combat_card_selection_window(self) -> None:
+        bridge = SequencedCombatBridge(
+            [
+                make_window(
+                    actions=[
+                        {"type": "choose_combat_card", "label": "消耗 防御", "params": {"card_id": "card-2", "selection_index": 0}},
+                        {"type": "cancel_combat_selection", "label": "取消", "params": {}},
+                    ],
+                    hand=["card-1", "card-2"],
+                    metadata={
+                        "window_kind": "combat_card_selection",
+                        "current_side": "Player",
+                        "selection_kind": "exhaust_card",
+                        "selection_prompt": "消耗1张牌",
+                    },
+                ),
+                make_window(
+                    actions=[{"type": "end_turn", "label": "End Turn"}],
+                    energy=0,
+                    hand=[],
+                    metadata={"window_kind": "player_turn", "current_side": "Player", "round_number": 1},
+                ),
+                make_window(phase="reward", actions=[], metadata={}),
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orchestrator = AutoplayOrchestrator(
+                bridge=bridge,
+                policy=FirstLegalActionPolicy(),
+                config=OrchestratorConfig(trace_dir=tmpdir, stop_after_player_turn=False, max_steps=6),
+            )
+            summary = orchestrator.run(scenario="live")
+
+            self.assertTrue(summary.completed)
+            self.assertEqual(bridge.submissions[0], "choose_combat_card")
+            records = [json.loads(line) for line in Path(summary.trace_path).read_text(encoding="utf-8").splitlines()]
+            self.assertIn("combat_card_selection", {record["step_kind"] for record in records})
+
     def test_battle_mode_stops_when_waiting_for_next_turn_times_out(self) -> None:
         bridge = SequencedCombatBridge(
             [

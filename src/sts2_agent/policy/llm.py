@@ -76,6 +76,8 @@ class ChatCompletionsPolicy:
             "如果你认为当前不应继续自动操作，可以返回 halt=true 且 action_id=null。"
             "args 可省略或填空对象；若所选动作有多个 target_constraints，必须在 args.target_id 中返回其中一个合法目标。"
             "snapshot 里的手牌、敌人、powers、intent 和 run_state 都是当前局面的事实层信息，应优先基于这些字段判断，而不是只猜卡名。"
+            "当 snapshot.phase=combat 且 metadata.window_kind=combat_card_selection 时，说明当前不是普通出牌窗口，而是在处理战斗中的额外选牌；"
+            "此时应优先在 choose_combat_card 或 cancel_combat_selection 中决策，而不是继续选择 play_card。"
             "当 snapshot.phase=reward 时，你需要在 choose_reward 或 skip_reward 等奖励动作中做选择；"
             "若不确定，优先返回 halt=true 或选择 skip_reward（并在 reason 说明原因）。"
             "当 snapshot.phase=map 时，只能在 choose_map_node 中选择一个可达节点；"
@@ -277,7 +279,18 @@ class ChatCompletionsPolicy:
         if snapshot.metadata:
             metadata_summary = {
                 key: snapshot.metadata[key]
-                for key in ("window_kind", "reward_subphase", "map_ready", "reward_pending")
+                for key in (
+                    "window_kind",
+                    "current_side",
+                    "selection_kind",
+                    "selection_prompt",
+                    "selection_choice_count",
+                    "selection_cancel_available",
+                    "transition_kind",
+                    "reward_subphase",
+                    "map_ready",
+                    "reward_pending",
+                )
                 if key in snapshot.metadata
             }
             if metadata_summary:

@@ -242,6 +242,7 @@ internal static class InGameRuntimeCoordinator
         ExportedWindow? currentWindow,
         int tickCount)
     {
+        currentWindow = RefreshCurrentWindow(reader) ?? currentWindow;
         if (currentWindow is null)
         {
             return CreateRejectedResponse(request, request.ActionId, "runtime_not_ready", "No live decision window is available yet.");
@@ -255,7 +256,26 @@ internal static class InGameRuntimeCoordinator
         var action = ResolveAction(currentWindow.Actions, request);
         if (action is null)
         {
-            return CreateRejectedResponse(request, request.ActionId, "illegal_action", "Requested action is not part of the current legal action set.");
+            var metadata = new Dictionary<string, object?>
+            {
+                ["phase"] = currentWindow.Snapshot.Phase,
+                ["state_version"] = currentWindow.Snapshot.StateVersion,
+                ["tick_count"] = tickCount,
+            };
+            foreach (var pair in currentWindow.Snapshot.Metadata)
+            {
+                if (pair.Key is "window_kind" or "current_side" or "selection_kind" or "transition_kind")
+                {
+                    metadata[pair.Key] = pair.Value;
+                }
+            }
+
+            return CreateRejectedResponse(
+                request,
+                request.ActionId,
+                InferIllegalActionErrorCode(currentWindow, request),
+                "Requested action is not part of the current legal action set.",
+                metadata);
         }
 
         var result = reader.ExecuteAction(request, action);
@@ -271,6 +291,76 @@ internal static class InGameRuntimeCoordinator
         }
 
         return CreateAcceptedResponse(request, action.ActionId, result.Message, responseMetadata);
+    }
+
+    private static ExportedWindow? RefreshCurrentWindow(Sts2RuntimeReflectionReader reader)
+    {
+        Dictionary<string, IWindowExtractor>? extractors;
+        BridgeSessionState? sessionState;
+        try
+        {
+            lock (Gate)
+            {
+                extractors = _extractors;
+                sessionState = _sessionState;
+            }
+
+            if (extractors is null || sessionState is null)
+            {
+                return null;
+            }
+
+            var context = reader.CaptureWindow();
+            var refreshed = extractors[context.Phase].Export(context, sessionState);
+            lock (Gate)
+            {
+                _currentWindow = refreshed;
+            }
+
+            return refreshed;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string InferIllegalActionErrorCode(ExportedWindow currentWindow, ActionRequest request)
+    {
+        var actionType = ResolveRequestedActionType(currentWindow.Actions, request);
+        var windowKind = currentWindow.Snapshot.Metadata.TryGetValue("window_kind", out var rawWindowKind)
+            ? rawWindowKind as string
+            : null;
+        if ((string.Equals(actionType, "play_card", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(actionType, "end_turn", StringComparison.OrdinalIgnoreCase)) &&
+            string.Equals(windowKind, "enemy_turn", StringComparison.OrdinalIgnoreCase))
+        {
+            return "not_player_turn";
+        }
+
+        if ((string.Equals(actionType, "choose_combat_card", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(actionType, "cancel_combat_selection", StringComparison.OrdinalIgnoreCase)) &&
+            !string.Equals(windowKind, "combat_card_selection", StringComparison.OrdinalIgnoreCase))
+        {
+            return "selection_window_changed";
+        }
+
+        return "illegal_action";
+    }
+
+    private static string? ResolveRequestedActionType(IEnumerable<LegalAction> actions, ActionRequest request)
+    {
+        if (!string.IsNullOrWhiteSpace(request.ActionType))
+        {
+            return request.ActionType;
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.ActionId))
+        {
+            return actions.FirstOrDefault(action => string.Equals(action.ActionId, request.ActionId, StringComparison.Ordinal))?.Type;
+        }
+
+        return null;
     }
 
     private static LegalAction? ResolveAction(IEnumerable<LegalAction> actions, ActionRequest request)

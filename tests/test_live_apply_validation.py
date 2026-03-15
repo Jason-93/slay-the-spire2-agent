@@ -6,6 +6,32 @@ from tools.validate_live_apply import detect_progress, select_candidate
 
 
 class LiveApplyValidationTests(unittest.TestCase):
+    def test_select_candidate_prefers_choose_combat_card_in_combat_selection(self) -> None:
+        snapshot = {"phase": "combat"}
+        actions = [
+            {
+                "action_id": "act-cancel",
+                "type": "cancel_combat_selection",
+                "label": "取消",
+                "params": {},
+                "target_constraints": [],
+                "metadata": {"selection_kind": "exhaust_card"},
+            },
+            {
+                "action_id": "act-select",
+                "type": "choose_combat_card",
+                "label": "消耗 防御",
+                "params": {"card_id": "card-2", "selection_index": 0},
+                "target_constraints": [],
+                "metadata": {"selection_kind": "exhaust_card"},
+            },
+        ]
+
+        candidate = select_candidate(snapshot, actions)
+
+        self.assertIsNotNone(candidate.action)
+        self.assertEqual(candidate.action["action_id"], "act-select")
+
     def test_select_candidate_prefers_safe_play_card_in_combat(self) -> None:
         snapshot = {"phase": "combat"}
         actions = [

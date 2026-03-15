@@ -96,8 +96,15 @@ def action_priority(action: dict[str, Any], phase: str, action_counts: dict[str,
     params = params if isinstance(params, dict) else {}
     targets = action.get("target_constraints")
     target_constraints = targets if isinstance(targets, list) else []
+    metadata = action.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
 
     if phase == "combat":
+        selection_kind = str(metadata.get("selection_kind") or "")
+        if action_type == "choose_combat_card" and params.get("card_id"):
+            return 120, f"当前处于战斗额外选牌窗口，优先执行 choose_combat_card（selection_kind={selection_kind or 'unknown'}）。"
+        if action_type == "cancel_combat_selection":
+            return 40, "战斗额外选牌窗口允许取消，但默认优先级低于 choose_combat_card。"
         if action_type == "play_card" and params.get("card_id") and not target_constraints:
             return 100, "优先选择无需额外目标的 play_card。"
         if action_type == "end_turn":

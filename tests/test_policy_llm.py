@@ -204,6 +204,23 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
         self.assertEqual(decision.metadata["provider"], "chat_completions")
         self.assertIn("raw_response_text", decision.metadata)
 
+    def test_snapshot_summary_keeps_combat_selection_metadata(self) -> None:
+        snapshot = build_snapshot()
+        snapshot.metadata = {
+            "window_kind": "combat_card_selection",
+            "current_side": "Player",
+            "selection_kind": "exhaust_card",
+            "selection_prompt": "消耗1张牌",
+            "selection_choice_count": 2,
+            "selection_cancel_available": True,
+        }
+
+        summary = self.policy._summarize_snapshot(snapshot)
+
+        self.assertEqual(summary["metadata"]["window_kind"], "combat_card_selection")
+        self.assertEqual(summary["metadata"]["selection_kind"], "exhaust_card")
+        self.assertEqual(summary["metadata"]["selection_prompt"], "消耗1张牌")
+
     def test_policy_allows_halt_true(self) -> None:
         response_payload = {
             "choices": [

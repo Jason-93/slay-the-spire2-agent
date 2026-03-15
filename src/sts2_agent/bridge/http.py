@@ -109,7 +109,7 @@ class HttpGameBridge(GameBridge):
             )
 
         message = str(response.get("message") or "bridge rejected the action")
-        if error_code == "stale_decision":
+        if error_code in {"stale_decision", "stale_action", "not_player_turn", "selection_window_changed"}:
             raise StaleActionError(message)
         if error_code in {"illegal_action", "invalid_action"}:
             raise InvalidPayloadError(message)

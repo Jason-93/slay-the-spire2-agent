@@ -122,6 +122,42 @@ internal sealed class Sts2RuntimeReflectionReader
         "Close",
         "Dismiss",
     };
+    private static readonly string[] CombatCardSelectionTypeHints =
+    {
+        "CardSelection",
+        "CardSelect",
+        "ChooseCard",
+        "HandSelect",
+        "HandSelection",
+        "SelectCard",
+        "Exhaust",
+        "Discard",
+    };
+    private static readonly string[] CombatCardChoiceCancelMethodNames =
+    {
+        "Cancel",
+        "CancelSelection",
+        "Back",
+        "Close",
+        "Dismiss",
+        "Skip",
+        "OnCancel",
+        "OnClose",
+        "OnSkip",
+    };
+    private static readonly string[] CombatSelectionPromptMembers =
+    {
+        "Title",
+        "Name",
+        "Label",
+        "Text",
+        "Prompt",
+        "Description",
+        "PromptText",
+        "HelpText",
+        "HeaderText",
+        "BodyText",
+    };
     private static readonly string[] RewardAdvanceMethodNames =
     {
         "Advance",
@@ -333,6 +369,8 @@ internal sealed class Sts2RuntimeReflectionReader
         {
             "play_card" => ExecutePlayCard(root.RunState, request, action),
             "end_turn" => ExecuteEndTurn(root.RunState, request),
+            "choose_combat_card" => ExecuteChooseCombatCard(root.RunNode, root.RunState, request, action),
+            "cancel_combat_selection" => ExecuteCancelCombatSelection(root.RunNode, root.RunState, request, action),
             "choose_reward" => ExecuteChooseReward(root.RunNode, request, action),
             "skip_reward" => ExecuteSkipReward(root.RunNode, request),
             "advance_reward" => ExecuteAdvanceReward(root.RunNode, request, action),
@@ -1276,6 +1314,32 @@ internal sealed class Sts2RuntimeReflectionReader
                 RunState: runStateSnapshot);
         }
 
+        var combatSelection = TryBuildCombatSelectionContext(runNode, runState, textDiagnostics);
+        if (combatSelection is not null)
+        {
+            metadata["window_kind"] = "combat_card_selection";
+            metadata["selection_kind"] = combatSelection.Value.SelectionKind;
+            metadata["selection_prompt"] = combatSelection.Value.SelectionPrompt;
+            metadata["selection_choice_count"] = combatSelection.Value.Actions.Count(action => string.Equals(action.Type, "choose_combat_card", StringComparison.Ordinal));
+            metadata["selection_cancel_available"] = combatSelection.Value.CancelAvailable;
+            if (!combatSelection.Value.CancelAvailable)
+            {
+                metadata["selection_cancel_reason"] = combatSelection.Value.CancelReason;
+            }
+
+            LogTextDiagnostics("combat_card_selection", textDiagnostics);
+            return new RuntimeWindowContext(
+                DecisionPhase.Combat,
+                player,
+                enemies,
+                Array.Empty<string>(),
+                Array.Empty<string>(),
+                Terminal: false,
+                Metadata: metadata,
+                Actions: combatSelection.Value.Actions,
+                RunState: runStateSnapshot);
+        }
+
         if (!isPlayerTurn)
         {
             metadata["actions_suppressed"] = true;
@@ -2174,6 +2238,27 @@ internal sealed class Sts2RuntimeReflectionReader
 
         var typeName = GetTypeName(overlayTop) ?? string.Empty;
         var nameHint = CardRewardSelectionTypeHints.Any(hint => typeName.Contains(hint, StringComparison.OrdinalIgnoreCase));
+        var prompt = ResolveCombatSelectionPrompt(overlayTop, textDiagnostics: null);
+        if (rewardScreen is null && !typeName.Contains("Reward", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var looksLikeCombatSelection = CombatCardSelectionTypeHints.Any(hint => typeName.Contains(hint, StringComparison.OrdinalIgnoreCase)) &&
+                                       !typeName.Contains("Reward", StringComparison.OrdinalIgnoreCase) &&
+                                       !string.IsNullOrWhiteSpace(prompt) &&
+                                       (prompt.Contains("选择", StringComparison.OrdinalIgnoreCase) ||
+                                        prompt.Contains("消耗", StringComparison.OrdinalIgnoreCase) ||
+                                        prompt.Contains("弃", StringComparison.OrdinalIgnoreCase) ||
+                                        prompt.Contains("select", StringComparison.OrdinalIgnoreCase) ||
+                                        prompt.Contains("choose", StringComparison.OrdinalIgnoreCase) ||
+                                        prompt.Contains("exhaust", StringComparison.OrdinalIgnoreCase) ||
+                                        prompt.Contains("discard", StringComparison.OrdinalIgnoreCase));
+        if (looksLikeCombatSelection && rewardScreen is null)
+        {
+            return null;
+        }
+
         if (!nameHint && rewardScreen is null)
         {
             // Avoid accidentally treating unrelated card screens (deck view/shop/etc.) as reward.
@@ -2197,6 +2282,156 @@ internal sealed class Sts2RuntimeReflectionReader
         }
 
         return overlayTop;
+    }
+
+    private CombatSelectionContext? TryBuildCombatSelectionContext(object runNode, object runState, TextDiagnosticsCollector textDiagnostics)
+    {
+        var selectionScreen = GetCombatCardSelectionScreen(runNode, runState, textDiagnostics);
+        if (selectionScreen is null)
+        {
+            return null;
+        }
+
+        var choices = FilterCardRewardSelectionChoices(ExtractCardRewardChoiceItems(selectionScreen));
+        if (choices.Count == 0)
+        {
+            return null;
+        }
+
+        var selectionPrompt = ResolveCombatSelectionPrompt(selectionScreen, textDiagnostics);
+        var selectionKind = ResolveCombatSelectionKind(selectionScreen, selectionPrompt);
+        var actions = new List<RuntimeActionDefinition>(choices.Count + 1);
+        for (var index = 0; index < choices.Count; index++)
+        {
+            var choice = choices[index];
+            var runtimeCard = BuildCombatSelectionCard(choice, index, textDiagnostics);
+            actions.Add(new RuntimeActionDefinition(
+                "choose_combat_card",
+                $"Choose {runtimeCard.Name}",
+                new Dictionary<string, object?>
+                {
+                    ["selection_index"] = index,
+                    ["card_id"] = runtimeCard.CardId,
+                    ["card_name"] = runtimeCard.Name,
+                },
+                Metadata: new Dictionary<string, object?>
+                {
+                    ["selection_kind"] = selectionKind,
+                    ["card_preview"] = BuildCardPreview(runtimeCard),
+                }));
+        }
+
+        var cancelAvailable = HasAnyMethod(selectionScreen, CombatCardChoiceCancelMethodNames);
+        string? cancelReason = null;
+        if (cancelAvailable)
+        {
+            actions.Add(new RuntimeActionDefinition(
+                "cancel_combat_selection",
+                "Cancel Selection",
+                new Dictionary<string, object?>(),
+                Metadata: new Dictionary<string, object?>
+                {
+                    ["selection_kind"] = selectionKind,
+                }));
+        }
+        else
+        {
+            cancelReason = "cancel_hook_not_found";
+        }
+
+        return new CombatSelectionContext(
+            SelectionScreen: selectionScreen,
+            SelectionKind: selectionKind,
+            SelectionPrompt: selectionPrompt,
+            CancelAvailable: cancelAvailable,
+            CancelReason: cancelReason,
+            Actions: actions);
+    }
+
+    private object? GetCombatCardSelectionScreen(object runNode, object runState, TextDiagnosticsCollector? textDiagnostics = null)
+    {
+        var overlayTop = GetOverlayTopScreen(runNode);
+        if (overlayTop is null || IsRewardScreenObject(overlayTop))
+        {
+            return null;
+        }
+
+        if (!BuildEnemies(runState, new TextDiagnosticsCollector()).Enemies.Any(enemy => enemy.IsAlive))
+        {
+            return null;
+        }
+
+        var choices = FilterCardRewardSelectionChoices(ExtractCardRewardChoiceItems(overlayTop));
+        if (choices.Count == 0)
+        {
+            return null;
+        }
+
+        var hasSelectHook = HasAnyMethod(overlayTop, CardRewardChoiceSelectMethodNames) ||
+                            choices.Any(choice => HasAnyMethod(choice, CardRewardChoiceSelectMethodNames));
+        if (!hasSelectHook)
+        {
+            return null;
+        }
+
+        var typeName = GetTypeName(overlayTop) ?? string.Empty;
+        var prompt = ResolveCombatSelectionPrompt(overlayTop, textDiagnostics);
+        var hasTypeHint = CombatCardSelectionTypeHints.Any(hint => typeName.Contains(hint, StringComparison.OrdinalIgnoreCase));
+        var hasPromptHint = !string.IsNullOrWhiteSpace(prompt) &&
+                            (prompt.Contains("选择", StringComparison.OrdinalIgnoreCase) ||
+                             prompt.Contains("消耗", StringComparison.OrdinalIgnoreCase) ||
+                             prompt.Contains("弃", StringComparison.OrdinalIgnoreCase) ||
+                             prompt.Contains("select", StringComparison.OrdinalIgnoreCase) ||
+                             prompt.Contains("choose", StringComparison.OrdinalIgnoreCase) ||
+                             prompt.Contains("exhaust", StringComparison.OrdinalIgnoreCase) ||
+                             prompt.Contains("discard", StringComparison.OrdinalIgnoreCase));
+        if (!hasTypeHint && !hasPromptHint)
+        {
+            return null;
+        }
+
+        return overlayTop;
+    }
+
+    private RuntimeCard BuildCombatSelectionCard(object choice, int index, TextDiagnosticsCollector textDiagnostics)
+    {
+        var card = ResolveCardRewardChoiceCard(choice) ?? choice;
+        try
+        {
+            return BuildRuntimeCard(card, index, "combat_selection_choices", textDiagnostics);
+        }
+        catch (Exception ex)
+        {
+            _logger?.Warn($"Combat selection card extraction degraded for combat_selection_choices[{index}]: {ex.GetBaseException().Message}");
+            return BuildFallbackRuntimeCard(card, index);
+        }
+    }
+
+    private string? ResolveCombatSelectionPrompt(object selectionScreen, TextDiagnosticsCollector? textDiagnostics)
+    {
+        return ConvertToText(
+            GetFirstMemberValue(selectionScreen, CombatSelectionPromptMembers),
+            "combat_selection.prompt",
+            textDiagnostics,
+            CombatSelectionPromptMembers);
+    }
+
+    private static string ResolveCombatSelectionKind(object selectionScreen, string? prompt)
+    {
+        var text = $"{GetTypeName(selectionScreen)} {prompt}";
+        if (text.Contains("消耗", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("exhaust", StringComparison.OrdinalIgnoreCase))
+        {
+            return "exhaust_card";
+        }
+
+        if (text.Contains("弃", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("discard", StringComparison.OrdinalIgnoreCase))
+        {
+            return "discard_card";
+        }
+
+        return "choose_card";
     }
 
     private RewardPhaseAnalysis AnalyzeRewardPhase(object runNode, object runState)
@@ -4845,6 +5080,27 @@ internal sealed class Sts2RuntimeReflectionReader
             .ToDictionary(pair => pair.Key, pair => pair.Value);
     }
 
+    private static IReadOnlyDictionary<string, object?> BuildCardPreview(RuntimeCard card)
+    {
+        var preview = new Dictionary<string, object?>
+        {
+            ["card_id"] = card.CardId,
+            ["card_name"] = card.Name,
+            ["target_type"] = card.TargetType,
+            ["canonical_card_id"] = card.CanonicalCardId,
+            ["description"] = card.Description,
+            ["glossary"] = card.Glossary,
+            ["upgraded"] = card.Upgraded,
+            ["traits"] = card.Traits,
+            ["keywords"] = card.Keywords,
+        };
+        return preview
+            .Where(pair => pair.Value is not null &&
+                           (!(pair.Value is string text) || !string.IsNullOrWhiteSpace(text)) &&
+                           (!(pair.Value is IReadOnlyCollection<string> values) || values.Count > 0))
+            .ToDictionary(pair => pair.Key, pair => pair.Value);
+    }
+
     private void LogTextDiagnostics(string windowKind, TextDiagnosticsCollector collector)
     {
         var metadata = collector.ToMetadata();
@@ -5204,6 +5460,13 @@ internal sealed class Sts2RuntimeReflectionReader
         int? Block,
         IReadOnlyList<string> Effects);
     private readonly record struct RewardOption(string Label, TextResolutionResult Resolution);
+    private readonly record struct CombatSelectionContext(
+        object SelectionScreen,
+        string SelectionKind,
+        string? SelectionPrompt,
+        bool CancelAvailable,
+        string? CancelReason,
+        IReadOnlyList<RuntimeActionDefinition> Actions);
     private readonly record struct RewardPhaseAnalysis(
         bool TreatAsReward,
         bool HasRewardScreen,
@@ -5320,6 +5583,134 @@ internal sealed class Sts2RuntimeReflectionReader
             ["action_type"] = "end_turn",
             ["runtime_handler"] = "PlayerCmd.EndTurn",
         });
+    }
+
+    private RuntimeActionResult ExecuteChooseCombatCard(object runNode, object runState, ActionRequest request, LegalAction action)
+    {
+        var selectionScreen = GetCombatCardSelectionScreen(runNode, runState);
+        if (selectionScreen is null)
+        {
+            return new RuntimeActionResult(false, "Combat selection window is no longer available.", "selection_window_changed");
+        }
+
+        var choices = FilterCardRewardSelectionChoices(ExtractCardRewardChoiceItems(selectionScreen));
+        if (choices.Count == 0)
+        {
+            return new RuntimeActionResult(false, "No combat selection choices are currently available.", "stale_action");
+        }
+
+        var selectionIndex = GetNullableIntFromObject(GetDictionaryValue(action.Params, "selection_index"));
+        var selectedIndex = selectionIndex ?? 0;
+        if (selectedIndex < 0 || selectedIndex >= choices.Count)
+        {
+            return new RuntimeActionResult(false, "Combat selection target is no longer available.", "stale_action");
+        }
+
+        var choice = choices[selectedIndex];
+        var card = ResolveCardRewardChoiceCard(choice);
+        var exportedCardId = ConvertToText(GetDictionaryValue(action.Params, "card_id"));
+        if (!string.IsNullOrWhiteSpace(exportedCardId))
+        {
+            var currentCardId = RuntimeCardIdentity.CreateCardId(card ?? choice, selectedIndex);
+            if (!string.Equals(exportedCardId, currentCardId, StringComparison.Ordinal))
+            {
+                return new RuntimeActionResult(false, "Combat selection window changed before the action executed.", "selection_window_changed");
+            }
+        }
+
+        var choiceTypeName = GetTypeName(choice) ?? string.Empty;
+        var directSelect = selectionScreen.GetType()
+            .GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+            .FirstOrDefault(candidate =>
+            {
+                if (!string.Equals(candidate.Name, "SelectCard", StringComparison.Ordinal))
+                {
+                    return false;
+                }
+
+                var parameters = candidate.GetParameters();
+                return parameters.Length == 1 && parameters[0].ParameterType.IsInstanceOfType(choice);
+            });
+        if (directSelect is not null)
+        {
+            try
+            {
+                directSelect.Invoke(selectionScreen, new[] { choice });
+                return new RuntimeActionResult(true, "Selected combat card.", metadata: new Dictionary<string, object?>
+                {
+                    ["action_type"] = "choose_combat_card",
+                    ["selection_index"] = selectedIndex,
+                    ["card_id"] = exportedCardId,
+                    ["runtime_handler"] = $"combat_selection_screen.{directSelect.Name}",
+                    ["choice_type"] = choiceTypeName,
+                });
+            }
+            catch (Exception ex)
+            {
+                return new RuntimeActionResult(false, $"Combat selection failed: {ex.GetBaseException().Message}", "runtime_incompatible");
+            }
+        }
+
+        var handlers = new List<(object Target, string Label)>
+        {
+            (selectionScreen, "combat_selection_screen"),
+            (choice, "combat_selection_choice"),
+        };
+        if (card is not null)
+        {
+            handlers.Add((card, "combat_selection_card"));
+        }
+
+        var argSets = new List<object?[]>
+        {
+            Array.Empty<object?>(),
+            new object?[] { choice },
+            new object?[] { card },
+            new object?[] { selectedIndex },
+            new object?[] { choice, selectedIndex },
+            new object?[] { card, selectedIndex },
+        };
+        foreach (var handler in handlers)
+        {
+            if (TryInvokeFirstCompatibleMethod(handler.Target, CardRewardChoiceSelectMethodNames, argSets, out var methodName))
+            {
+                return new RuntimeActionResult(true, "Selected combat card.", metadata: new Dictionary<string, object?>
+                {
+                    ["action_type"] = "choose_combat_card",
+                    ["selection_index"] = selectedIndex,
+                    ["card_id"] = exportedCardId,
+                    ["runtime_handler"] = $"{handler.Label}.{methodName}",
+                });
+            }
+        }
+
+        return new RuntimeActionResult(false, "Combat selection hooks are not available.", "runtime_incompatible");
+    }
+
+    private RuntimeActionResult ExecuteCancelCombatSelection(object runNode, object runState, ActionRequest request, LegalAction action)
+    {
+        var selectionScreen = GetCombatCardSelectionScreen(runNode, runState);
+        if (selectionScreen is null)
+        {
+            return new RuntimeActionResult(false, "Combat selection window is no longer available.", "selection_window_changed");
+        }
+
+        var argSets = new List<object?[]>
+        {
+            Array.Empty<object?>(),
+            new object?[] { false },
+            new object?[] { 0 },
+        };
+        if (TryInvokeFirstCompatibleMethod(selectionScreen, CombatCardChoiceCancelMethodNames, argSets, out var methodName))
+        {
+            return new RuntimeActionResult(true, "Cancelled combat selection.", metadata: new Dictionary<string, object?>
+            {
+                ["action_type"] = "cancel_combat_selection",
+                ["runtime_handler"] = $"combat_selection_screen.{methodName}",
+            });
+        }
+
+        return new RuntimeActionResult(false, "Combat selection cancel hooks are not available.", "runtime_incompatible");
     }
 
     private RuntimeActionResult ExecuteChooseReward(object runNode, ActionRequest request, LegalAction action)

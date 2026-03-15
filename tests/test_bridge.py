@@ -213,6 +213,31 @@ class HttpBridgeTests(unittest.TestCase):
                     )
                 )
 
+    def test_http_bridge_maps_selection_window_changed_as_stale_action(self) -> None:
+        bridge = HttpGameBridge(HttpGameBridgeConfig(base_url="http://127.0.0.1:17654"))
+        bridge._sessions["sess-live1234"] = BridgeSession(session_id="sess-live1234", scenario="live", state_version=7)
+
+        with patch(
+            "sts2_agent.bridge.http.urlopen",
+            side_effect=make_http_error(
+                "http://127.0.0.1:17654/apply",
+                {
+                    "status": "rejected",
+                    "error_code": "selection_window_changed",
+                    "message": "selection changed",
+                },
+            ),
+        ):
+            with self.assertRaises(StaleActionError):
+                bridge.submit_action(
+                    ActionSubmission(
+                        session_id="sess-live1234",
+                        decision_id="dec-live1234",
+                        state_version=7,
+                        action_id="act-select",
+                    )
+                )
+
     def test_http_bridge_maps_illegal_action(self) -> None:
         bridge = HttpGameBridge(HttpGameBridgeConfig(base_url="http://127.0.0.1:17654"))
         bridge._sessions["sess-live1234"] = BridgeSession(session_id="sess-live1234", scenario="live", state_version=7)

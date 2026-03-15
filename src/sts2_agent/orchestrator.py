@@ -520,6 +520,8 @@ class AutoplayOrchestrator:
                 return "map"
             return "transition_wait"
         if phase == "combat":
+            if window_kind == "combat_card_selection":
+                return "combat_card_selection"
             if window_kind == "combat_transition" or bool(metadata.get("reward_pending")):
                 return "transition_wait"
             if previous_phase in {"reward", "map"} and self._next_combat_entered:

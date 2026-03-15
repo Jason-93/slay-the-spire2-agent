@@ -210,8 +210,24 @@ python tools/validate_live_apply.py \
 
 ## 已接通的真实动作映射
 
-- `combat`: `play_card`、`end_turn`
+- `combat`:
+  - 常规回合：`play_card`、`end_turn`
+  - 额外选牌窗口：`choose_combat_card`
+  - 可取消的额外选牌窗口：`cancel_combat_selection`
 - `reward`: `choose_reward`、`skip_reward`
 - `map`: `choose_map_node`
+
+战斗 runtime 还会额外导出这些 `window_kind`：
+
+- `player_turn`：稳定玩家回合，可正常出牌
+- `enemy_turn`：敌方行动中，不应再提交普通 combat 动作
+- `combat_transition`：回合切换或战斗结束过渡中
+- `combat_card_selection`：战斗中的二级选牌/消耗/弃牌窗口
+
+常见可恢复拒绝码：
+
+- `not_player_turn`：动作提交时已不再是玩家回合
+- `selection_window_changed`：额外选牌窗口已变化或关闭
+- `stale_action` / `stale_decision`：动作或快照已经过期
 
 其他窗口仍保持只读观测；若窗口未支持，bridge 会明确返回拒绝或运行时诊断，而不是静默猜测执行。
