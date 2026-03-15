@@ -465,7 +465,7 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
         user_message = json.loads(payload[1]["content"])
         self.assertEqual(user_message["battle_context"]["current_turn_index"], 2)
         self.assertEqual(user_message["battle_context"]["last_recovery_reason"], "stale_action")
-        self.assertEqual(user_message["battle_context"]["recent_steps"][0]["action_id"], "act-1")
+        self.assertNotIn("action_id", user_message["battle_context"]["recent_steps"][0])
 
     def test_summarize_snapshot_hides_duplicate_move_name(self) -> None:
         snapshot = build_snapshot()

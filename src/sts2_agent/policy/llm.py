@@ -87,6 +87,7 @@ class ChatCompletionsPolicy:
         system_prompt = (
             "你是 Slay the Spire 2 自动打牌 agent。"
             "只能从给定 legal actions 中选择一个 action_id。"
+            "battle_context 只用于理解最近发生了什么，里面若出现历史动作摘要也绝不能直接复用旧 action_id。"
             "必须返回 JSON，字段为 action_id、target_id、reason、halt、confidence。"
             "如果你认为当前不应继续自动操作，可以返回 halt=true 且 action_id=null。"
             "若所选动作有多个 target_constraints，必须显式返回一个合法 target_id。"
@@ -111,7 +112,7 @@ class ChatCompletionsPolicy:
             },
         }
         if battle_context is not None:
-            user_payload["battle_context"] = to_dict(battle_context)
+            user_payload["battle_context"] = self._summarize_battle_context(battle_context)
         return [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
@@ -268,6 +269,24 @@ class ChatCompletionsPolicy:
         potion_preview = action.metadata.get("potion_preview")
         if isinstance(potion_preview, dict):
             payload["potion_preview"] = to_dict(potion_preview)
+        return payload
+
+    @staticmethod
+    def _summarize_battle_context(battle_context: BattleContext) -> dict[str, Any]:
+        payload = to_dict(battle_context)
+        recent_steps = payload.get("recent_steps")
+        if isinstance(recent_steps, list):
+            sanitized_steps: list[dict[str, Any]] = []
+            for step in recent_steps:
+                if not isinstance(step, dict):
+                    continue
+                sanitized_step = {
+                    key: value
+                    for key, value in step.items()
+                    if key not in {"action_id"}
+                }
+                sanitized_steps.append(sanitized_step)
+            payload["recent_steps"] = sanitized_steps
         return payload
 
     @staticmethod

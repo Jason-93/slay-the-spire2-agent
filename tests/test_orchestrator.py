@@ -48,6 +48,28 @@ class LegacyPolicy:
         return PolicyDecision(action_id=legal_actions[0].action_id, reason="legacy policy")
 
 
+class RetryInvalidThenValidPolicy:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def decide(self, snapshot, legal_actions, battle_context: BattleContext | None = None):
+        self.calls += 1
+        if self.calls == 1:
+            return PolicyDecision(action_id="act-invalid-stale", reason="first try invalid action", confidence="low")
+        return PolicyDecision(action_id=legal_actions[0].action_id, reason="retry with legal action", confidence="high")
+
+
+class RetryPolicyErrorThenValid:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def decide(self, snapshot, legal_actions, battle_context: BattleContext | None = None):
+        self.calls += 1
+        if self.calls == 1:
+            raise FailingPolicyError("invalid llm response")
+        return PolicyDecision(action_id=legal_actions[0].action_id, reason="retry after policy error", confidence="high")
+
+
 class MultiTargetPolicy:
     def __init__(self, target_id: str | None) -> None:
         self.target_id = target_id
@@ -1025,6 +1047,53 @@ class OrchestratorTests(unittest.TestCase):
             self.assertTrue(summary.completed)
             self.assertEqual(policy.calls, 1)
 
+    def test_battle_mode_recovers_from_policy_invalid_action(self) -> None:
+        bridge = SequencedCombatBridge(
+            [
+                make_window(actions=[{"type": "play_card", "label": "Strike", "params": {"card_id": "card-1"}}]),
+                make_window(phase="reward", actions=[], metadata={}),
+            ]
+        )
+        policy = RetryInvalidThenValidPolicy()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orchestrator = AutoplayOrchestrator(
+                bridge=bridge,
+                policy=policy,
+                config=OrchestratorConfig(trace_dir=tmpdir, stop_after_player_turn=False, max_steps=4),
+            )
+            summary = orchestrator.run(scenario="live")
+
+            self.assertTrue(summary.completed)
+            self.assertEqual(summary.recovery_attempts, 1)
+            self.assertEqual(summary.recovery_successes, 1)
+            self.assertEqual(summary.last_recovery_reason, "policy_invalid_action")
+            records = [json.loads(line) for line in Path(summary.trace_path).read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(records[0]["bridge_result"]["error_code"], "policy_invalid_action")
+            self.assertEqual(records[0]["stop_reason"], "policy_invalid_action_retry")
+
+    def test_battle_mode_recovers_from_policy_error(self) -> None:
+        bridge = SequencedCombatBridge(
+            [
+                make_window(actions=[{"type": "play_card", "label": "Strike", "params": {"card_id": "card-1"}}]),
+                make_window(phase="reward", actions=[], metadata={}),
+            ]
+        )
+        policy = RetryPolicyErrorThenValid()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orchestrator = AutoplayOrchestrator(
+                bridge=bridge,
+                policy=policy,
+                config=OrchestratorConfig(trace_dir=tmpdir, stop_after_player_turn=False, max_steps=4),
+            )
+            summary = orchestrator.run(scenario="live")
+
+            self.assertTrue(summary.completed)
+            self.assertEqual(summary.recovery_attempts, 1)
+            self.assertEqual(summary.recovery_successes, 1)
+            records = [json.loads(line) for line in Path(summary.trace_path).read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(records[0]["bridge_result"]["error_code"], "llm_parse_error")
+            self.assertEqual(records[0]["stop_reason"], "llm_parse_error_retry")
+
     def test_orchestrator_retries_stale_auto_end_turn_with_fresh_state(self) -> None:
         bridge = RetryableAutoEndTurnStaleBridge()
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1085,6 +1154,32 @@ class OrchestratorTests(unittest.TestCase):
 
             self.assertTrue(summary.completed)
             self.assertFalse(summary.interrupted)
+            self.assertEqual(summary.ended_by, "auto_end_turn")
+            self.assertEqual(bridge.submissions, ["end_turn"])
+
+    def test_orchestrator_filters_unsupported_potion_actions(self) -> None:
+        bridge = SequencedCombatBridge(
+            [
+                make_window(
+                    actions=[
+                        {"type": "use_potion", "label": "Use 迅捷药水", "params": {"potion_index": 0}},
+                        {"type": "end_turn", "label": "End Turn"},
+                    ],
+                    energy=0,
+                    hand=[],
+                ),
+                make_window(phase="reward", actions=[]),
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orchestrator = AutoplayOrchestrator(
+                bridge=bridge,
+                policy=FirstLegalActionPolicy(),
+                config=OrchestratorConfig(trace_dir=tmpdir),
+            )
+            summary = orchestrator.run(scenario="live")
+
+            self.assertTrue(summary.completed)
             self.assertEqual(summary.ended_by, "auto_end_turn")
             self.assertEqual(bridge.submissions, ["end_turn"])
 

@@ -1837,7 +1837,68 @@ class AutoplayOrchestrator:
 
             legal_actions_by_id = {action.action_id: action for action in legal_actions}
             if policy_output.action_id not in legal_actions_by_id:
-                raise InvalidPayloadError("policy returned an action outside the legal action set")
+                if self.config.stop_after_player_turn:
+                    raise InvalidPayloadError("policy returned an action outside the legal action set")
+                consecutive_failures += 1
+                self._note_recovery_attempt("policy_invalid_action")
+                budget_stop_reason = self._battle_budget_stop_reason(
+                    total_actions=total_actions,
+                    turns_completed=turns_completed,
+                    current_turn_index=current_turn_index,
+                    consecutive_failures=consecutive_failures,
+                )
+                retrying = not budget_stop_reason
+                self._record(
+                    recorder=recorder,
+                    snapshot=snapshot,
+                    legal_actions=legal_actions,
+                    policy_output=policy_output,
+                    bridge_result={
+                        "status": "interrupted",
+                        "error_code": "policy_invalid_action",
+                        "message": "policy returned an action outside the legal action set",
+                        "retrying": retrying,
+                        "consecutive_failures": consecutive_failures,
+                    },
+                    interrupted=not retrying,
+                    step_index=step_index,
+                    current_turn_index=current_turn_index,
+                    actions_this_turn=current_turn_actions,
+                    total_actions=total_actions,
+                    waiting_for_player_turn=False,
+                    is_final_step=not retrying,
+                    stop_reason=budget_stop_reason if budget_stop_reason else "policy_invalid_action_retry",
+                    battle_stop_reason=budget_stop_reason,
+                )
+                if retrying:
+                    return self._step_result(
+                        step_index=step_index,
+                        current_turn_actions=current_turn_actions,
+                        total_actions=total_actions,
+                        stale_action_attempts=0,
+                        consecutive_failures=consecutive_failures,
+                        pending_end_turn_transition=None,
+                        summary=None,
+                    )
+                return self._step_result(
+                    step_index=step_index,
+                    current_turn_actions=current_turn_actions,
+                    total_actions=total_actions,
+                    stale_action_attempts=0,
+                    consecutive_failures=consecutive_failures,
+                    pending_end_turn_transition=None,
+                    summary=self._finish(
+                        session_id=session_id,
+                        trace_path=trace_path,
+                        reason=budget_stop_reason,
+                        completed=False,
+                        interrupted=True,
+                        actions_this_turn=current_turn_actions,
+                        turns_completed=turns_completed,
+                        total_actions=total_actions,
+                        current_turn_index=current_turn_index,
+                    ),
+                )
             selected_action = legal_actions_by_id[policy_output.action_id]
 
             if self.config.dry_run:
@@ -2057,6 +2118,75 @@ class AutoplayOrchestrator:
         phase_kind: str | None = None,
     ) -> dict[str, object]:
         error_code = getattr(exc, "error_code", "policy_error" if is_policy_error else "bridge_error")
+        if is_policy_error and not self.config.stop_after_player_turn:
+            self._note_recovery_attempt(error_code)
+            budget_stop_reason = self._battle_budget_stop_reason(
+                total_actions=total_actions,
+                turns_completed=turns_completed,
+                current_turn_index=current_turn_index,
+                consecutive_failures=consecutive_failures,
+            )
+            retrying = not budget_stop_reason
+            interrupted_payload = {
+                "status": "interrupted",
+                "error_code": error_code,
+                "message": str(exc),
+                "consecutive_failures": consecutive_failures,
+                "retrying": retrying,
+            }
+            fallback_output = PolicyDecision(
+                action_id=None,
+                reason=str(exc),
+                halt=True,
+                metadata={"error_code": error_code},
+            )
+            self._record(
+                recorder=recorder,
+                snapshot=snapshot,
+                legal_actions=legal_actions,
+                policy_output=fallback_output,
+                bridge_result=interrupted_payload,
+                interrupted=not retrying,
+                step_index=step_index,
+                current_turn_index=current_turn_index,
+                actions_this_turn=current_turn_actions,
+                total_actions=total_actions,
+                waiting_for_player_turn=False,
+                is_final_step=not retrying,
+                stop_reason=budget_stop_reason if budget_stop_reason else f"{error_code}_retry",
+                battle_stop_reason=budget_stop_reason,
+                step_kind=step_kind,
+                phase_kind=phase_kind,
+            )
+            if retrying:
+                return self._step_result(
+                    step_index=step_index,
+                    current_turn_actions=current_turn_actions,
+                    total_actions=total_actions,
+                    stale_action_attempts=stale_action_attempts,
+                    consecutive_failures=consecutive_failures,
+                    pending_end_turn_transition=None,
+                    summary=None,
+                )
+            return self._step_result(
+                step_index=step_index,
+                current_turn_actions=current_turn_actions,
+                total_actions=total_actions,
+                stale_action_attempts=stale_action_attempts,
+                consecutive_failures=consecutive_failures,
+                pending_end_turn_transition=None,
+                summary=self._finish(
+                    session_id=session_id,
+                    trace_path=trace_path,
+                    reason=budget_stop_reason,
+                    completed=False,
+                    interrupted=True,
+                    actions_this_turn=current_turn_actions,
+                    turns_completed=turns_completed,
+                    total_actions=total_actions,
+                    current_turn_index=current_turn_index,
+                ),
+            )
         interrupted_payload = {
             "status": "interrupted",
             "error_code": error_code,
@@ -2568,10 +2698,12 @@ class AutoplayOrchestrator:
     def _effective_legal_actions(snapshot, legal_actions):
         player = getattr(snapshot, "player", None)
         if player is None:
-            return legal_actions
+            return [action for action in legal_actions if action.type != "use_potion"]
         hand_by_id = {card.card_id: card for card in player.hand}
         effective_actions = []
         for action in legal_actions:
+            if action.type == "use_potion":
+                continue
             if action.type != "play_card":
                 effective_actions.append(action)
                 continue
