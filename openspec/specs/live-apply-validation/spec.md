@@ -94,3 +94,30 @@ TBD - created by archiving change validate-live-apply-autoplay. Update Purpose a
 - **THEN** artifacts MUST 记录执行前后的 `snapshot.player.potions[]`
 - **THEN** artifacts MUST 记录候选 `potion_preview`、请求参数与返回的 `runtime_handler`
 - **THEN** 结果文件 MUST 明确写出成功或失败的推进证据
+
+### Requirement: live validation 必须输出 reject 分类与恢复质量 artifacts
+系统 MUST 在 live validation、battle smoke validation 或等效真实运行验证中输出 reject 与恢复质量 artifacts，至少记录 reject 总数、按分类统计、恢复尝试次数、恢复成功次数、最终 stop reason，以及最近一次 reject 的上下文摘要。若 battle 虽然完成但 reject 仍然很多，结果 artifacts MUST 能明确体现这一点。
+
+#### Scenario: battle 完成但 reject 仍被单独统计
+- **WHEN** 某次 live battle validation 最终成功完成战斗，但过程中发生过 reject 或恢复
+- **THEN** artifacts MUST 记录 reject 总数与恢复成功次数
+- **THEN** 调用方 MUST 能区分“正常完成且无 reject”与“完成但依赖多次恢复”
+
+#### Scenario: validation 因 reject 链路失败而终止
+- **WHEN** 某次 live validation 因 reject 连续发生、恢复预算耗尽或等效拒绝链路失败而停止
+- **THEN** 结果 MUST 记录 reject 分类汇总、恢复次数与最终 stop reason
+- **THEN** diagnostics MUST 包含最近一次 reject 的 phase、window 或等效上下文摘要
+
+### Requirement: live validation 必须支持多回合整场战斗 autoplay 冒烟
+系统 MUST 提供面向整场战斗 LLM autoplay 的 live smoke validation，至少能覆盖一个包含多个玩家回合的真实 battle，并记录 battle 是否完成、总动作数、回合数、恢复次数、停止原因以及关键 battle artifacts。若 smoke 过程中发生可恢复竞争态，artifacts MUST 能区分“已恢复”与“最终失败”。
+
+#### Scenario: 多回合 battle smoke 成功完成
+- **WHEN** live validation 成功从 battle 首个玩家回合运行到战斗结束离开 `combat`
+- **THEN** artifacts MUST 记录 `battle_completed=true`
+- **THEN** artifacts MUST 同时记录回合数、总动作数与是否发生过 recovery
+
+#### Scenario: battle smoke 因恢复预算耗尽失败
+- **WHEN** live validation 在 battle 中连续命中可恢复竞争态但最终未能恢复
+- **THEN** 结果 MUST 标记为非成功
+- **THEN** artifacts MUST 记录最近失败原因、恢复尝试次数与 battle stop reason
+
