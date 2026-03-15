@@ -245,6 +245,42 @@ def contains_description_placeholder(text: Any) -> bool:
     return isinstance(text, str) and bool(DESCRIPTION_PLACEHOLDER_RE.search(text))
 
 
+def normalize_comparison_text(text: Any) -> str:
+    if not isinstance(text, str):
+        return ""
+    return "".join(ch.lower() for ch in text if ch.isalnum())
+
+
+def classify_low_quality_glossary(
+    anchor: dict[str, Any],
+    *,
+    owner_kind: str,
+    owner_name: Any,
+    owner_id: Any,
+    owner_description: Any,
+) -> str | None:
+    hint = anchor.get("hint")
+    source = anchor.get("source")
+    if not isinstance(hint, str) or not hint.strip():
+        return "empty_hint"
+    if contains_description_placeholder(hint):
+        return "template_hint"
+    if source == "missing_hint":
+        return "missing_hint"
+
+    normalized_display = normalize_comparison_text(anchor.get("display_text"))
+    normalized_name = normalize_comparison_text(owner_name)
+    if normalized_display and normalized_display == normalized_name:
+        normalized_glossary_id = normalize_comparison_text(anchor.get("glossary_id"))
+        normalized_owner_id = normalize_comparison_text(owner_id)
+        if normalized_glossary_id and normalized_glossary_id == normalized_owner_id:
+            return f"duplicate_{owner_kind}_identity"
+        if normalize_comparison_text(hint) == normalize_comparison_text(owner_description):
+            return f"duplicate_{owner_kind}_description"
+
+    return None
+
+
 def audit_card_descriptions(
     snapshot: dict[str, Any],
     actions: list[dict[str, Any]],
@@ -252,8 +288,10 @@ def audit_card_descriptions(
     placeholder_paths: list[str] = []
     preview_mismatches: list[dict[str, str]] = []
     low_quality_relic_glossary: list[dict[str, Any]] = []
+    low_quality_potion_glossary: list[dict[str, Any]] = []
     audited_card_count = 0
     audited_relic_count = 0
+    audited_potion_count = 0
 
     player = snapshot.get("player")
     player = player if isinstance(player, dict) else {}
@@ -288,35 +326,51 @@ def audit_card_descriptions(
         for glossary_index, anchor in enumerate(glossary):
             if not isinstance(anchor, dict):
                 continue
-            hint = anchor.get("hint")
-            source = anchor.get("source")
-            if not isinstance(hint, str) or not hint.strip():
+            reason = classify_low_quality_glossary(
+                anchor,
+                owner_kind="relic",
+                owner_name=relic.get("name"),
+                owner_id=relic.get("canonical_relic_id"),
+                owner_description=description,
+            )
+            if reason is not None:
                 low_quality_relic_glossary.append(
                     {
                         "path": f"snapshot.player.relics[{index}].glossary[{glossary_index}]",
-                        "reason": "empty_hint",
+                        "reason": reason,
                         "glossary_id": anchor.get("glossary_id"),
-                        "source": source,
+                        "source": anchor.get("source"),
                     }
                 )
+
+    potions = player.get("potions")
+    potions = potions if isinstance(potions, list) else []
+    for index, potion in enumerate(potions):
+        if not isinstance(potion, dict):
+            continue
+        audited_potion_count += 1
+        description = potion.get("description")
+        if contains_description_placeholder(description):
+            placeholder_paths.append(f"snapshot.player.potions[{index}].description")
+        glossary = potion.get("glossary")
+        glossary = glossary if isinstance(glossary, list) else []
+        for glossary_index, anchor in enumerate(glossary):
+            if not isinstance(anchor, dict):
                 continue
-            if contains_description_placeholder(hint):
-                low_quality_relic_glossary.append(
+            reason = classify_low_quality_glossary(
+                anchor,
+                owner_kind="potion",
+                owner_name=potion.get("name"),
+                owner_id=potion.get("canonical_potion_id"),
+                owner_description=description,
+            )
+            if reason is not None:
+                low_quality_potion_glossary.append(
                     {
-                        "path": f"snapshot.player.relics[{index}].glossary[{glossary_index}]",
-                        "reason": "template_hint",
+                        "path": f"snapshot.player.potions[{index}].glossary[{glossary_index}]",
+                        "reason": reason,
                         "glossary_id": anchor.get("glossary_id"),
-                        "source": source,
-                    }
-                )
-                continue
-            if source == "missing_hint":
-                low_quality_relic_glossary.append(
-                    {
-                        "path": f"snapshot.player.relics[{index}].glossary[{glossary_index}]",
-                        "reason": "missing_hint",
-                        "glossary_id": anchor.get("glossary_id"),
-                        "source": source,
+                        "source": anchor.get("source"),
                     }
                 )
 
@@ -349,12 +403,15 @@ def audit_card_descriptions(
     return {
         "audited_card_count": audited_card_count,
         "audited_relic_count": audited_relic_count,
+        "audited_potion_count": audited_potion_count,
         "placeholder_description_count": len(placeholder_paths),
         "placeholder_description_paths": placeholder_paths[:20],
         "preview_mismatch_count": len(preview_mismatches),
         "preview_mismatches": preview_mismatches[:10],
         "low_quality_relic_glossary_count": len(low_quality_relic_glossary),
         "low_quality_relic_glossary": low_quality_relic_glossary[:20],
+        "low_quality_potion_glossary_count": len(low_quality_potion_glossary),
+        "low_quality_potion_glossary": low_quality_potion_glossary[:20],
     }
 
 
@@ -799,6 +856,10 @@ def run_validation(args: argparse.Namespace) -> int:
     elif after_description_audit["low_quality_relic_glossary_count"] > 0:
         verdict = "failed"
         summary = "live snapshot 的 relic glossary 仍包含空 hint、missing_hint 或模板化条目。"
+        exit_code = 1
+    elif after_description_audit["low_quality_potion_glossary_count"] > 0:
+        verdict = "failed"
+        summary = "live snapshot 的 potion glossary 仍包含空 hint、missing_hint、模板化或重复本体说明条目。"
         exit_code = 1
 
     result = build_result(

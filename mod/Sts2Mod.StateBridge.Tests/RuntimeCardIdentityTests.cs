@@ -44,7 +44,7 @@ public sealed class RuntimeCardIdentityTests
                 10,
                 0,
                 0,
-                new[] { "燃烧之血" },
+                new[] { new RuntimeRelicState("燃烧之血") },
                 Array.Empty<RuntimePotionState>(),
                 2),
             new[] { new RuntimeEnemyState("enemy-1", "小啃兽", 10, 10, 0, "unknown", true) },

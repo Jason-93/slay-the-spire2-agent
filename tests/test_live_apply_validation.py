@@ -24,6 +24,7 @@ class LiveApplyValidationTests(unittest.TestCase):
                 "discard_pile_cards": [],
                 "exhaust_pile_cards": [],
                 "relics": [],
+                "potions": [],
             },
         }
         actions = [
@@ -46,6 +47,7 @@ class LiveApplyValidationTests(unittest.TestCase):
         self.assertEqual(audit["preview_mismatch_count"], 1)
         self.assertEqual(audit["preview_mismatches"][0]["card_id"], "card-true-grit")
         self.assertEqual(audit["low_quality_relic_glossary_count"], 0)
+        self.assertEqual(audit["low_quality_potion_glossary_count"], 0)
 
     def test_audit_card_descriptions_reports_low_quality_relic_glossary(self) -> None:
         snapshot = {
@@ -55,6 +57,7 @@ class LiveApplyValidationTests(unittest.TestCase):
                 "draw_pile_cards": [],
                 "discard_pile_cards": [],
                 "exhaust_pile_cards": [],
+                "potions": [],
                 "relics": [
                     {
                         "name": "永冻冰晶",
@@ -83,6 +86,44 @@ class LiveApplyValidationTests(unittest.TestCase):
         self.assertEqual(audit["low_quality_relic_glossary_count"], 2)
         self.assertEqual(audit["low_quality_relic_glossary"][0]["reason"], "empty_hint")
         self.assertEqual(audit["low_quality_relic_glossary"][1]["reason"], "template_hint")
+
+    def test_audit_card_descriptions_reports_low_quality_potion_glossary(self) -> None:
+        snapshot = {
+            "phase": "combat",
+            "player": {
+                "hand": [],
+                "draw_pile_cards": [],
+                "discard_pile_cards": [],
+                "exhaust_pile_cards": [],
+                "relics": [],
+                "potions": [
+                    {
+                        "name": "肌肉药水",
+                        "description": "获得5点**力量**。在你的这个回合结束时，失去5点**力量**。",
+                        "canonical_potion_id": "POTION.FLEX_POTION",
+                        "glossary": [
+                            {
+                                "glossary_id": "potionflexpotion",
+                                "display_text": "肌肉药水",
+                                "hint": "获得{StrengthPower}点**力量**。在你的这个回合结束时，失去{StrengthPower}点**力量**。",
+                                "source": "runtime_hover_tip",
+                            },
+                            {
+                                "glossary_id": "strength",
+                                "display_text": "力量",
+                                "hint": "使攻击造成更多伤害。",
+                                "source": "runtime_hover_tip",
+                            },
+                        ],
+                    }
+                ],
+            },
+        }
+
+        audit = audit_card_descriptions(snapshot, [])
+
+        self.assertEqual(audit["low_quality_potion_glossary_count"], 1)
+        self.assertEqual(audit["low_quality_potion_glossary"][0]["reason"], "template_hint")
 
     def test_select_candidate_prefers_choose_combat_card_in_combat_selection(self) -> None:
         snapshot = {"phase": "combat"}

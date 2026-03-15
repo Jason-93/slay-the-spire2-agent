@@ -4725,16 +4725,16 @@ internal sealed class Sts2RuntimeReflectionReader
             return null;
         }
 
+        var hoverTipDescriptionValue = GetMemberValue(GetMemberValue(source, "HoverTip"), "Description");
         var descriptionValue =
             GetMemberValue(source, "Description")
             ?? GetMemberValue(source, "DynamicDescription")
             ?? GetMemberValue(source, "StaticDescription")
             ?? GetMemberValue(source, "RulesText")
-            ?? GetMemberValue(source, "Text")
-            ?? GetMemberValue(GetMemberValue(source, "HoverTip"), "Description");
+            ?? GetMemberValue(source, "Text");
         var boundDescriptionValue = TryBindLocStringWithDynamicVars(descriptionValue, source);
         var raw = ConvertDescriptionTemplateToText(
-            descriptionValue,
+            descriptionValue ?? hoverTipDescriptionValue,
             $"{path}.description",
             textDiagnostics,
             "Description",
@@ -4742,17 +4742,29 @@ internal sealed class Sts2RuntimeReflectionReader
             "StaticDescription",
             "RulesText",
             "Text");
-        var rendered = ConvertToText(
+        var rendered = NormalizeDescriptionText(ConvertToText(
             GetMemberValue(source, "RenderedDescription")
             ?? GetMemberValue(source, "RenderedText")
             ?? GetMemberValue(source, "DisplayDescription")
-            ?? GetMemberValue(GetMemberValue(source, "HoverTip"), "Description")
             ?? boundDescriptionValue,
             $"{path}.rendered",
             textDiagnostics,
             "RenderedDescription",
             "RenderedText",
-            "DisplayDescription");
+            "DisplayDescription"));
+        if (string.IsNullOrWhiteSpace(rendered))
+        {
+            var hoverTipRendered = NormalizeDescriptionText(ConvertToText(
+                hoverTipDescriptionValue,
+                $"{path}.hover_tip_description",
+                textDiagnostics,
+                "Description"));
+            if (!string.IsNullOrWhiteSpace(hoverTipRendered) &&
+                !ContainsDescriptionPlaceholder(hoverTipRendered))
+            {
+                rendered = hoverTipRendered;
+            }
+        }
         var canonicalPotionId = ResolvePotionCanonicalId(source);
         var vars = ExtractDescriptionVariables(
             source,
@@ -4761,6 +4773,7 @@ internal sealed class Sts2RuntimeReflectionReader
                 .Concat(ExtractDescriptionVariablesFromLocString(boundDescriptionValue, "bound_loc_string"))
                 .ToArray());
         var renderOutcome = RenderDescription(raw, rendered, vars);
+        var canonicalDescription = ChooseCanonicalDescription(renderOutcome.Text, raw);
         var glossary = ExtractGlossaryAnchors(
             canonicalPotionId,
             name,
@@ -4770,22 +4783,122 @@ internal sealed class Sts2RuntimeReflectionReader
             path: $"{path}.glossary",
             source,
             potion);
+        glossary = FilterPotionGlossary(
+            canonicalPotionId,
+            name,
+            canonicalDescription,
+            glossary,
+            path);
         LogDescriptionDiagnostics(
             kind: "potion",
             identifier: canonicalPotionId ?? name,
             path: path,
             raw: raw,
-            rendered: ChooseCanonicalDescription(renderOutcome.Text, raw),
+            rendered: canonicalDescription,
             quality: renderOutcome.Quality,
             source: renderOutcome.Source,
             variables: vars,
             glossary: glossary);
+        if (string.IsNullOrWhiteSpace(canonicalDescription))
+        {
+            _logger?.Warn($"Potion description unavailable potion={canonicalPotionId ?? name} path={path} stage=no_runtime_description");
+        }
 
         return new RuntimePotionState(
             Name: name,
-            Description: ChooseCanonicalDescription(renderOutcome.Text, raw),
+            Description: canonicalDescription,
             CanonicalPotionId: canonicalPotionId,
             Glossary: glossary);
+    }
+
+    private IReadOnlyList<GlossaryAnchor> FilterPotionGlossary(
+        string? canonicalPotionId,
+        string potionName,
+        string? canonicalDescription,
+        IReadOnlyList<GlossaryAnchor> glossary,
+        string path)
+    {
+        if (glossary.Count == 0)
+        {
+            return glossary;
+        }
+
+        var filtered = new List<GlossaryAnchor>(glossary.Count);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var anchor in glossary)
+        {
+            var reason = ClassifyPotionGlossaryFilterReason(anchor, canonicalPotionId, potionName, canonicalDescription);
+            if (reason is not null)
+            {
+                LogPotionGlossaryFilter(canonicalPotionId ?? potionName, path, anchor, reason);
+                continue;
+            }
+
+            var dedupeKey = string.Join("|",
+                NormalizeComparisonText(anchor.GlossaryId),
+                NormalizeComparisonText(anchor.DisplayText),
+                NormalizeComparisonText(anchor.Hint));
+            if (!seen.Add(dedupeKey))
+            {
+                LogPotionGlossaryFilter(canonicalPotionId ?? potionName, path, anchor, "duplicate_glossary");
+                continue;
+            }
+
+            filtered.Add(anchor);
+        }
+
+        return filtered;
+    }
+
+    private static string? ClassifyPotionGlossaryFilterReason(
+        GlossaryAnchor anchor,
+        string? canonicalPotionId,
+        string potionName,
+        string? canonicalDescription)
+    {
+        if (string.IsNullOrWhiteSpace(anchor.Hint))
+        {
+            return "empty_hint";
+        }
+
+        if (string.Equals(anchor.Source, "missing_hint", StringComparison.OrdinalIgnoreCase))
+        {
+            return "missing_hint";
+        }
+
+        if (ContainsDescriptionPlaceholder(anchor.Hint))
+        {
+            return "template_hint";
+        }
+
+        var normalizedGlossaryId = NormalizeGlossaryId(anchor.GlossaryId);
+        var normalizedPotionId = NormalizeGlossaryId(canonicalPotionId);
+        var normalizedDisplay = NormalizeComparisonText(anchor.DisplayText);
+        var normalizedName = NormalizeComparisonText(potionName);
+        if (!string.IsNullOrWhiteSpace(normalizedDisplay) &&
+            string.Equals(normalizedDisplay, normalizedName, StringComparison.OrdinalIgnoreCase))
+        {
+            if (!string.IsNullOrWhiteSpace(normalizedGlossaryId) &&
+                string.Equals(normalizedGlossaryId, normalizedPotionId, StringComparison.OrdinalIgnoreCase))
+            {
+                return "duplicate_potion_identity";
+            }
+
+            if (string.Equals(NormalizeComparisonText(anchor.Hint), NormalizeComparisonText(canonicalDescription), StringComparison.OrdinalIgnoreCase))
+            {
+                return "duplicate_potion_description";
+            }
+        }
+
+        return null;
+    }
+
+    private void LogPotionGlossaryFilter(string identifier, string path, GlossaryAnchor anchor, string reason)
+    {
+        var message =
+            $"Potion glossary filtered potion={identifier} path={path} glossary_id={anchor.GlossaryId} " +
+            $"display_text={anchor.DisplayText} source={anchor.Source ?? "unknown"} reason={reason} hint=\"{AbbreviateForLog(anchor.Hint)}\"";
+        _logger?.Warn(message);
     }
 
     private static IReadOnlyList<DescriptionVariable> ResolveCardDescriptionSeedVariables(object? card, string? raw, IReadOnlyList<string>? keywords)

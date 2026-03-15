@@ -110,7 +110,7 @@ public sealed class RuntimeTextResolverTests
                 10,
                 0,
                 0,
-                new[] { "Burning Blood" },
+                new[] { new RuntimeRelicState("Burning Blood") },
                 Array.Empty<RuntimePotionState>(),
                 2),
             new[] { new RuntimeEnemyState("enemy_0", "Slime", 12, 12, 0, "Attack", true) },

@@ -273,6 +273,7 @@ public sealed class RewardPhaseDetectionTests
             Strength = 2,
             HoverTips = new[]
             {
+                new FakeHoverTip("strength_potion", "Strength Potion", "Gain {Strength:diff()} [gold]Strength[/gold] this turn."),
                 new FakeHoverTip("strength", "Strength", "Increases attack damage."),
             },
         };
@@ -364,7 +365,7 @@ public sealed class RewardPhaseDetectionTests
         Assert.NotNull(player);
         var card = Assert.Single(player.Hand);
         Assert.Equal("strike_red", card.CanonicalCardId);
-        Assert.Equal("Deal 6 **damage**.", card.Description);
+        Assert.Equal("Deal 6 damage.", card.Description);
         var damageGlossary = Assert.Single(card.Glossary ?? Array.Empty<GlossaryAnchor>(), anchor => anchor.GlossaryId == "damage");
         Assert.Equal("damage", damageGlossary.GlossaryId);
         Assert.Equal("runtime_hover_tip", damageGlossary.Source);
@@ -390,7 +391,9 @@ public sealed class RewardPhaseDetectionTests
         Assert.Equal("Strength Potion", potion.Name);
         Assert.Equal("strength_potion", potion.CanonicalPotionId);
         Assert.Equal("Gain 2 **Strength** this turn.", potion.Description);
-        Assert.Contains(potion.Glossary ?? Array.Empty<GlossaryAnchor>(), anchor => anchor.GlossaryId == "strength" && anchor.Source == "runtime_hover_tip");
+        var potionGlossary = Assert.Single(potion.Glossary ?? Array.Empty<GlossaryAnchor>());
+        Assert.Equal("strength", potionGlossary.GlossaryId);
+        Assert.Equal("runtime_hover_tip", potionGlossary.Source);
         Assert.Equal(2, player.PotionCapacity);
         var usePotionAction = Assert.Single(exported.Actions, action => action.Type == "use_potion");
         Assert.Equal("Strength Potion", usePotionAction.Params["potion"]);
@@ -519,9 +522,9 @@ public sealed class RewardPhaseDetectionTests
         Assert.Equal("这个敌人将要对你施加一个负面效果。", enemy.MoveDescription);
         var debuffGlossary = Assert.Single(enemy.MoveGlossary ?? Array.Empty<GlossaryAnchor>());
         Assert.Equal("debuff", debuffGlossary.GlossaryId);
-        Assert.Equal("missing_hint", debuffGlossary.Source);
-        Assert.Null(debuffGlossary.Hint);
-        Assert.Contains(logger.WarnMessages, message => message.Contains("Glossary hint missing glossary_id=debuff", StringComparison.Ordinal));
+        Assert.Equal("fallback_builtin", debuffGlossary.Source);
+        Assert.Equal("会削弱目标。", debuffGlossary.Hint);
+        Assert.DoesNotContain(logger.WarnMessages, message => message.Contains("Glossary hint missing glossary_id=debuff", StringComparison.Ordinal));
     }
 
     [Fact]

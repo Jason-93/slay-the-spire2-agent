@@ -119,6 +119,12 @@ def main() -> int:
                 assert anchor.get("hint") not in (None, "")
                 assert anchor.get("source") != "missing_hint"
                 assert "{" not in str(anchor.get("hint") or "")
+        for potion in combat_snapshot["player"]["potions"]:
+            assert potion.get("description")
+            for anchor in potion.get("glossary", []):
+                assert anchor.get("hint") not in (None, "")
+                assert anchor.get("source") != "missing_hint"
+                assert "{" not in str(anchor.get("hint") or "")
         assert isinstance(combat_snapshot["player"]["draw_pile_cards"], list)
         assert isinstance(combat_snapshot["player"]["discard_pile_cards"], list)
         assert isinstance(combat_snapshot["player"]["exhaust_pile_cards"], list)
