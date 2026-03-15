@@ -237,7 +237,7 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                             Rarity: "Starter",
                             Traits: new[] { "starter" },
                             Keywords: new[] { "damage" },
-                            Glossary: new[] { new GlossaryAnchor("damage", "Damage", "Reduces HP.", "description_text") }),
+                            Glossary: new[] { new GlossaryAnchor("damage", "Damage", "Reduces HP.", "runtime_hover_tip") }),
                         new RuntimeCard(
                             "defend_red#1",
                             "Defend",
@@ -253,7 +253,7 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                             Rarity: "Starter",
                             Traits: new[] { "starter" },
                             Keywords: new[] { "block" },
-                            Glossary: new[] { new GlossaryAnchor("block", "Block", "Prevents damage until next turn.", "description_text") }),
+                            Glossary: new[] { new GlossaryAnchor("block", "Block", "Prevents damage until next turn.", "runtime_hover_tip") }),
                         new RuntimeCard(
                             "battle_trance#2",
                             "Battle Trance",
@@ -269,7 +269,7 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                             Rarity: "Common",
                             Traits: new[] { "draw" },
                             Keywords: new[] { "draw" },
-                            Glossary: new[] { new GlossaryAnchor("draw", "Draw", "Add cards from your draw pile to your hand.", "description_text") }),
+                            Glossary: new[] { new GlossaryAnchor("draw", "Draw", "Add cards from your draw pile to your hand.", "runtime_hover_tip") }),
                     },
                     DrawPile: 2,
                     DiscardPile: 4,
@@ -286,8 +286,8 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                             "metallicize",
                             Glossary: new[]
                             {
-                                new GlossaryAnchor("metallicize", "Metallicize", "Gain Block at end of turn.", "canonical_id"),
-                                new GlossaryAnchor("block", "Block", "Prevents damage until next turn.", "description_text"),
+                                new GlossaryAnchor("metallicize", "Metallicize", "Gain Block at end of turn.", "model_description"),
+                                new GlossaryAnchor("block", "Block", "Prevents damage until next turn.", "runtime_hover_tip"),
                             }),
                     },
                     DrawPileCards: drawPileCards,
@@ -319,13 +319,13 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                                 3,
                                 "Increases attack damage.",
                                 "strength",
-                                Glossary: new[] { new GlossaryAnchor("strength", "Strength", "Increases attack damage.", "canonical_id") }),
+                                Glossary: new[] { new GlossaryAnchor("strength", "Strength", "Increases attack damage.", "model_description") }),
                         },
                         MoveName: "Chomp",
                         MoveDescription: "Deal 11 **damage**.",
                         MoveGlossary: new[]
                         {
-                            new GlossaryAnchor("damage", "Damage", "Reduces HP.", "description_text"),
+                            new GlossaryAnchor("damage", "Damage", "Reduces HP.", "runtime_hover_tip"),
                         },
                         Traits: new[] { "beast" },
                         Keywords: new[] { "damage", "strength", "beast" }),
@@ -386,7 +386,7 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                             3,
                             "At the end of your turn, gain 3 **Block**.",
                             "metallicize",
-                            Glossary: new[] { new GlossaryAnchor("block", "Block", "Prevents damage until next turn.", "description_text") }),
+                            Glossary: new[] { new GlossaryAnchor("block", "Block", "Prevents damage until next turn.", "runtime_hover_tip") }),
                     },
                     DrawPileCards: drawPileCards,
                     DiscardPileCards: discardPileCards,
@@ -525,7 +525,7 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                     3,
                     "At the end of your turn, gain 3 **Block**.",
                     "metallicize",
-                    Glossary: new[] { new GlossaryAnchor("block", "Block", "Prevents damage until next turn.", "description_text") }),
+                    Glossary: new[] { new GlossaryAnchor("block", "Block", "Prevents damage until next turn.", "runtime_hover_tip") }),
             },
             DrawPileCards: drawPileCards,
             DiscardPileCards: discardPileCards,
@@ -746,19 +746,19 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
             switch (keyword)
             {
                 case "damage":
-                    glossary.Add(new GlossaryAnchor("damage", "Damage", "Reduces HP.", "description_text"));
+                    glossary.Add(new GlossaryAnchor("damage", "Damage", "Reduces HP.", "runtime_hover_tip"));
                     break;
                 case "block":
-                    glossary.Add(new GlossaryAnchor("block", "Block", "Prevents damage until next turn.", "description_text"));
+                    glossary.Add(new GlossaryAnchor("block", "Block", "Prevents damage until next turn.", "runtime_hover_tip"));
                     break;
                 case "draw":
-                    glossary.Add(new GlossaryAnchor("draw", "Draw", "Add cards from your draw pile to your hand.", "description_text"));
+                    glossary.Add(new GlossaryAnchor("draw", "Draw", "Add cards from your draw pile to your hand.", "runtime_hover_tip"));
                     break;
                 case "vulnerable":
-                    glossary.Add(new GlossaryAnchor("vulnerable", "Vulnerable", "Receive more attack damage.", "description_text"));
+                    glossary.Add(new GlossaryAnchor("vulnerable", "Vulnerable", "Vulnerable creatures take 50% more damage from Attacks.", "runtime_hover_tip"));
                     break;
                 case "strength":
-                    glossary.Add(new GlossaryAnchor("strength", "Strength", "Increases attack damage.", "description_text"));
+                    glossary.Add(new GlossaryAnchor("strength", "Strength", "Increases attack damage.", "runtime_hover_tip"));
                     break;
             }
         }

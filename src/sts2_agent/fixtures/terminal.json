@@ -6,6 +6,7 @@
     "block": 0,
     "energy": 0,
     "gold": 116,
+    "hand": [],
     "draw_pile": 0,
     "discard_pile": 0,
     "exhaust_pile": 0,
@@ -13,7 +14,7 @@
       "Burning Blood"
     ],
     "potions": [],
-    "hand": [],
+    "powers": [],
     "draw_pile_cards": [],
     "discard_pile_cards": [],
     "exhaust_pile_cards": []
@@ -21,10 +22,11 @@
   "enemies": [],
   "rewards": [],
   "map_nodes": [],
-  "terminal": true,
+  "legal_actions": [],
   "metadata": {
     "room_type": "victory",
-    "result": "win"
+    "result": "win",
+    "window_kind": "terminal"
   },
   "run_state": {
     "act": 1,
@@ -40,5 +42,5 @@
       "source": "fixture"
     }
   },
-  "legal_actions": []
+  "terminal": true
 }

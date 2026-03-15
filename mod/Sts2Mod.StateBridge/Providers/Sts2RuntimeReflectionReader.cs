@@ -166,6 +166,46 @@ internal sealed class Sts2RuntimeReflectionReader
         "DynamicVars",
         "CanonicalVars",
     };
+    private static readonly string[] GlossaryHintCollectionMembers =
+    {
+        "HoverTips",
+        "HoverTip",
+        "DumbHoverTip",
+        "ExtraHoverTips",
+    };
+    private static readonly string[] GlossaryHintDescriptionMembers =
+    {
+        "Description",
+        "SmartDescription",
+        "DynamicDescription",
+        "RenderedDescription",
+        "RenderedText",
+        "DisplayDescription",
+        "DescriptionRendered",
+        "Text",
+    };
+    private static readonly string[] GlossaryIdentityMembers =
+    {
+        "PowerId",
+        "KeywordId",
+        "GlossaryId",
+        "StatusId",
+        "TermId",
+        "Id",
+    };
+    private static readonly string[] GlossaryDisplayMembers =
+    {
+        "Title",
+        "Name",
+        "DisplayName",
+        "Label",
+        "Text",
+    };
+    private static readonly string[] GlossaryLocStringSuffixes =
+    {
+        "smartDescription",
+        "description",
+    };
     private static readonly IReadOnlyDictionary<string, string[]> DescriptionVariableMemberAliases =
         new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
         {
@@ -184,21 +224,21 @@ internal sealed class Sts2RuntimeReflectionReader
     private static readonly IReadOnlyDictionary<string, GlossarySpec> KnownGlossarySpecs =
         new Dictionary<string, GlossarySpec>(StringComparer.OrdinalIgnoreCase)
         {
-            ["block"] = new("block", "格挡", "在下个回合前，阻挡伤害。", new[] { "格挡", "block" }),
-            ["strength"] = new("strength", "力量", "使攻击造成更多伤害。", new[] { "力量", "strength" }),
-            ["vulnerable"] = new("vulnerable", "易伤", "受到的攻击伤害提高。", new[] { "易伤", "vulnerable" }),
-            ["weak"] = new("weak", "虚弱", "攻击造成的伤害降低。", new[] { "虚弱", "weak" }),
-            ["frail"] = new("frail", "脆弱", "从卡牌获得的格挡减少。", new[] { "脆弱", "frail" }),
-            ["dexterity"] = new("dexterity", "敏捷", "会影响获得的格挡量。", new[] { "敏捷", "dexterity" }),
-            ["damage"] = new("damage", "伤害", "会降低目标生命值。", new[] { "伤害", "damage" }),
-            ["draw"] = new("draw", "抽牌", "将牌堆中的牌加入手牌。", new[] { "抽", "draw" }),
-            ["energy"] = new("energy", "能量", "用于打出卡牌。", new[] { "能量", "energy" }),
-            ["exhaust"] = new("exhaust", "消耗", "本场战斗中移出该牌。", new[] { "消耗", "exhaust" }),
-            ["discard"] = new("discard", "弃牌", "将手牌移入弃牌堆。", new[] { "弃", "discard" }),
-            ["status"] = new("status", "状态", "战斗中加入或产生的负面牌。", new[] { "状态", "status" }),
-            ["debuff"] = new("debuff", "负面效果", "会削弱目标。", new[] { "负面效果", "debuff" }),
-            ["buff"] = new("buff", "增益", "会强化目标。", new[] { "增益", "buff" }),
-            ["metallicize"] = new("metallicize", "金属化", "回合结束时获得格挡。", new[] { "金属化", "metallicize" }),
+            ["block"] = new("block", "格挡", new[] { "格挡", "block" }),
+            ["strength"] = new("strength", "力量", new[] { "力量", "strength" }),
+            ["vulnerable"] = new("vulnerable", "易伤", new[] { "易伤", "vulnerable" }),
+            ["weak"] = new("weak", "虚弱", new[] { "虚弱", "weak" }),
+            ["frail"] = new("frail", "脆弱", new[] { "脆弱", "frail" }),
+            ["dexterity"] = new("dexterity", "敏捷", new[] { "敏捷", "dexterity" }),
+            ["damage"] = new("damage", "伤害", new[] { "伤害", "damage" }),
+            ["draw"] = new("draw", "抽牌", new[] { "抽", "draw" }),
+            ["energy"] = new("energy", "能量", new[] { "能量", "energy" }),
+            ["exhaust"] = new("exhaust", "消耗", new[] { "消耗", "exhaust" }),
+            ["discard"] = new("discard", "弃牌", new[] { "弃", "discard" }),
+            ["status"] = new("status", "状态", new[] { "状态", "status" }),
+            ["debuff"] = new("debuff", "负面效果", new[] { "负面效果", "debuff" }),
+            ["buff"] = new("buff", "增益", new[] { "增益", "buff" }),
+            ["metallicize"] = new("metallicize", "金属化", new[] { "金属化", "metallicize" }),
         };
     private readonly BridgeOptions _options;
     private readonly InstallationProbeResult _probe;
@@ -2802,7 +2842,10 @@ internal sealed class Sts2RuntimeReflectionReader
             displayName: ConvertToText(GetMemberValue(card, "Title") ?? GetMemberValue(card, "Name") ?? card),
             texts: new[] { renderOutcome.Text, raw },
             keywords: keywords,
-            traits: traits);
+            traits: traits,
+            path: $"{path}.glossary",
+            source ?? card,
+            card);
         var canonicalDescription = ChooseCanonicalDescription(renderOutcome.Text, raw);
         LogDescriptionDiagnostics(
             kind: "card",
@@ -3303,7 +3346,13 @@ internal sealed class Sts2RuntimeReflectionReader
             displayName: moveName,
             texts: new[] { renderOutcome.Text, raw, moveName },
             keywords: keywords,
-            traits: traits);
+            traits: traits,
+            path: $"{path}.move_glossary",
+            hoverTip,
+            moveSource,
+            source,
+            enemy,
+            monster);
         var canonicalDescription = ChooseCanonicalDescription(renderOutcome.Text, raw);
 
         if (!string.IsNullOrWhiteSpace(raw) || !string.IsNullOrWhiteSpace(rendered))
@@ -3684,7 +3733,9 @@ internal sealed class Sts2RuntimeReflectionReader
             name,
             new[] { renderOutcome.Text, raw },
             keywords: null,
-            traits: null);
+            traits: null,
+            path: $"{path}.glossary",
+            power);
         LogDescriptionDiagnostics(
             kind: "power",
             identifier: canonicalPowerId ?? name,
@@ -4153,24 +4204,26 @@ internal sealed class Sts2RuntimeReflectionReader
                candidate == typeof(byte);
     }
 
-    private static IReadOnlyList<GlossaryAnchor> ExtractGlossaryAnchors(
+    private IReadOnlyList<GlossaryAnchor> ExtractGlossaryAnchors(
         string? canonicalId,
         string? displayName,
         IEnumerable<string?> texts,
         IReadOnlyList<string>? keywords,
-        IReadOnlyList<string>? traits)
+        IReadOnlyList<string>? traits,
+        string path,
+        params object?[] hintSources)
     {
-        var anchors = new List<GlossaryAnchor>();
-        AddGlossaryAnchorFromId(anchors, canonicalId, displayName, "canonical_id");
+        var candidates = new List<GlossaryCandidate>();
+        AddGlossaryCandidateFromId(candidates, canonicalId, displayName, "canonical_id");
 
         foreach (var keyword in keywords ?? Array.Empty<string>())
         {
-            AddGlossaryAnchorFromId(anchors, keyword, keyword, "keyword");
+            AddGlossaryCandidateFromId(candidates, keyword, keyword, "keyword");
         }
 
         foreach (var trait in traits ?? Array.Empty<string>())
         {
-            AddGlossaryAnchorFromId(anchors, trait, trait, "trait");
+            AddGlossaryCandidateFromId(candidates, trait, trait, "trait");
         }
 
         foreach (var text in texts)
@@ -4184,18 +4237,26 @@ internal sealed class Sts2RuntimeReflectionReader
             {
                 if (spec.Terms.Any(term => text.Contains(term, StringComparison.OrdinalIgnoreCase)))
                 {
-                    AddGlossaryAnchor(anchors, spec.GlossaryId, spec.DisplayText, spec.Hint, "description_text");
+                    AddGlossaryCandidate(candidates, spec.GlossaryId, spec.DisplayText, "text_match");
                 }
             }
         }
 
-        return anchors
-            .GroupBy(anchor => anchor.GlossaryId, StringComparer.OrdinalIgnoreCase)
+        var uniqueCandidates = candidates
+            .GroupBy(candidate => candidate.GlossaryId, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.First())
+            .ToArray();
+        var resolvedAnchors = new List<GlossaryAnchor>(uniqueCandidates.Length);
+        foreach (var candidate in uniqueCandidates)
+        {
+            resolvedAnchors.Add(BuildGlossaryAnchor(candidate, path, hintSources));
+        }
+
+        return resolvedAnchors
             .ToArray();
     }
 
-    private static void AddGlossaryAnchorFromId(List<GlossaryAnchor> anchors, string? rawId, string? displayText, string source)
+    private static void AddGlossaryCandidateFromId(List<GlossaryCandidate> candidates, string? rawId, string? displayText, string matchSource)
     {
         var normalizedId = NormalizeGlossaryId(rawId);
         if (string.IsNullOrWhiteSpace(normalizedId))
@@ -4205,7 +4266,7 @@ internal sealed class Sts2RuntimeReflectionReader
 
         if (KnownGlossarySpecs.TryGetValue(normalizedId, out var spec))
         {
-            AddGlossaryAnchor(anchors, spec.GlossaryId, spec.DisplayText, spec.Hint, source);
+            AddGlossaryCandidate(candidates, spec.GlossaryId, spec.DisplayText, matchSource);
             return;
         }
 
@@ -4215,17 +4276,268 @@ internal sealed class Sts2RuntimeReflectionReader
             return;
         }
 
-        AddGlossaryAnchor(anchors, normalizedId, normalizedDisplayText!, null, source);
+        AddGlossaryCandidate(candidates, normalizedId, normalizedDisplayText!, matchSource);
     }
 
-    private static void AddGlossaryAnchor(List<GlossaryAnchor> anchors, string glossaryId, string displayText, string? hint, string source)
+    private static void AddGlossaryCandidate(List<GlossaryCandidate> candidates, string glossaryId, string displayText, string matchSource)
     {
-        if (anchors.Any(anchor => string.Equals(anchor.GlossaryId, glossaryId, StringComparison.OrdinalIgnoreCase)))
+        if (candidates.Any(candidate => string.Equals(candidate.GlossaryId, glossaryId, StringComparison.OrdinalIgnoreCase)))
         {
             return;
         }
 
-        anchors.Add(new GlossaryAnchor(glossaryId, displayText, hint, source));
+        candidates.Add(new GlossaryCandidate(glossaryId, displayText, matchSource));
+    }
+
+    private GlossaryAnchor BuildGlossaryAnchor(GlossaryCandidate candidate, string path, IReadOnlyList<object?> hintSources)
+    {
+        var hintResolution = ResolveGlossaryHint(candidate, path, hintSources);
+        return new GlossaryAnchor(
+            candidate.GlossaryId,
+            candidate.DisplayText,
+            hintResolution.Hint,
+            hintResolution.Source);
+    }
+
+    private GlossaryHintResolution ResolveGlossaryHint(GlossaryCandidate candidate, string path, IReadOnlyList<object?> hintSources)
+    {
+        if (TryResolveRuntimeHoverTipHint(candidate, hintSources, out var hoverTipHint))
+        {
+            return new GlossaryHintResolution(hoverTipHint, "runtime_hover_tip");
+        }
+
+        if (TryResolveModelDescriptionHint(candidate, hintSources, out var modelHint))
+        {
+            return new GlossaryHintResolution(modelHint, "model_description");
+        }
+
+        if (TryResolveLocalizationHint(candidate.GlossaryId, out var locStringHint))
+        {
+            return new GlossaryHintResolution(locStringHint, "loc_string");
+        }
+
+        _logger?.Warn(
+            $"Glossary hint missing glossary_id={candidate.GlossaryId} display_text={candidate.DisplayText} " +
+            $"match_source={candidate.MatchSource} path={path}");
+        return new GlossaryHintResolution(null, "missing_hint");
+    }
+
+    private static bool TryResolveRuntimeHoverTipHint(GlossaryCandidate candidate, IReadOnlyList<object?> hintSources, out string? hint)
+    {
+        foreach (var hoverTip in EnumerateGlossaryHoverTips(hintSources))
+        {
+            if (!HoverTipMatchesGlossaryCandidate(hoverTip, candidate))
+            {
+                continue;
+            }
+
+            var description = NormalizeDescriptionText(ConvertToText(
+                GetMemberValue(hoverTip, "Description")
+                ?? GetMemberValue(hoverTip, "Text")
+                ?? hoverTip,
+                "Description",
+                "Text"));
+            if (!string.IsNullOrWhiteSpace(description))
+            {
+                hint = description;
+                return true;
+            }
+        }
+
+        hint = null;
+        return false;
+    }
+
+    private static IEnumerable<object> EnumerateGlossaryHoverTips(IEnumerable<object?> hintSources)
+    {
+        foreach (var source in hintSources)
+        {
+            if (source is null)
+            {
+                continue;
+            }
+
+            if (LooksLikeHoverTip(source))
+            {
+                yield return source;
+            }
+
+            foreach (var memberName in GlossaryHintCollectionMembers)
+            {
+                foreach (var candidate in EnumerateObjects(GetMemberValue(source, memberName)))
+                {
+                    if (LooksLikeHoverTip(candidate))
+                    {
+                        yield return candidate;
+                    }
+                }
+            }
+        }
+    }
+
+    private static bool LooksLikeHoverTip(object candidate)
+    {
+        return GetMemberValue(candidate, "Description") is not null &&
+               (GetMemberValue(candidate, "Title") is not null || GetMemberValue(candidate, "Id") is not null);
+    }
+
+    private static bool HoverTipMatchesGlossaryCandidate(object hoverTip, GlossaryCandidate candidate)
+    {
+        var tipId = ConvertToText(GetMemberValue(hoverTip, "Id"), "Id");
+        var tipTitle = ConvertToText(GetMemberValue(hoverTip, "Title") ?? GetMemberValue(hoverTip, "Name"), "Title", "Name");
+        return MatchesGlossaryCandidate(candidate, tipId, tipTitle);
+    }
+
+    private static bool TryResolveModelDescriptionHint(GlossaryCandidate candidate, IReadOnlyList<object?> hintSources, out string? hint)
+    {
+        foreach (var source in hintSources)
+        {
+            if (source is null || !SourceMatchesGlossaryCandidate(source, candidate))
+            {
+                continue;
+            }
+
+            foreach (var memberName in GlossaryHintDescriptionMembers)
+            {
+                var value = GetMemberValue(source, memberName);
+                if (value is null)
+                {
+                    continue;
+                }
+
+                var text = string.Equals(memberName, "Description", StringComparison.Ordinal)
+                    ? NormalizeDescriptionText(ConvertDescriptionTemplateToText(value, "_", null, memberName))
+                    : NormalizeDescriptionText(ConvertToText(value, memberName));
+                if (!string.IsNullOrWhiteSpace(text))
+                {
+                    hint = text;
+                    return true;
+                }
+            }
+        }
+
+        hint = null;
+        return false;
+    }
+
+    private bool TryResolveLocalizationHint(string glossaryId, out string? hint)
+    {
+        foreach (var key in EnumerateGlossaryLocalizationKeys(glossaryId))
+        {
+            var locString = TryResolveLocStringByKey(key);
+            var text = NormalizeDescriptionText(ConvertToText(locString, "GetFormattedText", "GetRawText"));
+            if (!string.IsNullOrWhiteSpace(text))
+            {
+                hint = text;
+                return true;
+            }
+        }
+
+        hint = null;
+        return false;
+    }
+
+    private IEnumerable<string> EnumerateGlossaryLocalizationKeys(string glossaryId)
+    {
+        var upperId = glossaryId.ToUpperInvariant();
+        foreach (var suffix in GlossaryLocStringSuffixes)
+        {
+            yield return $"{upperId}_POWER.{suffix}";
+        }
+    }
+
+    private object? TryResolveLocStringByKey(string key)
+    {
+        var assembly = FindSts2Assembly();
+        var locStringType = assembly?.GetType("MegaCrit.Sts2.Core.Localization.LocString");
+        if (locStringType is null)
+        {
+            return null;
+        }
+
+        foreach (var methodName in new[] { "KeyPathToLocString", "GetIfExists" })
+        {
+            var methods = locStringType
+                .GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
+                .Where(method => string.Equals(method.Name, methodName, StringComparison.Ordinal))
+                .ToArray();
+            foreach (var method in methods)
+            {
+                var parameters = method.GetParameters();
+                if (parameters.Length != 1 || parameters[0].ParameterType != typeof(string))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    var value = method.Invoke(null, new object?[] { key });
+                    if (value is not null)
+                    {
+                        return value;
+                    }
+                }
+                catch
+                {
+                    // Ignore localization lookup failures and continue to the next strategy.
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static bool SourceMatchesGlossaryCandidate(object source, GlossaryCandidate candidate)
+    {
+        var identifiers = GlossaryIdentityMembers
+            .Select(member => ConvertToText(GetMemberValue(source, member), member))
+            .Concat(GlossaryDisplayMembers.Select(member => ConvertToText(GetMemberValue(source, member), member)))
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .ToArray();
+        return MatchesGlossaryCandidate(candidate, identifiers);
+    }
+
+    private static bool MatchesGlossaryCandidate(GlossaryCandidate candidate, params string?[] values)
+    {
+        var candidateIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            candidate.GlossaryId,
+            NormalizeGlossaryId(candidate.DisplayText) ?? candidate.DisplayText,
+        };
+
+        if (KnownGlossarySpecs.TryGetValue(candidate.GlossaryId, out var spec))
+        {
+            foreach (var term in spec.Terms)
+            {
+                candidateIds.Add(term);
+                var normalized = NormalizeGlossaryId(term);
+                if (!string.IsNullOrWhiteSpace(normalized))
+                {
+                    candidateIds.Add(normalized);
+                }
+            }
+        }
+
+        foreach (var value in values)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                continue;
+            }
+
+            if (candidateIds.Contains(value))
+            {
+                return true;
+            }
+
+            var normalized = NormalizeGlossaryId(value);
+            if (!string.IsNullOrWhiteSpace(normalized) && candidateIds.Contains(normalized))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static string? NormalizeGlossaryId(string? value)
@@ -4807,8 +5119,16 @@ internal sealed class Sts2RuntimeReflectionReader
     private sealed record GlossarySpec(
         string GlossaryId,
         string DisplayText,
-        string Hint,
         IReadOnlyList<string> Terms);
+
+    private readonly record struct GlossaryCandidate(
+        string GlossaryId,
+        string DisplayText,
+        string MatchSource);
+
+    private readonly record struct GlossaryHintResolution(
+        string? Hint,
+        string Source);
 
     private readonly record struct VariableResolution(int? Value, string? Source);
 

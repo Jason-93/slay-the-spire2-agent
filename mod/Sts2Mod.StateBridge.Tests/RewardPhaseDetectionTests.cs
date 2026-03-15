@@ -3,6 +3,7 @@ using Sts2Mod.StateBridge.Configuration;
 using Sts2Mod.StateBridge.Contracts;
 using Sts2Mod.StateBridge.Core;
 using Sts2Mod.StateBridge.Extraction;
+using Sts2Mod.StateBridge.Logging;
 using Sts2Mod.StateBridge.Providers;
 using Xunit;
 
@@ -91,6 +92,11 @@ public sealed class RewardPhaseDetectionTests
                         Damage = 7,
                         Block = 4,
                         Keywords = new[] { "damage", "block" },
+                        HoverTips = new[]
+                        {
+                            new FakeHoverTip("damage", "Damage", "Reduces HP."),
+                            new FakeHoverTip("block", "Block", "Prevents damage until next turn."),
+                        },
                     },
                     Traits = new[] { "beast" },
                     Keywords = new[] { "ambush" },
@@ -110,6 +116,10 @@ public sealed class RewardPhaseDetectionTests
                     Rarity = "Starter",
                     Traits = new[] { "starter" },
                     Keywords = new[] { "damage" },
+                    HoverTips = new[]
+                    {
+                        new FakeHoverTip("damage", "Damage", "Reduces HP."),
+                    },
                 },
             },
             drawPile: new[]
@@ -124,6 +134,11 @@ public sealed class RewardPhaseDetectionTests
                     CardType = "Attack",
                     Rarity = "Common",
                     Keywords = new[] { "damage", "draw" },
+                    HoverTips = new[]
+                    {
+                        new FakeHoverTip("damage", "Damage", "Reduces HP."),
+                        new FakeHoverTip("draw", "Draw", "Add cards from your draw pile to your hand."),
+                    },
                 },
             },
             discardPile: new[]
@@ -138,6 +153,10 @@ public sealed class RewardPhaseDetectionTests
                     CardType = "Skill",
                     Rarity = "Starter",
                     Keywords = new[] { "block" },
+                    HoverTips = new[]
+                    {
+                        new FakeHoverTip("block", "Block", "Prevents damage until next turn."),
+                    },
                 },
             });
 
@@ -149,24 +168,27 @@ public sealed class RewardPhaseDetectionTests
         var card = Assert.Single(player.Hand);
         Assert.Equal("strike_red", card.CanonicalCardId);
         Assert.Equal("Deal 6 **damage**.", card.Description);
-        Assert.Contains(card.Glossary ?? Array.Empty<GlossaryAnchor>(), anchor => anchor.GlossaryId == "damage");
+        var damageGlossary = Assert.Single(card.Glossary ?? Array.Empty<GlossaryAnchor>(), anchor => anchor.GlossaryId == "damage");
+        Assert.Equal("damage", damageGlossary.GlossaryId);
+        Assert.Equal("runtime_hover_tip", damageGlossary.Source);
+        Assert.Equal("Reduces HP.", damageGlossary.Hint);
         Assert.Equal("AnyEnemy", card.TargetType);
         Assert.Contains("starter", card.Traits ?? Array.Empty<string>());
         var drawPileCard = Assert.Single(player.DrawPileCards ?? Array.Empty<CardView>());
         Assert.Equal("pommel_strike", drawPileCard.CanonicalCardId);
-        Assert.Contains(drawPileCard.Glossary ?? Array.Empty<GlossaryAnchor>(), anchor => anchor.GlossaryId == "damage");
+        Assert.Contains(drawPileCard.Glossary ?? Array.Empty<GlossaryAnchor>(), anchor => anchor.GlossaryId == "damage" && anchor.Source == "runtime_hover_tip");
         Assert.Equal(1, player.DrawPile);
         var discardPileCard = Assert.Single(player.DiscardPileCards ?? Array.Empty<CardView>());
         Assert.Equal("defend_red", discardPileCard.CanonicalCardId);
-        Assert.Contains(discardPileCard.Glossary ?? Array.Empty<GlossaryAnchor>(), anchor => anchor.GlossaryId == "block");
+        Assert.Contains(discardPileCard.Glossary ?? Array.Empty<GlossaryAnchor>(), anchor => anchor.GlossaryId == "block" && anchor.Source == "runtime_hover_tip");
         Assert.Equal(1, player.DiscardPile);
         Assert.Empty(player.ExhaustPileCards ?? Array.Empty<CardView>());
         Assert.Equal(0, player.ExhaustPile);
         Assert.Contains("Metallicize", player.Powers?.Select(power => power.Name) ?? Array.Empty<string>());
         var playerPower = Assert.Single(player.Powers ?? Array.Empty<PowerView>());
         Assert.Equal("Gain 3 Block at end of turn.", playerPower.Description);
-        Assert.Contains(playerPower.Glossary ?? Array.Empty<GlossaryAnchor>(), anchor => anchor.GlossaryId == "metallicize");
-        Assert.Contains(playerPower.Glossary ?? Array.Empty<GlossaryAnchor>(), anchor => anchor.GlossaryId == "block");
+        Assert.Contains(playerPower.Glossary ?? Array.Empty<GlossaryAnchor>(), anchor => anchor.GlossaryId == "metallicize" && anchor.Source == "model_description");
+        Assert.Contains(playerPower.Glossary ?? Array.Empty<GlossaryAnchor>(), anchor => anchor.GlossaryId == "block" && anchor.Source == "runtime_hover_tip");
 
         var enemy = Assert.Single(exported.Snapshot.Enemies);
         Assert.Equal("louse", enemy.CanonicalEnemyId);
@@ -176,12 +198,15 @@ public sealed class RewardPhaseDetectionTests
         Assert.Contains("weak", enemy.IntentEffects ?? Array.Empty<string>());
         Assert.Equal("Gnaw", enemy.MoveName);
         Assert.Equal("Deal 7 **damage**. Gain 4 **Block**.", enemy.MoveDescription);
-        Assert.Contains(enemy.MoveGlossary ?? Array.Empty<GlossaryAnchor>(), anchor => anchor.GlossaryId == "damage");
-        Assert.Contains(enemy.MoveGlossary ?? Array.Empty<GlossaryAnchor>(), anchor => anchor.GlossaryId == "block");
+        Assert.Contains(enemy.MoveGlossary ?? Array.Empty<GlossaryAnchor>(), anchor => anchor.GlossaryId == "damage" && anchor.Source == "runtime_hover_tip");
+        Assert.Contains(enemy.MoveGlossary ?? Array.Empty<GlossaryAnchor>(), anchor => anchor.GlossaryId == "block" && anchor.Source == "runtime_hover_tip");
         Assert.Contains("beast", enemy.Traits ?? Array.Empty<string>());
         Assert.Contains("damage", enemy.Keywords ?? Array.Empty<string>());
         Assert.Contains("vulnerable", enemy.Keywords ?? Array.Empty<string>());
         Assert.Contains("Vulnerable", enemy.Powers?.Select(power => power.Name) ?? Array.Empty<string>());
+        Assert.Contains(enemy.Powers ?? Array.Empty<PowerView>(), power =>
+            power.PowerId == "vulnerable" &&
+            (power.Glossary ?? Array.Empty<GlossaryAnchor>()).Any(anchor => anchor.GlossaryId == "vulnerable" && anchor.Source == "model_description"));
 
         var runStateSnapshot = exported.Snapshot.RunState;
         Assert.NotNull(runStateSnapshot);
@@ -231,7 +256,8 @@ public sealed class RewardPhaseDetectionTests
     [Fact]
     public void BuildCombatWindow_NormalizesGenericIntentLabelsIntoStableTypeAndSuppressesGenericMoveName()
     {
-        var reader = CreateReader();
+        var logger = new FakeBridgeLogger();
+        var reader = CreateReader(logger);
         var runNode = new FakeRunNode(new FakeScreenTracker());
         var runState = new FakeRunState(
             new[]
@@ -254,6 +280,11 @@ public sealed class RewardPhaseDetectionTests
         Assert.Contains("debuff", enemy.IntentEffects ?? Array.Empty<string>());
         Assert.Null(enemy.MoveName);
         Assert.Equal("这个敌人将要对你施加一个负面效果。", enemy.MoveDescription);
+        var debuffGlossary = Assert.Single(enemy.MoveGlossary ?? Array.Empty<GlossaryAnchor>());
+        Assert.Equal("debuff", debuffGlossary.GlossaryId);
+        Assert.Equal("missing_hint", debuffGlossary.Source);
+        Assert.Null(debuffGlossary.Hint);
+        Assert.Contains(logger.WarnMessages, message => message.Contains("Glossary hint missing glossary_id=debuff", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -596,9 +627,9 @@ public sealed class RewardPhaseDetectionTests
         Assert.Equal("no_reachable_nodes", transitionExported.Snapshot.Metadata["map_node_source"]);
     }
 
-    private static Sts2RuntimeReflectionReader CreateReader()
+    private static Sts2RuntimeReflectionReader CreateReader(IBridgeLogger? logger = null)
     {
-        return new Sts2RuntimeReflectionReader(new BridgeOptions(), new InstallationProbeResult(true, null, null, null, null));
+        return new Sts2RuntimeReflectionReader(new BridgeOptions(), new InstallationProbeResult(true, null, null, null, null), logger);
     }
 
     private static string InvokeDetectPhase(Sts2RuntimeReflectionReader reader, object runNode, object runState)
@@ -717,6 +748,13 @@ public sealed class RewardPhaseDetectionTests
         }
     }
 
+    private sealed class FakeHoverTip(string id, string title, string description)
+    {
+        public string Id { get; } = id;
+        public string Title { get; } = title;
+        public string Description { get; } = description;
+    }
+
     private sealed class FakeCard(string title)
     {
         public string Title { get; } = title;
@@ -736,6 +774,7 @@ public sealed class RewardPhaseDetectionTests
         public IReadOnlyList<string> Traits { get; init; } = Array.Empty<string>();
         public IReadOnlyList<string> Keywords { get; init; } = Array.Empty<string>();
         public FakeDynamicVars? DynamicVars { get; init; }
+        public IReadOnlyList<FakeHoverTip> HoverTips { get; init; } = Array.Empty<FakeHoverTip>();
     }
 
     private sealed class FakeDynamicVars(int? damage = null, int? block = null, int? cards = null)
@@ -844,7 +883,16 @@ public sealed class RewardPhaseDetectionTests
         public int MaxHp { get; } = 80;
         public int Block { get; } = 0;
         public FakeCombatState CombatState { get; } = new(enemies);
-        public List<FakePower> Powers { get; } = new() { new FakePower("metallicize", "Metallicize", 3, "Gain 3 Block at end of turn.") };
+        public List<FakePower> Powers { get; } = new()
+        {
+            new FakePower("metallicize", "Metallicize", 3, "Gain 3 Block at end of turn.")
+            {
+                HoverTips = new[]
+                {
+                    new FakeHoverTip("block", "Block", "Prevents damage until next turn."),
+                },
+            },
+        };
     }
 
     private sealed class FakeCombatState(FakeEnemy[] enemies)
@@ -867,7 +915,7 @@ public sealed class RewardPhaseDetectionTests
         public int IntentDamage { get; } = intentDamage;
         public int IntentHits { get; } = intentHits;
         public bool IsAlive { get; } = isAlive;
-        public List<FakePower> Powers { get; } = new() { new FakePower("vulnerable", "Vulnerable", 1, "Receive more attack damage.") };
+        public List<FakePower> Powers { get; } = new() { new FakePower("vulnerable", "Vulnerable", 1, "Vulnerable creatures take 50% more damage from Attacks.") };
         public FakeEnemyMove? CurrentMove { get; init; }
         public IReadOnlyList<string> Traits { get; init; } = Array.Empty<string>();
         public IReadOnlyList<string> Keywords { get; init; } = Array.Empty<string>();
@@ -881,6 +929,7 @@ public sealed class RewardPhaseDetectionTests
         public int? Damage { get; init; }
         public int? Block { get; init; }
         public IReadOnlyList<string> Keywords { get; init; } = Array.Empty<string>();
+        public IReadOnlyList<FakeHoverTip> HoverTips { get; init; } = Array.Empty<FakeHoverTip>();
     }
 
     private sealed class FakePlayerCombatState(
@@ -912,5 +961,28 @@ public sealed class RewardPhaseDetectionTests
         public int Amount { get; } = amount;
         public string Description { get; } = description;
         public string RenderedDescription => description;
+        public IReadOnlyList<FakeHoverTip> HoverTips { get; init; } = Array.Empty<FakeHoverTip>();
+    }
+
+    private sealed class FakeBridgeLogger : IBridgeLogger
+    {
+        public List<string> InfoMessages { get; } = new();
+        public List<string> WarnMessages { get; } = new();
+        public List<string> ErrorMessages { get; } = new();
+
+        public void Info(string message)
+        {
+            InfoMessages.Add(message);
+        }
+
+        public void Warn(string message)
+        {
+            WarnMessages.Add(message);
+        }
+
+        public void Error(string message, Exception? exception = null)
+        {
+            ErrorMessages.Add(exception is null ? message : $"{message}: {exception.Message}");
+        }
     }
 }

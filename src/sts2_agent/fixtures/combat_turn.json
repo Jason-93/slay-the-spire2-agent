@@ -6,6 +6,92 @@
     "block": 6,
     "energy": 3,
     "gold": 99,
+    "hand": [
+      {
+        "card_id": "strike_red#0",
+        "name": "Strike",
+        "cost": 1,
+        "playable": true,
+        "instance_card_id": "strike_red#0",
+        "canonical_card_id": "strike_red",
+        "description": "Deal 6 **damage**.",
+        "cost_for_turn": 1,
+        "upgraded": false,
+        "target_type": "AnyEnemy",
+        "card_type": "Attack",
+        "rarity": "Starter",
+        "traits": [
+          "starter"
+        ],
+        "keywords": [
+          "damage"
+        ],
+        "glossary": [
+          {
+            "glossary_id": "damage",
+            "display_text": "Damage",
+            "hint": "Reduces HP.",
+            "source": "runtime_hover_tip"
+          }
+        ]
+      },
+      {
+        "card_id": "defend_red#1",
+        "name": "Defend",
+        "cost": 1,
+        "playable": true,
+        "instance_card_id": "defend_red#1",
+        "canonical_card_id": "defend_red",
+        "description": "Gain 5 **Block**.",
+        "cost_for_turn": 1,
+        "upgraded": false,
+        "target_type": "Self",
+        "card_type": "Skill",
+        "rarity": "Starter",
+        "traits": [
+          "starter"
+        ],
+        "keywords": [
+          "block"
+        ],
+        "glossary": [
+          {
+            "glossary_id": "block",
+            "display_text": "Block",
+            "hint": "Prevents damage until next turn.",
+            "source": "runtime_hover_tip"
+          }
+        ]
+      },
+      {
+        "card_id": "battle_trance#2",
+        "name": "Battle Trance",
+        "cost": 0,
+        "playable": true,
+        "instance_card_id": "battle_trance#2",
+        "canonical_card_id": "battle_trance",
+        "description": "Draw {Draw:diff()} cards.",
+        "cost_for_turn": 0,
+        "upgraded": false,
+        "target_type": "Self",
+        "card_type": "Skill",
+        "rarity": "Common",
+        "traits": [
+          "draw"
+        ],
+        "keywords": [
+          "draw"
+        ],
+        "glossary": [
+          {
+            "glossary_id": "draw",
+            "display_text": "Draw",
+            "hint": "Add cards from your draw pile to your hand.",
+            "source": "runtime_hover_tip"
+          }
+        ]
+      }
+    ],
     "draw_pile": 2,
     "discard_pile": 4,
     "exhaust_pile": 0,
@@ -20,128 +106,34 @@
         "power_id": "metallicize",
         "name": "Metallicize",
         "amount": 3,
-        "description": "At end of turn gain 3 **Block**.",
+        "description": "At the end of your turn, gain 3 **Block**.",
+        "canonical_power_id": "metallicize",
         "glossary": [
+          {
+            "glossary_id": "metallicize",
+            "display_text": "Metallicize",
+            "hint": "Gain Block at end of turn.",
+            "source": "model_description"
+          },
           {
             "glossary_id": "block",
             "display_text": "Block",
             "hint": "Prevents damage until next turn.",
-            "source": "description_text"
+            "source": "runtime_hover_tip"
           }
-        ],
-        "canonical_power_id": "metallicize"
-      }
-    ],
-    "hand": [
-      {
-        "card_id": "strike_red#0",
-        "instance_card_id": "strike_red#0",
-        "canonical_card_id": "strike_red",
-        "name": "Strike",
-        "cost": 1,
-        "cost_for_turn": 1,
-        "playable": true,
-        "description": "Deal 6 **damage**.",
-        "glossary": [
-          {
-            "glossary_id": "damage",
-            "display_text": "Damage",
-            "hint": "Reduces HP.",
-            "source": "description_text"
-          }
-        ],
-        "upgraded": false,
-        "target_type": "AnyEnemy",
-        "card_type": "Attack",
-        "rarity": "Starter",
-        "traits": [
-          "starter"
-        ],
-        "keywords": [
-          "damage"
-        ]
-      },
-      {
-        "card_id": "defend_red#1",
-        "instance_card_id": "defend_red#1",
-        "canonical_card_id": "defend_red",
-        "name": "Defend",
-        "cost": 1,
-        "cost_for_turn": 1,
-        "playable": true,
-        "description": "Gain 5 **Block**.",
-        "glossary": [
-          {
-            "glossary_id": "block",
-            "display_text": "Block",
-            "hint": "Prevents damage until next turn.",
-            "source": "description_text"
-          }
-        ],
-        "upgraded": false,
-        "target_type": "Self",
-        "card_type": "Skill",
-        "rarity": "Starter",
-        "traits": [
-          "starter"
-        ],
-        "keywords": [
-          "block"
-        ]
-      },
-      {
-        "card_id": "battle_trance#2",
-        "instance_card_id": "battle_trance#2",
-        "canonical_card_id": "battle_trance",
-        "name": "Battle Trance",
-        "cost": 0,
-        "cost_for_turn": 0,
-        "playable": true,
-        "description": "Draw {Draw:diff()} cards.",
-        "glossary": [
-          {
-            "glossary_id": "draw",
-            "display_text": "Draw",
-            "hint": "Add cards from your draw pile to your hand.",
-            "source": "description_text"
-          }
-        ],
-        "upgraded": false,
-        "target_type": "Self",
-        "card_type": "Skill",
-        "rarity": "Common",
-        "traits": [
-          "draw"
-        ],
-        "keywords": [
-          "draw"
         ]
       }
     ],
     "draw_pile_cards": [
       {
         "card_id": "card-draw-0",
-        "instance_card_id": "card-draw-0",
-        "canonical_card_id": "pommel_strike",
         "name": "Pommel Strike",
         "cost": 1,
-        "cost_for_turn": 1,
         "playable": false,
+        "instance_card_id": "card-draw-0",
+        "canonical_card_id": "pommel_strike",
         "description": "Deal 9 **damage**. Draw 1 card.",
-        "glossary": [
-          {
-            "glossary_id": "damage",
-            "display_text": "Damage",
-            "hint": "Reduces HP.",
-            "source": "description_text"
-          },
-          {
-            "glossary_id": "draw",
-            "display_text": "Draw",
-            "hint": "Add cards from your draw pile to your hand.",
-            "source": "description_text"
-          }
-        ],
+        "cost_for_turn": 1,
         "upgraded": false,
         "target_type": "AnyEnemy",
         "card_type": "Attack",
@@ -152,31 +144,31 @@
         "keywords": [
           "damage",
           "draw"
-        ]
-      },
-      {
-        "card_id": "card-draw-1",
-        "instance_card_id": "card-draw-1",
-        "canonical_card_id": "bash",
-        "name": "Bash",
-        "cost": 2,
-        "cost_for_turn": 2,
-        "playable": false,
-        "description": "Deal 8 **damage**. Apply 2 Vulnerable.",
+        ],
         "glossary": [
           {
             "glossary_id": "damage",
             "display_text": "Damage",
             "hint": "Reduces HP.",
-            "source": "description_text"
+            "source": "runtime_hover_tip"
           },
           {
-            "glossary_id": "vulnerable",
-            "display_text": "Vulnerable",
-            "hint": "Receive more attack damage.",
-            "source": "description_text"
+            "glossary_id": "draw",
+            "display_text": "Draw",
+            "hint": "Add cards from your draw pile to your hand.",
+            "source": "runtime_hover_tip"
           }
-        ],
+        ]
+      },
+      {
+        "card_id": "card-draw-1",
+        "name": "Bash",
+        "cost": 2,
+        "playable": false,
+        "instance_card_id": "card-draw-1",
+        "canonical_card_id": "bash",
+        "description": "Deal 8 **damage**. Apply 2 Vulnerable.",
+        "cost_for_turn": 2,
         "upgraded": false,
         "target_type": "AnyEnemy",
         "card_type": "Attack",
@@ -187,27 +179,33 @@
         "keywords": [
           "damage",
           "vulnerable"
+        ],
+        "glossary": [
+          {
+            "glossary_id": "damage",
+            "display_text": "Damage",
+            "hint": "Reduces HP.",
+            "source": "runtime_hover_tip"
+          },
+          {
+            "glossary_id": "vulnerable",
+            "display_text": "Vulnerable",
+            "hint": "Vulnerable creatures take 50% more damage from Attacks.",
+            "source": "runtime_hover_tip"
+          }
         ]
       }
     ],
     "discard_pile_cards": [
       {
         "card_id": "card-discard-0",
-        "instance_card_id": "card-discard-0",
-        "canonical_card_id": "strike_red",
         "name": "Strike",
         "cost": 1,
-        "cost_for_turn": 1,
         "playable": false,
+        "instance_card_id": "card-discard-0",
+        "canonical_card_id": "strike_red",
         "description": "Deal 6 **damage**.",
-        "glossary": [
-          {
-            "glossary_id": "damage",
-            "display_text": "Damage",
-            "hint": "Reduces HP.",
-            "source": "description_text"
-          }
-        ],
+        "cost_for_turn": 1,
         "upgraded": false,
         "target_type": "AnyEnemy",
         "card_type": "Attack",
@@ -217,25 +215,25 @@
         ],
         "keywords": [
           "damage"
+        ],
+        "glossary": [
+          {
+            "glossary_id": "damage",
+            "display_text": "Damage",
+            "hint": "Reduces HP.",
+            "source": "runtime_hover_tip"
+          }
         ]
       },
       {
         "card_id": "card-discard-1",
-        "instance_card_id": "card-discard-1",
-        "canonical_card_id": "defend_red",
         "name": "Defend",
         "cost": 1,
-        "cost_for_turn": 1,
         "playable": false,
+        "instance_card_id": "card-discard-1",
+        "canonical_card_id": "defend_red",
         "description": "Gain 5 **Block**.",
-        "glossary": [
-          {
-            "glossary_id": "block",
-            "display_text": "Block",
-            "hint": "Prevents damage until next turn.",
-            "source": "description_text"
-          }
-        ],
+        "cost_for_turn": 1,
         "upgraded": false,
         "target_type": "Self",
         "card_type": "Skill",
@@ -245,25 +243,25 @@
         ],
         "keywords": [
           "block"
+        ],
+        "glossary": [
+          {
+            "glossary_id": "block",
+            "display_text": "Block",
+            "hint": "Prevents damage until next turn.",
+            "source": "runtime_hover_tip"
+          }
         ]
       },
       {
         "card_id": "card-discard-2",
-        "instance_card_id": "card-discard-2",
-        "canonical_card_id": "anger",
         "name": "Anger",
         "cost": 0,
-        "cost_for_turn": 0,
         "playable": false,
+        "instance_card_id": "card-discard-2",
+        "canonical_card_id": "anger",
         "description": "Deal 6 **damage**. Shuffle a copy into your discard pile.",
-        "glossary": [
-          {
-            "glossary_id": "damage",
-            "display_text": "Damage",
-            "hint": "Reduces HP.",
-            "source": "description_text"
-          }
-        ],
+        "cost_for_turn": 0,
         "upgraded": false,
         "target_type": "AnyEnemy",
         "card_type": "Attack",
@@ -271,25 +269,25 @@
         "traits": [],
         "keywords": [
           "damage"
+        ],
+        "glossary": [
+          {
+            "glossary_id": "damage",
+            "display_text": "Damage",
+            "hint": "Reduces HP.",
+            "source": "runtime_hover_tip"
+          }
         ]
       },
       {
         "card_id": "card-discard-3",
-        "instance_card_id": "card-discard-3",
-        "canonical_card_id": "flex",
         "name": "Flex",
         "cost": 0,
-        "cost_for_turn": 0,
         "playable": false,
+        "instance_card_id": "card-discard-3",
+        "canonical_card_id": "flex",
         "description": "Gain 2 **Strength** this turn.",
-        "glossary": [
-          {
-            "glossary_id": "strength",
-            "display_text": "Strength",
-            "hint": "Increases attack damage.",
-            "source": "description_text"
-          }
-        ],
+        "cost_for_turn": 0,
         "upgraded": false,
         "target_type": "Self",
         "card_type": "Skill",
@@ -297,6 +295,14 @@
         "traits": [],
         "keywords": [
           "strength"
+        ],
+        "glossary": [
+          {
+            "glossary_id": "strength",
+            "display_text": "Strength",
+            "hint": "Increases attack damage.",
+            "source": "runtime_hover_tip"
+          }
         ]
       }
     ],
@@ -305,34 +311,35 @@
   "enemies": [
     {
       "enemy_id": "jaw_worm_1",
-      "instance_enemy_id": "jaw_worm_1",
-      "canonical_enemy_id": "jaw_worm",
       "name": "Jaw Worm",
       "hp": 38,
       "max_hp": 42,
       "block": 0,
       "intent": "attack_11",
+      "is_alive": true,
+      "instance_enemy_id": "jaw_worm_1",
+      "canonical_enemy_id": "jaw_worm",
       "intent_raw": "Attack",
       "intent_type": "attack",
       "intent_damage": 11,
       "intent_hits": 1,
+      "intent_block": null,
       "intent_effects": [],
-      "is_alive": true,
       "powers": [
         {
           "power_id": "strength",
           "name": "Strength",
           "amount": 3,
-          "description": "Increase attack damage.",
+          "description": "Increases attack damage.",
+          "canonical_power_id": "strength",
           "glossary": [
             {
               "glossary_id": "strength",
               "display_text": "Strength",
               "hint": "Increases attack damage.",
-              "source": "canonical_id"
+              "source": "model_description"
             }
-          ],
-          "canonical_power_id": "strength"
+          ]
         }
       ],
       "move_name": "Chomp",
@@ -342,7 +349,7 @@
           "glossary_id": "damage",
           "display_text": "Damage",
           "hint": "Reduces HP.",
-          "source": "description_text"
+          "source": "runtime_hover_tip"
         }
       ],
       "traits": [
@@ -357,7 +364,48 @@
   ],
   "rewards": [],
   "map_nodes": [],
-  "terminal": false,
+  "legal_actions": [
+    {
+      "action_id": "act-77f45962",
+      "type": "play_card",
+      "label": "Play Strike",
+      "params": {
+        "card_id": "strike_red#0"
+      },
+      "target_constraints": [
+        "jaw_worm_1"
+      ],
+      "metadata": {}
+    },
+    {
+      "action_id": "act-4ccba266",
+      "type": "play_card",
+      "label": "Play Defend",
+      "params": {
+        "card_id": "defend_red#1"
+      },
+      "target_constraints": [],
+      "metadata": {}
+    },
+    {
+      "action_id": "act-3597ec33",
+      "type": "use_potion",
+      "label": "Use Strength Potion",
+      "params": {
+        "potion": "Strength Potion"
+      },
+      "target_constraints": [],
+      "metadata": {}
+    },
+    {
+      "action_id": "act-3790f8a4",
+      "type": "end_turn",
+      "label": "End Turn",
+      "params": {},
+      "target_constraints": [],
+      "metadata": {}
+    }
+  ],
   "metadata": {
     "room_type": "combat",
     "turn": 1,
@@ -366,7 +414,9 @@
       "degraded": false,
       "entry_count": 0,
       "entries": []
-    }
+    },
+    "supports_targeting": true,
+    "window_kind": "player_turn"
   },
   "run_state": {
     "act": 1,
@@ -386,28 +436,5 @@
       "source": "fixture"
     }
   },
-  "legal_actions": [
-    {
-      "type": "play_card",
-      "label": "Play Strike",
-      "card_id": "strike_red#0",
-      "target_constraints": [
-        "jaw_worm_1"
-      ]
-    },
-    {
-      "type": "play_card",
-      "label": "Play Defend",
-      "card_id": "defend_red#1"
-    },
-    {
-      "type": "use_potion",
-      "label": "Use Strength Potion",
-      "potion": "Strength Potion"
-    },
-    {
-      "type": "end_turn",
-      "label": "End Turn"
-    }
-  ]
+  "terminal": false
 }

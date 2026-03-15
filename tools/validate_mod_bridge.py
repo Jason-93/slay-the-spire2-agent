@@ -104,6 +104,7 @@ def main() -> int:
         combat_snapshot = fetch(base_url, "/snapshot?phase=combat")
         assert combat_snapshot["player"]["hand"][0]["description"]
         assert combat_snapshot["player"]["hand"][0]["glossary"]
+        assert combat_snapshot["player"]["hand"][0]["glossary"][0]["source"] == "runtime_hover_tip"
         assert "description_quality" not in combat_snapshot["player"]["hand"][0]
         assert "description_source" not in combat_snapshot["player"]["hand"][0]
         assert "description_vars" not in combat_snapshot["player"]["hand"][0]
@@ -116,6 +117,7 @@ def main() -> int:
         assert combat_snapshot["player"]["draw_pile_cards"][0]["description"]
         assert combat_snapshot["player"]["discard_pile_cards"][0]["glossary"]
         assert combat_snapshot["player"]["powers"][0]["name"]
+        assert any(anchor["source"] == "model_description" for anchor in combat_snapshot["player"]["powers"][0]["glossary"])
         assert "description_vars" not in combat_snapshot["player"]["powers"][0]
         assert combat_snapshot["enemies"][0]["intent_type"]
         assert combat_snapshot["enemies"][0]["move_name"]
@@ -125,6 +127,7 @@ def main() -> int:
         assert combat_snapshot["enemies"][0]["keywords"]
         assert combat_snapshot["enemies"][0]["powers"][0]["name"]
         assert combat_snapshot["enemies"][0]["powers"][0]["glossary"]
+        assert any(anchor["source"] == "model_description" for anchor in combat_snapshot["enemies"][0]["powers"][0]["glossary"])
         assert "degraded" in combat_snapshot["metadata"]["enemy_export"]
         assert combat_snapshot["run_state"]["act"] == 1
         assert combat_snapshot["run_state"]["map"]["reachable_nodes"]
