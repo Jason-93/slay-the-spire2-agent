@@ -316,6 +316,30 @@ class GateDriftBridge(SequencedCombatBridge):
         return super().get_snapshot(session_id)
 
 
+class GateRebaseBridge(SequencedCombatBridge):
+    def __init__(self) -> None:
+        super().__init__(
+            [
+                make_window(
+                    actions=[{"type": "play_card", "label": "Strike", "params": {"card_id": "card-1", "target_type": "AnyEnemy"}, "target_constraints": ["1"]}],
+                    metadata={"window_kind": "player_turn", "current_side": "Player", "round_number": 1},
+                ),
+                make_window(
+                    actions=[{"type": "play_card", "label": "Strike", "params": {"card_id": "card-1", "target_type": "AnyEnemy"}, "target_constraints": ["1"]}],
+                    metadata={"window_kind": "player_turn", "current_side": "Player", "round_number": 1},
+                ),
+                make_window(phase="reward", actions=[], metadata={}),
+            ]
+        )
+        self._snapshot_reads = 0
+
+    def get_snapshot(self, session_id: str) -> DecisionSnapshot:
+        self._snapshot_reads += 1
+        if self._snapshot_reads >= 4 and self.index == 0:
+            self.index = 1
+        return super().get_snapshot(session_id)
+
+
 class RetryableStaleBridge(SequencedCombatBridge):
     def __init__(self) -> None:
         super().__init__(
@@ -1077,6 +1101,25 @@ class OrchestratorTests(unittest.TestCase):
             self.assertEqual(records[0]["gate_status"], "intercepted")
             self.assertEqual(records[0]["reject_category"], "recoverable_stale")
             self.assertEqual(records[0]["bridge_result"]["error_code"], "pre_submit_state_drift")
+
+    def test_orchestrator_rebases_equivalent_action_after_pre_submit_drift(self) -> None:
+        bridge = GateRebaseBridge()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orchestrator = AutoplayOrchestrator(
+                bridge=bridge,
+                policy=FirstLegalActionPolicy(),
+                config=OrchestratorConfig(trace_dir=tmpdir, stop_after_player_turn=False, max_steps=4),
+            )
+            summary = orchestrator.run(scenario="live")
+
+            self.assertTrue(summary.completed)
+            self.assertFalse(summary.interrupted)
+            self.assertTrue(summary.battle_completed)
+            self.assertEqual(bridge.submissions, ["play_card"])
+            self.assertEqual(summary.rejects_total, 0)
+            records = [json.loads(line) for line in Path(summary.trace_path).read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(records[0]["gate_status"], "rebased")
+            self.assertEqual(records[0]["bridge_result"]["accepted_action_id"], "act-1-0-play_card")
 
     def test_orchestrator_retries_stale_action_with_fresh_state(self) -> None:
         bridge = RetryableStaleBridge()

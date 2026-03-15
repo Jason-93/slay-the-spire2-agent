@@ -1885,6 +1885,8 @@ class AutoplayOrchestrator:
                 snapshot = gate["snapshot"]
                 legal_actions = gate["legal_actions"]
                 auto_end_turn = gate["selected_action"]
+                gate_status = str(gate.get("gate_status") or "passed")
+                gate_reason = str(gate.get("gate_reason") or "")
                 result = self.bridge.submit_action(
                     ActionSubmission(
                         session_id=snapshot.session_id,
@@ -1922,7 +1924,8 @@ class AutoplayOrchestrator:
                     is_final_step=bool(stop_reason),
                     stop_reason=stop_reason,
                     battle_stop_reason=stop_reason,
-                    gate_status="passed",
+                    gate_status=gate_status,
+                    gate_reason=gate_reason,
                 )
                 self._mark_recovery_resolved()
             except StaleActionError as exc:
@@ -2275,7 +2278,10 @@ class AutoplayOrchestrator:
                     ),
                 )
 
-            gate = self._pre_submit_gate(snapshot=snapshot, selected_action=selected_action)
+            gate = self._pre_submit_gate(
+                snapshot=snapshot,
+                selected_action=selected_action,
+            )
             if not gate["allowed"]:
                 raw_code = str(gate["raw_code"])
                 category = str(gate["category"])
@@ -2377,6 +2383,8 @@ class AutoplayOrchestrator:
             snapshot = gate["snapshot"]
             legal_actions = gate["legal_actions"]
             selected_action = gate["selected_action"]
+            gate_status = str(gate.get("gate_status") or "passed")
+            gate_reason = str(gate.get("gate_reason") or "")
             self._publish_agent_status(
                 snapshot=snapshot,
                 policy_output=policy_output,
@@ -2390,7 +2398,7 @@ class AutoplayOrchestrator:
                     session_id=snapshot.session_id,
                     decision_id=snapshot.decision_id,
                     state_version=snapshot.state_version,
-                    action_id=policy_output.action_id,
+                    action_id=selected_action.action_id,
                     args=self._build_action_args(selected_action, policy_output),
                 )
             )
@@ -2422,7 +2430,8 @@ class AutoplayOrchestrator:
                 is_final_step=bool(stop_reason),
                 stop_reason=stop_reason,
                 battle_stop_reason=stop_reason,
-                gate_status="passed",
+                gate_status=gate_status,
+                gate_reason=gate_reason,
             )
             self._mark_recovery_resolved()
             if stop_reason:
@@ -3109,18 +3118,10 @@ class AutoplayOrchestrator:
             "observed_transition_kind": str(latest_metadata.get("transition_kind") or ""),
             "observed_selection_kind": str(latest_metadata.get("selection_kind") or ""),
         }
-
-        if (
+        state_drifted = (
             latest_snapshot.decision_id != snapshot.decision_id
             or latest_snapshot.state_version != snapshot.state_version
-        ):
-            return {
-                "allowed": False,
-                "category": "recoverable_stale",
-                "raw_code": "pre_submit_state_drift",
-                "message": "state drifted before submit; reobserve before applying action",
-                "context": gate_context,
-            }
+        )
 
         latest_phase = self._normalize_phase(getattr(latest_snapshot, "phase", ""))
         if latest_phase != "combat":
@@ -3170,6 +3171,18 @@ class AutoplayOrchestrator:
 
         refreshed_action = latest_by_id.get(selected_action.action_id)
         if refreshed_action is None:
+            refreshed_action = self._match_equivalent_action(selected_action, latest_legal_actions)
+
+        if state_drifted and refreshed_action is None:
+            return {
+                "allowed": False,
+                "category": "recoverable_stale",
+                "raw_code": "pre_submit_state_drift",
+                "message": "state drifted before submit; reobserve before applying action",
+                "context": gate_context,
+            }
+
+        if refreshed_action is None:
             return {
                 "allowed": False,
                 "category": "recoverable_stale",
@@ -3178,14 +3191,41 @@ class AutoplayOrchestrator:
                 "context": gate_context,
             }
 
-        gate_context["gate_status"] = "passed"
+        gate_status = "rebased" if state_drifted else "passed"
+        gate_context["gate_status"] = gate_status
         return {
             "allowed": True,
             "snapshot": latest_snapshot,
             "legal_actions": latest_legal_actions,
             "selected_action": refreshed_action,
+            "gate_status": gate_status,
+            "gate_reason": "pre_submit_rebase" if state_drifted else "",
             "context": gate_context,
         }
+
+    @classmethod
+    def _match_equivalent_action(cls, selected_action, legal_actions):
+        exact_signature = cls._action_semantic_signature(selected_action)
+        matches = [action for action in legal_actions if cls._action_semantic_signature(action) == exact_signature]
+        if len(matches) == 1:
+            return matches[0]
+        return None
+
+    @classmethod
+    def _action_semantic_signature(cls, action) -> tuple[Any, ...]:
+        return (
+            str(getattr(action, "type", "") or ""),
+            cls._normalize_action_value(dict(getattr(action, "params", {}) or {})),
+            tuple(str(item) for item in list(getattr(action, "target_constraints", []) or [])),
+        )
+
+    @classmethod
+    def _normalize_action_value(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            return tuple(sorted((str(key), cls._normalize_action_value(item)) for key, item in value.items()))
+        if isinstance(value, list):
+            return tuple(cls._normalize_action_value(item) for item in value)
+        return value
 
     @classmethod
     def _reject_stop_reason(cls, category: str, raw_code: str, retrying: bool) -> str:
