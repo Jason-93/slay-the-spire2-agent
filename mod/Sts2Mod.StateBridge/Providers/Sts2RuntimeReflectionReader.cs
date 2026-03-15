@@ -3314,7 +3314,7 @@ internal sealed class Sts2RuntimeReflectionReader
             "CardText",
             "BodyText",
             "Text");
-        var runtimeRendered = ConvertToText(
+        var runtimeRendered = ConvertDescriptionTemplateToText(
             GetMemberValue(card, "RenderedDescription")
             ?? GetMemberValue(source, "RenderedDescription")
             ?? GetMemberValue(card, "RenderedText")
@@ -3454,7 +3454,7 @@ internal sealed class Sts2RuntimeReflectionReader
             try
             {
                 var result = method.Invoke(target, args);
-                var normalized = NormalizeDescriptionText(ConvertToText(result));
+                var normalized = NormalizeDescriptionText(ConvertDescriptionTemplateToText(result, sourceLabel));
                 if (!string.IsNullOrWhiteSpace(normalized))
                 {
                     return new GameRenderedCardDescription(normalized, sourceLabel);
@@ -4115,7 +4115,7 @@ internal sealed class Sts2RuntimeReflectionReader
             "TooltipText",
             "IntentDescription",
             "IntentText");
-        var rendered = ConvertToText(
+        var rendered = ConvertDescriptionTemplateToText(
             renderedDescriptionValue,
             $"{path}.move_description_rendered",
             textDiagnostics,
@@ -4547,7 +4547,7 @@ internal sealed class Sts2RuntimeReflectionReader
             "RulesText",
             "Text",
             "TooltipText");
-        var rendered = ConvertToText(
+        var rendered = ConvertDescriptionTemplateToText(
             GetFirstMemberValue(
                 source,
                 "RenderedDescription",
@@ -4953,7 +4953,7 @@ internal sealed class Sts2RuntimeReflectionReader
             "Description",
             "RulesText",
             "Text");
-        var rendered = ConvertToText(
+        var rendered = ConvertDescriptionTemplateToText(
             GetMemberValue(power, "RenderedDescription")
             ?? GetMemberValue(power, "RenderedText")
             ?? GetMemberValue(power, "DisplayDescription")
@@ -5049,7 +5049,7 @@ internal sealed class Sts2RuntimeReflectionReader
             "StaticDescription",
             "RulesText",
             "Text");
-        var rendered = NormalizeDescriptionText(ConvertToText(
+        var rendered = NormalizeDescriptionText(ConvertDescriptionTemplateToText(
             GetMemberValue(source, "RenderedDescription")
             ?? GetMemberValue(source, "RenderedText")
             ?? GetMemberValue(source, "DisplayDescription")
@@ -5061,7 +5061,7 @@ internal sealed class Sts2RuntimeReflectionReader
             "DisplayDescription"));
         if (string.IsNullOrWhiteSpace(rendered))
         {
-            var hoverTipRendered = NormalizeDescriptionText(ConvertToText(
+            var hoverTipRendered = NormalizeDescriptionText(ConvertDescriptionTemplateToText(
                 hoverTipDescriptionValue,
                 $"{path}.hover_tip_description",
                 textDiagnostics,
@@ -5959,11 +5959,12 @@ internal sealed class Sts2RuntimeReflectionReader
                 continue;
             }
 
-            var description = NormalizeDescriptionText(ConvertToText(
+            var description = NormalizeDescriptionText(ConvertDescriptionTemplateToText(
                 GetMemberValue(hoverTip, "Description")
                 ?? GetMemberValue(hoverTip, "Text")
                 ?? hoverTip,
                 "Description",
+                null,
                 "Text"));
             if (!string.IsNullOrWhiteSpace(description))
             {
@@ -6053,7 +6054,7 @@ internal sealed class Sts2RuntimeReflectionReader
         foreach (var key in EnumerateGlossaryLocalizationKeys(glossaryId))
         {
             var locString = TryResolveLocStringByKey(key);
-            var text = NormalizeDescriptionText(ConvertToText(locString, "GetFormattedText", "GetRawText"));
+            var text = NormalizeDescriptionText(ConvertDescriptionTemplateToText(locString, key));
             if (!string.IsNullOrWhiteSpace(text))
             {
                 hint = text;
@@ -7670,7 +7671,7 @@ internal sealed class Sts2RuntimeReflectionReader
             {
                 canonicalCardId,
                 ConvertToText(GetMemberValue(card, "Description")),
-                ConvertToText(GetMemberValue(card, "RenderedDescription")),
+                ConvertDescriptionTemplateToText(GetMemberValue(card, "RenderedDescription"), "_"),
                 ConvertToText(GetMemberValue(card, "Name")),
                 ConvertToText(GetMemberValue(card, "Title")),
             }.Where(value => !string.IsNullOrWhiteSpace(value)));

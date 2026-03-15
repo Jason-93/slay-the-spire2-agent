@@ -442,6 +442,80 @@ public sealed class RewardPhaseDetectionTests
     }
 
     [Fact]
+    public void BuildCombatWindow_UsesRawHoverTipLocStringWithoutFormatting()
+    {
+        var reader = CreateReader();
+        var runNode = new FakeRunNode(new FakeScreenTracker());
+        var hoverTipDescription = new FakeTrackingLocString(
+            "拾起时，随机[gold]升级[/gold][blue]{Cards}[/blue]张技能牌。",
+            "POTION.SWIFT_POTION.description");
+        var runState = new FakeRunState(
+            new[] { new FakeEnemy("enemy-1", true) },
+            hand: new[]
+            {
+                new FakeCard("Swift Lesson")
+                {
+                    CardId = "swift_lesson",
+                    Description = "Draw {Cards} cards.",
+                    RenderedDescription = "Draw 2 cards.",
+                    Keywords = new[] { "draw" },
+                    HoverTips = new[]
+                    {
+                        new FakeHoverTip("draw", "Draw", hoverTipDescription),
+                    },
+                },
+            });
+
+        var window = InvokeBuildCombatWindow(reader, runNode, runState);
+        var exported = new CombatWindowExtractor().Export(window, new BridgeSessionState(new BridgeOptions()));
+
+        Assert.NotNull(exported.Snapshot.Player);
+        var player = exported.Snapshot.Player!;
+        var card = Assert.Single(player.Hand);
+        var glossary = Assert.Single(card.Glossary ?? Array.Empty<GlossaryAnchor>());
+        Assert.Equal("draw", glossary.GlossaryId);
+        Assert.Equal("runtime_hover_tip", glossary.Source);
+        Assert.Equal("拾起时，随机**升级**{Cards}张技能牌。", glossary.Hint);
+        Assert.Equal(0, hoverTipDescription.FormattedCallCount);
+        Assert.True(hoverTipDescription.RawCallCount >= 1);
+    }
+
+    [Fact]
+    public void BuildCombatWindow_UsesRawRenderedDescriptionLocStringWithoutFormatting()
+    {
+        var reader = CreateReader();
+        var runNode = new FakeRunNode(new FakeScreenTracker());
+        var renderedDescription = new FakeTrackingLocString(
+            "获得{Block:diff()}点[gold]格挡[/gold]。\n{IfUpgraded:show:| 随机}[gold]消耗[/gold]1张牌。",
+            "CARD.TRUE_GRIT.rendered");
+        var runState = new FakeRunState(
+            new[] { new FakeEnemy("enemy-1", true) },
+            hand: new[]
+            {
+                new FakeCard("坚毅+")
+                {
+                    CardId = "true_grit_plus",
+                    Description = "获得{Block:diff()}点[gold]格挡[/gold]。\n{IfUpgraded:show:| 随机}[gold]消耗[/gold]1张牌。",
+                    RenderedDescription = renderedDescription,
+                    Block = 9,
+                    IsUpgraded = true,
+                    TargetType = "Self",
+                    CardType = "Skill",
+                },
+            });
+
+        var window = InvokeBuildCombatWindow(reader, runNode, runState);
+        var exported = new CombatWindowExtractor().Export(window, new BridgeSessionState(new BridgeOptions()));
+
+        Assert.NotNull(exported.Snapshot.Player);
+        var player = exported.Snapshot.Player!;
+        var card = Assert.Single(player.Hand);
+        Assert.Contains("获得9点**格挡**。", card.Description);
+        Assert.Equal(0, renderedDescription.FormattedCallCount);
+        Assert.True(renderedDescription.RawCallCount >= 1);
+    }
+
+    [Fact]
     public void BuildCombatWindow_ExportsPotionObjectWhenDescriptionIsMissing()
     {
         var reader = CreateReader();
@@ -1057,11 +1131,30 @@ public sealed class RewardPhaseDetectionTests
         }
     }
 
-    private sealed class FakeHoverTip(string id, string title, string description)
+    private sealed class FakeHoverTip(string id, string title, object description)
     {
         public string Id { get; } = id;
         public string Title { get; } = title;
-        public string Description { get; } = description;
+        public object Description { get; } = description;
+    }
+
+    private sealed class FakeTrackingLocString(string rawText, string locEntryKey)
+    {
+        public int FormattedCallCount { get; private set; }
+        public int RawCallCount { get; private set; }
+        public string LocEntryKey { get; } = locEntryKey;
+
+        public string GetFormattedText()
+        {
+            FormattedCallCount++;
+            throw new InvalidOperationException("Formatting should not be invoked for glossary hint templates.");
+        }
+
+        public string GetRawText()
+        {
+            RawCallCount++;
+            return rawText;
+        }
     }
 
     private sealed class FakeCard(string title)
@@ -1070,7 +1163,7 @@ public sealed class RewardPhaseDetectionTests
         public string CardId { get; init; } = title.ToLowerInvariant();
         public string Name => Title;
         public string Description { get; init; } = string.Empty;
-        public string? RenderedDescription { get; init; }
+        public object? RenderedDescription { get; init; }
         public bool IsUpgraded { get; init; }
         public string TargetType { get; init; } = "AnyEnemy";
         public string CardType { get; init; } = "Attack";
