@@ -190,3 +190,36 @@ python tools/validate_full_battle_llm.py \
   - 实测 artifacts：
     - capture（仅导出）：`tmp/reward-card-selection-validation/20260314-125308`
     - apply（真实 choose_reward）：`tmp/reward-card-selection-validation/20260314-125328`
+
+### 2026-03-15（live reject 诊断与整场回归口径）
+
+- 推荐整场 live 回归命令：
+
+```bash
+python tools/validate_full_battle_llm.py \
+  --bridge-base-url "http://127.0.0.1:17654" \
+  --base-url "http://127.0.0.1:8080/v1" \
+  --model "Qwen3.5-9B-Q5_K_M.gguf" \
+  --allow-write \
+  --reward-mode safe-default \
+  --map-mode safe-default \
+  --stop-after-next-combat \
+  --max-steps 80 \
+  --max-actions-per-turn 8 \
+  --max-turns-per-battle 20 \
+  --max-total-actions 80
+```
+
+- 结果解读：
+  - `rejects_total`：本次 live autoplay 的 reject 总数，含 pre-submit gate 拦截与 bridge reject。
+  - `reject_counts` / `reject_code_counts`：分别按归一化分类与原始错误码统计。
+  - `gate_intercepts`：提交前被本地 gate 拦下的次数；如果它上升而 `hard_rejects` 维持 0，通常表示系统在主动避开高风险窗口。
+  - `quality`：
+    - `clean`：无 reject。
+    - `recovered`：有 reject，但恢复后继续完成。
+    - `reject_heavy`：虽然完成，但 reject 比例仍偏高，后续优先看 `last_reject` 与 trace。
+    - `hard_reject`：出现不可恢复 reject。
+- 最近一次真实 LLM live 回归：
+  - 命令：同上
+  - artifacts：`tmp/full-battle-llm-validation/20260315-224601`
+  - 结果：`verdict = "success_reject_heavy"`，已从当前战斗推进到下一场战斗，但仍存在较多 `pre_submit_state_drift` / `stale_decision`，后续继续围绕时序收敛。

@@ -55,7 +55,11 @@ public sealed class Sts2InGameModEntryPoint
     {
         if (!_initialized)
         {
-            return;
+            Initialize();
+            if (!_initialized)
+            {
+                return;
+            }
         }
 
         EnsurePumpNodeAttached();

@@ -113,9 +113,13 @@ class HttpGameBridge(GameBridge):
 
         message = str(response.get("message") or "bridge rejected the action")
         if error_code in {"stale_decision", "stale_action", "not_player_turn", "selection_window_changed"}:
-            raise StaleActionError(message)
+            error = StaleActionError(message)
+            error.error_code = str(error_code)
+            raise error
         if error_code in {"illegal_action", "invalid_action"}:
-            raise InvalidPayloadError(message)
+            error = InvalidPayloadError(message)
+            error.error_code = str(error_code)
+            raise error
         raise RemoteBridgeError(message, error_code=str(error_code or "bridge_error"))
 
     def update_agent_status(self, status: AgentStatusUpdate | dict[str, Any]) -> dict[str, Any]:

@@ -29,6 +29,19 @@ def _read_trace_tail(trace_path: Path, limit: int = 8) -> list[dict[str, Any]]:
 
 
 def _build_result(*, artifact_dir: Path, health: dict[str, Any], summary: dict[str, Any], trace_tail: list[dict[str, Any]]) -> dict[str, Any]:
+    rejects_total = int(summary.get("rejects_total") or 0)
+    total_actions = int(summary.get("total_actions") or 0)
+    total_attempts = total_actions + rejects_total
+    reject_rate = (rejects_total / total_attempts) if total_attempts > 0 else 0.0
+    hard_rejects = int(summary.get("hard_rejects") or 0)
+    if rejects_total == 0:
+        quality = "clean"
+    elif hard_rejects > 0:
+        quality = "hard_reject"
+    elif reject_rate >= 0.25:
+        quality = "reject_heavy"
+    else:
+        quality = "recovered"
     return {
         "timestamp": datetime.now().isoformat(),
         "artifact_dir": str(artifact_dir),
@@ -38,8 +51,17 @@ def _build_result(*, artifact_dir: Path, health: dict[str, Any], summary: dict[s
         "interrupted": bool(summary.get("interrupted")),
         "battle_completed": bool(summary.get("battle_completed")),
         "turns_completed": int(summary.get("turns_completed") or 0),
-        "total_actions": int(summary.get("total_actions") or 0),
+        "total_actions": total_actions,
         "current_turn_index": int(summary.get("current_turn_index") or 0),
+        "rejects_total": rejects_total,
+        "recoverable_rejects": int(summary.get("recoverable_rejects") or 0),
+        "hard_rejects": hard_rejects,
+        "gate_intercepts": int(summary.get("gate_intercepts") or 0),
+        "reject_counts": dict(summary.get("reject_counts") or {}),
+        "reject_code_counts": dict(summary.get("reject_code_counts") or {}),
+        "reject_rate": reject_rate,
+        "quality": quality,
+        "last_reject": dict(summary.get("last_reject") or {}),
         "recovery_attempts": int(summary.get("recovery_attempts") or 0),
         "recovery_successes": int(summary.get("recovery_successes") or 0),
         "recovery_streak": int(summary.get("recovery_streak") or 0),
@@ -144,11 +166,20 @@ def run_validation(args: argparse.Namespace) -> int:
         write_json(artifact_dir / "trace_tail.json", trace_tail)
 
     result = _build_result(artifact_dir=artifact_dir, health=health, summary=summary_payload, trace_tail=trace_tail)
-    result["verdict"] = "success" if summary.battle_completed and not summary.interrupted else "failed"
-    result["summary"] = "整场战斗 autoplay 已完成。" if result["verdict"] == "success" else "整场战斗 autoplay 未完成，请检查 summary 与 trace_tail。"
+    if summary.battle_completed and not summary.interrupted:
+        result["verdict"] = {
+            "clean": "success_clean",
+            "recovered": "success_recovered",
+            "reject_heavy": "success_reject_heavy",
+            "hard_reject": "success_with_hard_reject",
+        }.get(result["quality"], "success_recovered")
+        result["summary"] = "整场战斗 autoplay 已完成。"
+    else:
+        result["verdict"] = "failed"
+        result["summary"] = "整场战斗 autoplay 未完成，请检查 summary 与 trace_tail。"
     write_json(artifact_dir / "result.json", result)
     print(json.dumps(result, ensure_ascii=False, indent=2))
-    return 0 if result["verdict"] == "success" else 1
+    return 0 if result["verdict"].startswith("success") else 1
 
 
 def build_parser() -> argparse.ArgumentParser:

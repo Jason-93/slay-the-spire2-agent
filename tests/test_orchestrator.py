@@ -298,6 +298,24 @@ class SnapshotDriftBridge(SequencedCombatBridge):
         return snapshot
 
 
+class GateDriftBridge(SequencedCombatBridge):
+    def __init__(self) -> None:
+        super().__init__(
+            [
+                make_window(actions=[{"type": "play_card", "label": "Strike", "params": {"card_id": "card-1"}}]),
+                make_window(actions=[{"type": "end_turn", "label": "End Turn"}], energy=0, hand=[]),
+                make_window(phase="reward", actions=[]),
+            ]
+        )
+        self._snapshot_reads = 0
+
+    def get_snapshot(self, session_id: str) -> DecisionSnapshot:
+        self._snapshot_reads += 1
+        if self._snapshot_reads >= 4 and self.index == 0:
+            self.index = 1
+        return super().get_snapshot(session_id)
+
+
 class RetryableStaleBridge(SequencedCombatBridge):
     def __init__(self) -> None:
         super().__init__(
@@ -516,6 +534,35 @@ class OrchestratorTests(unittest.TestCase):
                 bridge=bridge,
                 policy=FirstLegalActionPolicy(),
                 config=OrchestratorConfig(trace_dir=tmpdir, stop_after_player_turn=False, reward_mode="llm", max_steps=4),
+            )
+            summary = orchestrator.run(scenario="live")
+
+            self.assertTrue(summary.completed)
+            self.assertFalse(summary.interrupted)
+            self.assertEqual(summary.ended_by, "map_phase_reached")
+            self.assertEqual(bridge.submissions, ["choose_reward"])
+            self.assertEqual(summary.reward_actions_taken, 1)
+
+    def test_reward_mode_safe_default_prefers_choose_reward_before_skip(self) -> None:
+        bridge = SequencedCombatBridge(
+            [
+                make_window(
+                    phase="reward",
+                    actions=[
+                        {"type": "choose_reward", "label": "Choose 17金币", "params": {"reward": "17金币", "reward_index": 0}},
+                        {"type": "skip_reward", "label": "Skip Reward"},
+                    ],
+                    metadata={"window_kind": "reward_choice", "reward_subphase": "reward_choice"},
+                    rewards=["17金币"],
+                ),
+                make_window(phase="map", actions=[], metadata={}),
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orchestrator = AutoplayOrchestrator(
+                bridge=bridge,
+                policy=FirstLegalActionPolicy(),
+                config=OrchestratorConfig(trace_dir=tmpdir, stop_after_player_turn=False, reward_mode="safe-default", max_steps=4),
             )
             summary = orchestrator.run(scenario="live")
 
@@ -788,12 +835,13 @@ class OrchestratorTests(unittest.TestCase):
 
             self.assertFalse(summary.completed)
             self.assertTrue(summary.interrupted)
-            self.assertEqual(summary.reason, "invalid_payload")
+            self.assertEqual(summary.reason, "invalid_policy_decision")
             trace_lines = Path(summary.trace_path).read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(trace_lines), 1)
             record = json.loads(trace_lines[0])
             self.assertTrue(record["interrupted"])
-            self.assertEqual(record["bridge_result"]["error_code"], "invalid_payload")
+            self.assertEqual(record["bridge_result"]["error_code"], "policy_invalid_action")
+            self.assertEqual(record["reject_category"], "invalid_policy_decision")
 
     def test_manual_stop_interrupts_before_action_submission(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -881,10 +929,11 @@ class OrchestratorTests(unittest.TestCase):
             summary = orchestrator.run(scenario="live")
 
             self.assertTrue(summary.interrupted)
-            self.assertEqual(summary.reason, "policy_invalid_action_args")
+            self.assertEqual(summary.reason, "invalid_policy_decision")
             self.assertEqual(bridge.submissions, [])
             record = json.loads(Path(summary.trace_path).read_text(encoding="utf-8").splitlines()[0])
             self.assertEqual(record["bridge_result"]["error_code"], "policy_invalid_action_args")
+            self.assertEqual(record["reject_category"], "invalid_policy_decision")
 
     def test_orchestrator_rejects_target_id_outside_legal_target_set(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -897,10 +946,11 @@ class OrchestratorTests(unittest.TestCase):
             summary = orchestrator.run(scenario="live")
 
             self.assertTrue(summary.interrupted)
-            self.assertEqual(summary.reason, "policy_invalid_action_args")
+            self.assertEqual(summary.reason, "invalid_policy_decision")
             self.assertEqual(bridge.submissions, [])
             record = json.loads(Path(summary.trace_path).read_text(encoding="utf-8").splitlines()[0])
             self.assertEqual(record["bridge_result"]["error_code"], "policy_invalid_action_args")
+            self.assertEqual(record["reject_category"], "invalid_policy_decision")
 
     def test_orchestrator_continues_multiple_actions_in_same_turn(self) -> None:
         bridge = SequencedCombatBridge(
@@ -1007,8 +1057,8 @@ class OrchestratorTests(unittest.TestCase):
             self.assertEqual(summary.actions_this_turn, 1)
             self.assertEqual(summary.ended_by, "max_actions_per_turn")
 
-    def test_orchestrator_retries_until_snapshot_and_actions_are_consistent(self) -> None:
-        bridge = SnapshotDriftBridge()
+    def test_orchestrator_intercepts_pre_submit_state_drift(self) -> None:
+        bridge = GateDriftBridge()
         with tempfile.TemporaryDirectory() as tmpdir:
             orchestrator = AutoplayOrchestrator(
                 bridge=bridge,
@@ -1021,6 +1071,12 @@ class OrchestratorTests(unittest.TestCase):
             self.assertFalse(summary.interrupted)
             self.assertEqual(summary.ended_by, "auto_end_turn")
             self.assertEqual(bridge.submissions, ["end_turn"])
+            self.assertEqual(summary.gate_intercepts, 1)
+            self.assertEqual(summary.rejects_total, 1)
+            records = [json.loads(line) for line in Path(summary.trace_path).read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(records[0]["gate_status"], "intercepted")
+            self.assertEqual(records[0]["reject_category"], "recoverable_stale")
+            self.assertEqual(records[0]["bridge_result"]["error_code"], "pre_submit_state_drift")
 
     def test_orchestrator_retries_stale_action_with_fresh_state(self) -> None:
         bridge = RetryableStaleBridge()
@@ -1042,6 +1098,9 @@ class OrchestratorTests(unittest.TestCase):
             self.assertEqual(summary.recovery_attempts, 1)
             self.assertEqual(summary.recovery_successes, 1)
             self.assertEqual(summary.last_recovery_reason, "stale_action")
+            self.assertEqual(summary.rejects_total, 1)
+            self.assertEqual(summary.recoverable_rejects, 1)
+            self.assertEqual(summary.hard_rejects, 0)
 
     def test_orchestrator_passes_battle_context_to_policy_and_trace(self) -> None:
         bridge = SequencedCombatBridge(
@@ -1090,7 +1149,7 @@ class OrchestratorTests(unittest.TestCase):
             self.assertTrue(summary.completed)
             self.assertEqual(policy.calls, 1)
 
-    def test_battle_mode_recovers_from_policy_invalid_action(self) -> None:
+    def test_battle_mode_stops_on_policy_invalid_action(self) -> None:
         bridge = SequencedCombatBridge(
             [
                 make_window(actions=[{"type": "play_card", "label": "Strike", "params": {"card_id": "card-1"}}]),
@@ -1106,13 +1165,17 @@ class OrchestratorTests(unittest.TestCase):
             )
             summary = orchestrator.run(scenario="live")
 
-            self.assertTrue(summary.completed)
-            self.assertEqual(summary.recovery_attempts, 1)
-            self.assertEqual(summary.recovery_successes, 1)
-            self.assertEqual(summary.last_recovery_reason, "policy_invalid_action")
+            self.assertFalse(summary.completed)
+            self.assertTrue(summary.interrupted)
+            self.assertEqual(summary.reason, "invalid_policy_decision")
+            self.assertEqual(summary.rejects_total, 1)
+            self.assertEqual(summary.hard_rejects, 1)
+            self.assertEqual(summary.recoverable_rejects, 0)
+            self.assertEqual(summary.reject_counts["invalid_policy_decision"], 1)
             records = [json.loads(line) for line in Path(summary.trace_path).read_text(encoding="utf-8").splitlines()]
             self.assertEqual(records[0]["bridge_result"]["error_code"], "policy_invalid_action")
-            self.assertEqual(records[0]["stop_reason"], "policy_invalid_action_retry")
+            self.assertEqual(records[0]["reject_category"], "invalid_policy_decision")
+            self.assertEqual(records[0]["stop_reason"], "invalid_policy_decision")
 
     def test_battle_mode_recovers_from_policy_error(self) -> None:
         bridge = SequencedCombatBridge(

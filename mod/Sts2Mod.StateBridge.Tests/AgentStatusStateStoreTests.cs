@@ -99,4 +99,58 @@ public sealed class AgentStatusStateStoreTests
         Assert.NotNull(response.History);
         Assert.Empty(response.History);
     }
+
+    [Fact]
+    public void Update_NewSessionClearsOldHistory()
+    {
+        AgentStatusStateStore.Clear();
+
+        AgentStatusStateStore.Update(new AgentStatusUpdateRequest(
+            SessionId: "sess-1",
+            Phase: "combat",
+            Status: "planned",
+            UpdatedAt: "2026-03-15T10:00:00Z",
+            ActionLabel: "Play 防御",
+            Reason: "先补格挡",
+            Detail: "敌人即将攻击",
+            Turn: 1,
+            Step: 2));
+
+        var response = AgentStatusStateStore.Update(new AgentStatusUpdateRequest(
+            SessionId: "sess-2",
+            Phase: "menu",
+            Status: "idle",
+            UpdatedAt: "2026-03-15T10:00:05Z",
+            Reason: "新局开始"));
+
+        Assert.Equal("sess-2", response.SessionId);
+        Assert.NotNull(response.History);
+        Assert.Single(response.History);
+        Assert.Equal("idle", response.History[0].Status);
+        Assert.Null(response.History[0].ActionLabel);
+    }
+
+    [Fact]
+    public void GetCurrent_MarksSnapshotStaleAfterTtl()
+    {
+        AgentStatusStateStore.Clear();
+
+        AgentStatusStateStore.Update(new AgentStatusUpdateRequest(
+            SessionId: "sess-1",
+            Phase: "combat",
+            Status: "planned",
+            UpdatedAt: "2026-03-15T10:00:00Z",
+            ActionLabel: "Play 防御",
+            Reason: "先补格挡",
+            Detail: "敌人即将攻击",
+            Turn: 1,
+            Step: 2));
+
+        var response = AgentStatusStateStore.GetCurrent(DateTimeOffset.UtcNow.AddSeconds(6));
+
+        Assert.False(response.Empty);
+        Assert.True(response.Stale);
+        Assert.Equal("stale", response.Status);
+        Assert.Equal("planned", response.SourceStatus);
+    }
 }

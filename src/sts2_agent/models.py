@@ -228,12 +228,16 @@ class BattleContext:
     current_turn_index: int = 0
     actions_this_turn: int = 0
     total_actions: int = 0
+    rejects_total: int = 0
+    recoverable_rejects: int = 0
+    hard_rejects: int = 0
     waiting_for_player_turn: bool = False
     recovery_attempts: int = 0
     recovery_successes: int = 0
     recovery_streak: int = 0
     pending_recovery_reason: str = ""
     last_recovery_reason: str = ""
+    reject_counts: dict[str, int] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
     recent_steps: list[dict[str, Any]] = field(default_factory=list)
 
@@ -254,10 +258,17 @@ class TraceEntry:
     actions_this_turn: int = 0
     total_actions: int = 0
     waiting_for_player_turn: bool = False
+    rejects_total: int = 0
+    recoverable_rejects: int = 0
+    hard_rejects: int = 0
     recovery_attempts: int = 0
     recovery_successes: int = 0
     recovery_streak: int = 0
     last_recovery_reason: str = ""
+    reject_category: str = ""
+    reject_raw_code: str = ""
+    gate_status: str = ""
+    gate_reason: str = ""
     phase_kind: str = ""
     step_kind: str = ""
     transition_elapsed_seconds: float = 0.0
@@ -293,6 +304,13 @@ class RunSummary:
     non_combat_steps: int = 0
     transition_wait_steps: int = 0
     next_combat_entered: bool = False
+    rejects_total: int = 0
+    recoverable_rejects: int = 0
+    hard_rejects: int = 0
+    gate_intercepts: int = 0
+    reject_counts: dict[str, int] = field(default_factory=dict)
+    reject_code_counts: dict[str, int] = field(default_factory=dict)
+    last_reject: dict[str, Any] = field(default_factory=dict)
     recovery_attempts: int = 0
     recovery_successes: int = 0
     recovery_streak: int = 0

@@ -13,6 +13,15 @@ from sts2_agent.models import AgentStatusUpdate, ActionSubmission, BattleContext
 from sts2_agent.policy import PolicyDecisionValidationError, PolicyError
 from sts2_agent.trace import JsonlTraceRecorder
 
+RECOVERABLE_REJECT_CATEGORIES = {"recoverable_stale", "recoverable_timing"}
+SELECTION_ACTION_TYPES = {"choose_combat_card", "cancel_combat_selection"}
+TRANSITION_WINDOW_KINDS = {
+    "combat_transition",
+    "reward_transition",
+    "map_transition",
+    "menu_transition",
+}
+
 
 @dataclass(slots=True)
 class OrchestratorConfig:
@@ -57,6 +66,13 @@ class AutoplayOrchestrator:
         self._recovery_streak = 0
         self._pending_recovery_reason = ""
         self._last_recovery_reason = ""
+        self._rejects_total = 0
+        self._recoverable_rejects = 0
+        self._hard_rejects = 0
+        self._gate_intercepts = 0
+        self._reject_counts: dict[str, int] = {}
+        self._reject_code_counts: dict[str, int] = {}
+        self._last_reject: dict[str, Any] = {}
         self._last_battle_context: dict[str, Any] = {}
 
     def request_stop(self) -> None:
@@ -74,6 +90,13 @@ class AutoplayOrchestrator:
         self._recovery_streak = 0
         self._pending_recovery_reason = ""
         self._last_recovery_reason = ""
+        self._rejects_total = 0
+        self._recoverable_rejects = 0
+        self._hard_rejects = 0
+        self._gate_intercepts = 0
+        self._reject_counts = {}
+        self._reject_code_counts = {}
+        self._last_reject = {}
         self._last_battle_context = {}
 
     def _publish_agent_status(
@@ -1769,6 +1792,99 @@ class AutoplayOrchestrator:
                     current_turn_index=current_turn_index,
                     action_label=auto_end_turn.label,
                 )
+                gate = self._pre_submit_gate(snapshot=snapshot, selected_action=auto_end_turn)
+                if not gate["allowed"]:
+                    raw_code = str(gate["raw_code"])
+                    category = str(gate["category"])
+                    gate_context = dict(gate.get("context") or {})
+                    message = str(gate["message"])
+                    if category == "recoverable_stale":
+                        stale_action_attempts += 1
+                        retrying = stale_action_attempts <= self.config.stale_action_retries
+                    else:
+                        stale_action_attempts = 0
+                        retrying = True
+                    consecutive_failures += 1
+                    self._note_reject(
+                        category=category,
+                        raw_code=raw_code,
+                        snapshot=snapshot,
+                        selected_action=auto_end_turn,
+                        step_index=step_index,
+                        message=message,
+                        gate_intercepted=True,
+                        context=gate_context,
+                    )
+                    self._note_recovery_attempt(raw_code)
+                    budget_stop_reason = self._battle_budget_stop_reason(
+                        total_actions=total_actions,
+                        turns_completed=turns_completed,
+                        current_turn_index=current_turn_index,
+                        consecutive_failures=consecutive_failures,
+                    )
+                    retrying = retrying and not budget_stop_reason
+                    self._publish_agent_status(
+                        snapshot=snapshot,
+                        policy_output=policy_output,
+                        status="rejected",
+                        step_index=step_index,
+                        current_turn_index=current_turn_index,
+                        action_label=auto_end_turn.label,
+                    )
+                    self._record(
+                        recorder=recorder,
+                        snapshot=snapshot,
+                        legal_actions=legal_actions,
+                        policy_output=policy_output,
+                        bridge_result={
+                            "status": "interrupted",
+                            "error_code": raw_code,
+                            "reject_category": category,
+                            "message": message,
+                            "retrying": retrying,
+                            "consecutive_failures": consecutive_failures,
+                            "gate_status": "intercepted",
+                            "gate_reason": raw_code,
+                            "gate_context": gate_context,
+                        },
+                        interrupted=not retrying,
+                        step_index=step_index,
+                        current_turn_index=current_turn_index,
+                        actions_this_turn=current_turn_actions,
+                        total_actions=total_actions,
+                        waiting_for_player_turn=False,
+                        is_final_step=not retrying,
+                        stop_reason=budget_stop_reason if budget_stop_reason else self._reject_stop_reason(category, raw_code, retrying),
+                        battle_stop_reason="" if retrying else (budget_stop_reason or self._reject_stop_reason(category, raw_code, False)),
+                        reject_category=category,
+                        reject_raw_code=raw_code,
+                        gate_status="intercepted",
+                        gate_reason=raw_code,
+                    )
+                    return {
+                        "consumed": retrying,
+                        "step_index": step_index,
+                        "current_turn_actions": current_turn_actions,
+                        "total_actions": total_actions,
+                        "stale_action_attempts": stale_action_attempts,
+                        "consecutive_failures": consecutive_failures,
+                        "pending_end_turn_transition": None,
+                        "summary": None if retrying else self._finish(
+                            session_id=session_id,
+                            trace_path=trace_path,
+                            reason=budget_stop_reason or raw_code,
+                            completed=False,
+                            interrupted=True,
+                            actions_this_turn=current_turn_actions,
+                            turns_completed=turns_completed,
+                            total_actions=total_actions,
+                            current_turn_index=current_turn_index,
+                        ),
+                    }
+
+                snapshot = gate["snapshot"]
+                legal_actions = gate["legal_actions"]
+                auto_end_turn = gate["selected_action"]
                 result = self.bridge.submit_action(
                     ActionSubmission(
                         session_id=snapshot.session_id,
@@ -1806,16 +1922,31 @@ class AutoplayOrchestrator:
                     is_final_step=bool(stop_reason),
                     stop_reason=stop_reason,
                     battle_stop_reason=stop_reason,
+                    gate_status="passed",
                 )
                 self._mark_recovery_resolved()
             except StaleActionError as exc:
-                stale_action_attempts += 1
+                raw_code = getattr(exc, "error_code", "stale_action")
+                category = self._classify_reject_category(raw_code)
+                if category == "recoverable_stale":
+                    stale_action_attempts += 1
+                    retrying = stale_action_attempts <= self.config.stale_action_retries
+                else:
+                    stale_action_attempts = 0
+                    retrying = self._is_recoverable_reject_category(category)
                 consecutive_failures += 1
-                retrying = stale_action_attempts <= self.config.stale_action_retries
                 fallback_output = PolicyDecision(
                     action_id=legal_actions[0].action_id,
                     reason="only end_turn remains; runner auto ends turn",
                     metadata={"auto_end_turn": True},
+                )
+                self._note_reject(
+                    category=category,
+                    raw_code=raw_code,
+                    snapshot=snapshot,
+                    selected_action=legal_actions[0],
+                    step_index=step_index,
+                    message=str(exc),
                 )
                 self._publish_agent_status(
                     snapshot=snapshot,
@@ -1825,7 +1956,15 @@ class AutoplayOrchestrator:
                     current_turn_index=current_turn_index,
                     action_label=legal_actions[0].label,
                 )
-                self._note_recovery_attempt(getattr(exc, "error_code", "stale_action"))
+                if self._is_recoverable_reject_category(category):
+                    self._note_recovery_attempt(raw_code)
+                budget_stop_reason = self._battle_budget_stop_reason(
+                    total_actions=total_actions,
+                    turns_completed=turns_completed,
+                    current_turn_index=current_turn_index,
+                    consecutive_failures=consecutive_failures,
+                )
+                retrying = retrying and not budget_stop_reason
                 self._record(
                     recorder=recorder,
                     snapshot=snapshot,
@@ -1833,7 +1972,8 @@ class AutoplayOrchestrator:
                     policy_output=fallback_output,
                     bridge_result={
                         "status": "interrupted",
-                        "error_code": getattr(exc, "error_code", "stale_action"),
+                        "error_code": raw_code,
+                        "reject_category": category,
                         "message": str(exc),
                         "retrying": retrying,
                         "stale_action_attempts": stale_action_attempts,
@@ -1846,8 +1986,10 @@ class AutoplayOrchestrator:
                     total_actions=total_actions,
                     waiting_for_player_turn=False,
                     is_final_step=not retrying,
-                    stop_reason="stale_action" if not retrying else "stale_action_retry",
-                    battle_stop_reason="stale_action" if not retrying else "",
+                    stop_reason=budget_stop_reason if budget_stop_reason else self._reject_stop_reason(category, raw_code, retrying),
+                    battle_stop_reason="" if retrying else (budget_stop_reason or self._reject_stop_reason(category, raw_code, False)),
+                    reject_category=category,
+                    reject_raw_code=raw_code,
                 )
                 return {
                     "consumed": retrying,
@@ -1860,7 +2002,7 @@ class AutoplayOrchestrator:
                     "summary": None if retrying else self._finish(
                         session_id=session_id,
                         trace_path=trace_path,
-                        reason=getattr(exc, "error_code", "stale_action"),
+                        reason=budget_stop_reason or self._reject_stop_reason(category, raw_code, False),
                         completed=False,
                         interrupted=True,
                         actions_this_turn=current_turn_actions,
@@ -2023,6 +2165,16 @@ class AutoplayOrchestrator:
 
             legal_actions_by_id = {action.action_id: action for action in legal_actions}
             if policy_output.action_id not in legal_actions_by_id:
+                raw_code = "policy_invalid_action"
+                category = "invalid_policy_decision"
+                message = "policy returned an action outside the legal action set"
+                self._note_reject(
+                    category=category,
+                    raw_code=raw_code,
+                    snapshot=snapshot,
+                    step_index=step_index,
+                    message=message,
+                )
                 self._publish_agent_status(
                     snapshot=snapshot,
                     policy_output=policy_output,
@@ -2030,17 +2182,6 @@ class AutoplayOrchestrator:
                     step_index=step_index,
                     current_turn_index=current_turn_index,
                 )
-                if self.config.stop_after_player_turn:
-                    raise InvalidPayloadError("policy returned an action outside the legal action set")
-                consecutive_failures += 1
-                self._note_recovery_attempt("policy_invalid_action")
-                budget_stop_reason = self._battle_budget_stop_reason(
-                    total_actions=total_actions,
-                    turns_completed=turns_completed,
-                    current_turn_index=current_turn_index,
-                    consecutive_failures=consecutive_failures,
-                )
-                retrying = not budget_stop_reason
                 self._record(
                     recorder=recorder,
                     snapshot=snapshot,
@@ -2048,42 +2189,33 @@ class AutoplayOrchestrator:
                     policy_output=policy_output,
                     bridge_result={
                         "status": "interrupted",
-                        "error_code": "policy_invalid_action",
-                        "message": "policy returned an action outside the legal action set",
-                        "retrying": retrying,
-                        "consecutive_failures": consecutive_failures,
+                        "error_code": raw_code,
+                        "reject_category": category,
+                        "message": message,
                     },
-                    interrupted=not retrying,
+                    interrupted=True,
                     step_index=step_index,
                     current_turn_index=current_turn_index,
                     actions_this_turn=current_turn_actions,
                     total_actions=total_actions,
                     waiting_for_player_turn=False,
-                    is_final_step=not retrying,
-                    stop_reason=budget_stop_reason if budget_stop_reason else "policy_invalid_action_retry",
-                    battle_stop_reason=budget_stop_reason,
+                    is_final_step=True,
+                    stop_reason=category,
+                    battle_stop_reason=category,
+                    reject_category=category,
+                    reject_raw_code=raw_code,
                 )
-                if retrying:
-                    return self._step_result(
-                        step_index=step_index,
-                        current_turn_actions=current_turn_actions,
-                        total_actions=total_actions,
-                        stale_action_attempts=0,
-                        consecutive_failures=consecutive_failures,
-                        pending_end_turn_transition=None,
-                        summary=None,
-                    )
                 return self._step_result(
                     step_index=step_index,
                     current_turn_actions=current_turn_actions,
                     total_actions=total_actions,
                     stale_action_attempts=0,
-                    consecutive_failures=consecutive_failures,
+                    consecutive_failures=consecutive_failures + 1,
                     pending_end_turn_transition=None,
                     summary=self._finish(
                         session_id=session_id,
                         trace_path=trace_path,
-                        reason=budget_stop_reason,
+                        reason=category,
                         completed=False,
                         interrupted=True,
                         actions_this_turn=current_turn_actions,
@@ -2143,6 +2275,108 @@ class AutoplayOrchestrator:
                     ),
                 )
 
+            gate = self._pre_submit_gate(snapshot=snapshot, selected_action=selected_action)
+            if not gate["allowed"]:
+                raw_code = str(gate["raw_code"])
+                category = str(gate["category"])
+                gate_context = dict(gate.get("context") or {})
+                message = str(gate["message"])
+                if category == "recoverable_stale":
+                    stale_action_attempts += 1
+                    retrying = stale_action_attempts <= self.config.stale_action_retries
+                else:
+                    stale_action_attempts = 0
+                    retrying = True
+                consecutive_failures += 1
+                self._note_reject(
+                    category=category,
+                    raw_code=raw_code,
+                    snapshot=snapshot,
+                    selected_action=selected_action,
+                    step_index=step_index,
+                    message=message,
+                    gate_intercepted=True,
+                    context=gate_context,
+                )
+                self._note_recovery_attempt(raw_code)
+                budget_stop_reason = self._battle_budget_stop_reason(
+                    total_actions=total_actions,
+                    turns_completed=turns_completed,
+                    current_turn_index=current_turn_index,
+                    consecutive_failures=consecutive_failures,
+                )
+                retrying = retrying and not budget_stop_reason
+                self._publish_agent_status(
+                    snapshot=snapshot,
+                    policy_output=policy_output,
+                    status="rejected",
+                    step_index=step_index,
+                    current_turn_index=current_turn_index,
+                    action_label=selected_action.label,
+                )
+                self._record(
+                    recorder=recorder,
+                    snapshot=snapshot,
+                    legal_actions=legal_actions,
+                    policy_output=policy_output,
+                    bridge_result={
+                        "status": "interrupted",
+                        "error_code": raw_code,
+                        "reject_category": category,
+                        "message": message,
+                        "retrying": retrying,
+                        "consecutive_failures": consecutive_failures,
+                        "gate_status": "intercepted",
+                        "gate_reason": raw_code,
+                        "gate_context": gate_context,
+                    },
+                    interrupted=not retrying,
+                    step_index=step_index,
+                    current_turn_index=current_turn_index,
+                    actions_this_turn=current_turn_actions,
+                    total_actions=total_actions,
+                    waiting_for_player_turn=False,
+                    is_final_step=not retrying,
+                    stop_reason=budget_stop_reason if budget_stop_reason else self._reject_stop_reason(category, raw_code, retrying),
+                    battle_stop_reason="" if retrying else (budget_stop_reason or self._reject_stop_reason(category, raw_code, False)),
+                    reject_category=category,
+                    reject_raw_code=raw_code,
+                    gate_status="intercepted",
+                    gate_reason=raw_code,
+                )
+                if retrying:
+                    return self._step_result(
+                        step_index=step_index,
+                        current_turn_actions=current_turn_actions,
+                        total_actions=total_actions,
+                        stale_action_attempts=stale_action_attempts,
+                        consecutive_failures=consecutive_failures,
+                        pending_end_turn_transition=None,
+                        summary=None,
+                    )
+                return self._step_result(
+                    step_index=step_index,
+                    current_turn_actions=current_turn_actions,
+                    total_actions=total_actions,
+                    stale_action_attempts=stale_action_attempts,
+                    consecutive_failures=consecutive_failures,
+                    pending_end_turn_transition=None,
+                    summary=self._finish(
+                        session_id=session_id,
+                        trace_path=trace_path,
+                        reason=budget_stop_reason or raw_code,
+                        completed=False,
+                        interrupted=True,
+                        actions_this_turn=current_turn_actions,
+                        turns_completed=turns_completed,
+                        total_actions=total_actions,
+                        current_turn_index=current_turn_index,
+                    ),
+                )
+
+            snapshot = gate["snapshot"]
+            legal_actions = gate["legal_actions"]
+            selected_action = gate["selected_action"]
             self._publish_agent_status(
                 snapshot=snapshot,
                 policy_output=policy_output,
@@ -2188,6 +2422,7 @@ class AutoplayOrchestrator:
                 is_final_step=bool(stop_reason),
                 stop_reason=stop_reason,
                 battle_stop_reason=stop_reason,
+                gate_status="passed",
             )
             self._mark_recovery_resolved()
             if stop_reason:
@@ -2222,13 +2457,36 @@ class AutoplayOrchestrator:
                 summary=None,
             )
         except StaleActionError as exc:
-            stale_action_attempts += 1
+            raw_code = getattr(exc, "error_code", "stale_action")
+            category = self._classify_reject_category(raw_code)
+            if category == "recoverable_stale":
+                stale_action_attempts += 1
+                retrying = stale_action_attempts <= self.config.stale_action_retries
+            else:
+                stale_action_attempts = 0
+                retrying = self._is_recoverable_reject_category(category)
             consecutive_failures += 1
-            retrying = stale_action_attempts <= self.config.stale_action_retries
-            self._note_recovery_attempt(getattr(exc, "error_code", "stale_action"))
+            self._note_reject(
+                category=category,
+                raw_code=raw_code,
+                snapshot=snapshot,
+                selected_action=locals().get("selected_action"),
+                step_index=step_index,
+                message=str(exc),
+            )
+            if self._is_recoverable_reject_category(category):
+                self._note_recovery_attempt(raw_code)
+            budget_stop_reason = self._battle_budget_stop_reason(
+                total_actions=total_actions,
+                turns_completed=turns_completed,
+                current_turn_index=current_turn_index,
+                consecutive_failures=consecutive_failures,
+            )
+            retrying = retrying and not budget_stop_reason
             interrupted_payload = {
                 "status": "interrupted",
-                "error_code": getattr(exc, "error_code", "stale_action"),
+                "error_code": raw_code,
+                "reject_category": category,
                 "message": str(exc),
                 "retrying": retrying,
                 "stale_action_attempts": stale_action_attempts,
@@ -2257,8 +2515,10 @@ class AutoplayOrchestrator:
                 total_actions=total_actions,
                 waiting_for_player_turn=False,
                 is_final_step=not retrying,
-                stop_reason="stale_action" if not retrying else "stale_action_retry",
-                battle_stop_reason="stale_action" if not retrying else "",
+                stop_reason=budget_stop_reason if budget_stop_reason else self._reject_stop_reason(category, raw_code, retrying),
+                battle_stop_reason="" if retrying else (budget_stop_reason or self._reject_stop_reason(category, raw_code, False)),
+                reject_category=category,
+                reject_raw_code=raw_code,
             )
             if retrying:
                 return self._step_result(
@@ -2280,7 +2540,7 @@ class AutoplayOrchestrator:
                 summary=self._finish(
                     session_id=session_id,
                     trace_path=trace_path,
-                    reason=interrupted_payload["error_code"],
+                    reason=budget_stop_reason or self._reject_stop_reason(category, raw_code, False),
                     completed=False,
                     interrupted=True,
                     actions_this_turn=current_turn_actions,
@@ -2344,6 +2604,162 @@ class AutoplayOrchestrator:
         phase_kind: str | None = None,
     ) -> dict[str, object]:
         error_code = getattr(exc, "error_code", "policy_error" if is_policy_error else "bridge_error")
+        reject_category = self._classify_reject_category(error_code)
+        is_reject = reject_category in {
+            "recoverable_stale",
+            "recoverable_timing",
+            "invalid_policy_decision",
+            "hard_runtime_reject",
+        } and (not is_policy_error or error_code == "policy_invalid_action_args")
+
+        if is_reject:
+            self._note_reject(
+                category=reject_category,
+                raw_code=error_code,
+                snapshot=snapshot,
+                step_index=step_index,
+                message=str(exc),
+            )
+            if self._is_recoverable_reject_category(reject_category):
+                self._note_recovery_attempt(error_code)
+                budget_stop_reason = self._battle_budget_stop_reason(
+                    total_actions=total_actions,
+                    turns_completed=turns_completed,
+                    current_turn_index=current_turn_index,
+                    consecutive_failures=consecutive_failures,
+                )
+                retrying = not budget_stop_reason
+                interrupted_payload = {
+                    "status": "interrupted",
+                    "error_code": error_code,
+                    "reject_category": reject_category,
+                    "message": str(exc),
+                    "consecutive_failures": consecutive_failures,
+                    "retrying": retrying,
+                }
+                fallback_output = PolicyDecision(
+                    action_id=None,
+                    reason=str(exc) if is_policy_error else "policy unavailable",
+                    halt=True,
+                    metadata={"error_code": error_code},
+                )
+                self._publish_agent_status(
+                    snapshot=snapshot,
+                    policy_output=fallback_output,
+                    status="rejected",
+                    step_index=step_index,
+                    current_turn_index=current_turn_index,
+                )
+                self._record(
+                    recorder=recorder,
+                    snapshot=snapshot,
+                    legal_actions=legal_actions,
+                    policy_output=fallback_output,
+                    bridge_result=interrupted_payload,
+                    interrupted=not retrying,
+                    step_index=step_index,
+                    current_turn_index=current_turn_index,
+                    actions_this_turn=current_turn_actions,
+                    total_actions=total_actions,
+                    waiting_for_player_turn=False,
+                    is_final_step=not retrying,
+                    stop_reason=budget_stop_reason if budget_stop_reason else self._reject_stop_reason(reject_category, error_code, retrying),
+                    battle_stop_reason="" if retrying else (budget_stop_reason or self._reject_stop_reason(reject_category, error_code, False)),
+                    step_kind=step_kind,
+                    phase_kind=phase_kind,
+                    reject_category=reject_category,
+                    reject_raw_code=error_code,
+                )
+                if retrying:
+                    return self._step_result(
+                        step_index=step_index,
+                        current_turn_actions=current_turn_actions,
+                        total_actions=total_actions,
+                        stale_action_attempts=stale_action_attempts,
+                        consecutive_failures=consecutive_failures,
+                        pending_end_turn_transition=None,
+                        summary=None,
+                    )
+                return self._step_result(
+                    step_index=step_index,
+                    current_turn_actions=current_turn_actions,
+                    total_actions=total_actions,
+                    stale_action_attempts=stale_action_attempts,
+                    consecutive_failures=consecutive_failures,
+                    pending_end_turn_transition=None,
+                    summary=self._finish(
+                        session_id=session_id,
+                        trace_path=trace_path,
+                        reason=budget_stop_reason or self._reject_stop_reason(reject_category, error_code, False),
+                        completed=False,
+                        interrupted=True,
+                        actions_this_turn=current_turn_actions,
+                        turns_completed=turns_completed,
+                        total_actions=total_actions,
+                        current_turn_index=current_turn_index,
+                    ),
+                )
+
+            interrupted_payload = {
+                "status": "interrupted",
+                "error_code": error_code,
+                "reject_category": reject_category,
+                "message": str(exc),
+                "consecutive_failures": consecutive_failures,
+            }
+            fallback_output = PolicyDecision(
+                action_id=None,
+                reason=str(exc) if is_policy_error else "policy unavailable",
+                halt=True,
+                metadata={"error_code": error_code},
+            )
+            self._publish_agent_status(
+                snapshot=snapshot,
+                policy_output=fallback_output,
+                status="rejected",
+                step_index=step_index,
+                current_turn_index=current_turn_index,
+            )
+            self._record(
+                recorder=recorder,
+                snapshot=snapshot,
+                legal_actions=legal_actions,
+                policy_output=fallback_output,
+                bridge_result=interrupted_payload,
+                interrupted=True,
+                step_index=step_index,
+                current_turn_index=current_turn_index,
+                actions_this_turn=current_turn_actions,
+                total_actions=total_actions,
+                waiting_for_player_turn=False,
+                is_final_step=True,
+                stop_reason=reject_category,
+                battle_stop_reason=reject_category,
+                step_kind=step_kind,
+                phase_kind=phase_kind,
+                reject_category=reject_category,
+                reject_raw_code=error_code,
+            )
+            return self._step_result(
+                step_index=step_index,
+                current_turn_actions=current_turn_actions,
+                total_actions=total_actions,
+                stale_action_attempts=stale_action_attempts,
+                consecutive_failures=consecutive_failures,
+                pending_end_turn_transition=None,
+                summary=self._finish(
+                    session_id=session_id,
+                    trace_path=trace_path,
+                    reason=reject_category,
+                    completed=False,
+                    interrupted=True,
+                    actions_this_turn=current_turn_actions,
+                    turns_completed=turns_completed,
+                    total_actions=total_actions,
+                    current_turn_index=current_turn_index,
+                ),
+            )
+
         if is_policy_error and not self.config.stop_after_player_turn:
             self._note_recovery_attempt(error_code)
             budget_stop_reason = self._battle_budget_stop_reason(
@@ -2534,12 +2950,16 @@ class AutoplayOrchestrator:
             current_turn_index=current_turn_index,
             actions_this_turn=actions_this_turn,
             total_actions=total_actions,
+            rejects_total=self._rejects_total,
+            recoverable_rejects=self._recoverable_rejects,
+            hard_rejects=self._hard_rejects,
             waiting_for_player_turn=waiting_for_player_turn,
             recovery_attempts=self._recovery_attempts,
             recovery_successes=self._recovery_successes,
             recovery_streak=self._recovery_streak,
             pending_recovery_reason=self._pending_recovery_reason,
             last_recovery_reason=self._last_recovery_reason,
+            reject_counts=dict(self._reject_counts),
             metadata=metadata_summary,
             recent_steps=list(self._battle_history[-self.config.battle_context_recent_steps :]),
         )
@@ -2576,6 +2996,8 @@ class AutoplayOrchestrator:
                 if isinstance(bridge_result, dict)
                 else None
             ),
+            "reject_category": bridge_result.get("reject_category") if isinstance(bridge_result, dict) else None,
+            "gate_status": bridge_result.get("gate_status") if isinstance(bridge_result, dict) else None,
         }
         self._battle_history.append(entry)
         max_history = max(1, self.config.battle_context_recent_steps * 2)
@@ -2594,6 +3016,184 @@ class AutoplayOrchestrator:
         self._recovery_successes += 1
         self._recovery_streak = 0
         self._pending_recovery_reason = ""
+
+    @staticmethod
+    def _is_recoverable_reject_category(category: str) -> bool:
+        return category in RECOVERABLE_REJECT_CATEGORIES
+
+    @staticmethod
+    def _classify_reject_category(raw_code: str) -> str:
+        normalized = str(raw_code or "").strip().lower()
+        if normalized in {"stale_decision", "stale_action", "selection_window_changed", "pre_submit_state_drift"}:
+            return "recoverable_stale"
+        if normalized in {
+            "not_player_turn",
+            "pending_transition",
+            "pending_end_turn_transition",
+            "non_player_window",
+            "transition_window",
+        }:
+            return "recoverable_timing"
+        if normalized in {
+            "policy_invalid_action",
+            "policy_invalid_action_args",
+            "illegal_action",
+            "invalid_action",
+            "invalid_payload",
+        }:
+            return "invalid_policy_decision"
+        return "hard_runtime_reject"
+
+    def _note_reject(
+        self,
+        *,
+        category: str,
+        raw_code: str,
+        snapshot,
+        selected_action=None,
+        step_index: int,
+        message: str,
+        gate_intercepted: bool = False,
+        context: dict[str, Any] | None = None,
+    ) -> None:
+        self._rejects_total += 1
+        self._reject_counts[category] = self._reject_counts.get(category, 0) + 1
+        self._reject_code_counts[raw_code] = self._reject_code_counts.get(raw_code, 0) + 1
+        if self._is_recoverable_reject_category(category):
+            self._recoverable_rejects += 1
+        else:
+            self._hard_rejects += 1
+        if gate_intercepted:
+            self._gate_intercepts += 1
+
+        metadata = getattr(snapshot, "metadata", {}) or {}
+        reject_context = {
+            "category": category,
+            "raw_code": raw_code,
+            "phase": getattr(snapshot, "phase", ""),
+            "decision_id": getattr(snapshot, "decision_id", ""),
+            "state_version": getattr(snapshot, "state_version", 0),
+            "window_kind": str(metadata.get("window_kind") or ""),
+            "current_side": str(metadata.get("current_side") or metadata.get("turn_owner") or ""),
+            "transition_kind": str(metadata.get("transition_kind") or ""),
+            "selection_kind": str(metadata.get("selection_kind") or ""),
+            "reward_subphase": str(metadata.get("reward_subphase") or ""),
+            "step_index": step_index,
+            "message": message,
+            "gate_intercepted": gate_intercepted,
+        }
+        if selected_action is not None:
+            reject_context["action_id"] = getattr(selected_action, "action_id", None)
+            reject_context["action_label"] = getattr(selected_action, "label", None)
+            reject_context["action_type"] = getattr(selected_action, "type", None)
+        if context:
+            reject_context["context"] = dict(context)
+        self._last_reject = reject_context
+
+    def _pre_submit_gate(
+        self,
+        *,
+        snapshot,
+        selected_action,
+    ) -> dict[str, Any]:
+        latest_snapshot, latest_legal_actions = self._read_consistent_state(snapshot.session_id)
+        latest_legal_actions = self._effective_legal_actions(latest_snapshot, latest_legal_actions)
+        latest_by_id = {action.action_id: action for action in latest_legal_actions}
+        latest_metadata = getattr(latest_snapshot, "metadata", {}) or {}
+        gate_context = {
+            "observed_phase": getattr(latest_snapshot, "phase", ""),
+            "observed_decision_id": getattr(latest_snapshot, "decision_id", ""),
+            "observed_state_version": getattr(latest_snapshot, "state_version", 0),
+            "observed_window_kind": str(latest_metadata.get("window_kind") or ""),
+            "observed_current_side": str(latest_metadata.get("current_side") or latest_metadata.get("turn_owner") or ""),
+            "observed_transition_kind": str(latest_metadata.get("transition_kind") or ""),
+            "observed_selection_kind": str(latest_metadata.get("selection_kind") or ""),
+        }
+
+        if (
+            latest_snapshot.decision_id != snapshot.decision_id
+            or latest_snapshot.state_version != snapshot.state_version
+        ):
+            return {
+                "allowed": False,
+                "category": "recoverable_stale",
+                "raw_code": "pre_submit_state_drift",
+                "message": "state drifted before submit; reobserve before applying action",
+                "context": gate_context,
+            }
+
+        latest_phase = self._normalize_phase(getattr(latest_snapshot, "phase", ""))
+        if latest_phase != "combat":
+            return {
+                "allowed": False,
+                "category": "recoverable_timing",
+                "raw_code": "pending_transition",
+                "message": "combat action gated because the phase changed before submit",
+                "context": gate_context,
+            }
+
+        if not self._is_player_turn(latest_snapshot):
+            return {
+                "allowed": False,
+                "category": "recoverable_timing",
+                "raw_code": "not_player_turn",
+                "message": "combat action gated because it is no longer the player turn",
+                "context": gate_context,
+            }
+
+        window_kind = str(latest_metadata.get("window_kind") or "").strip().lower()
+        transition_kind = str(latest_metadata.get("transition_kind") or "").strip().lower()
+        if (
+            window_kind in TRANSITION_WINDOW_KINDS
+            or transition_kind
+            or bool(latest_metadata.get("reward_pending"))
+        ):
+            gate_context["observed_reward_pending"] = bool(latest_metadata.get("reward_pending"))
+            return {
+                "allowed": False,
+                "category": "recoverable_timing",
+                "raw_code": "transition_window",
+                "message": "combat action gated because the runtime is in a transition window",
+                "context": gate_context,
+            }
+
+        in_selection_window = window_kind == "combat_card_selection"
+        selected_is_selection_action = selected_action.type in SELECTION_ACTION_TYPES
+        if in_selection_window != selected_is_selection_action:
+            return {
+                "allowed": False,
+                "category": "recoverable_stale",
+                "raw_code": "selection_window_changed",
+                "message": "combat action gated because the selection window changed before submit",
+                "context": gate_context,
+            }
+
+        refreshed_action = latest_by_id.get(selected_action.action_id)
+        if refreshed_action is None:
+            return {
+                "allowed": False,
+                "category": "recoverable_stale",
+                "raw_code": "stale_action",
+                "message": "combat action gated because the selected action is no longer legal",
+                "context": gate_context,
+            }
+
+        gate_context["gate_status"] = "passed"
+        return {
+            "allowed": True,
+            "snapshot": latest_snapshot,
+            "legal_actions": latest_legal_actions,
+            "selected_action": refreshed_action,
+            "context": gate_context,
+        }
+
+    @classmethod
+    def _reject_stop_reason(cls, category: str, raw_code: str, retrying: bool) -> str:
+        if retrying:
+            return f"{raw_code}_retry"
+        if category in {"invalid_policy_decision", "hard_runtime_reject"}:
+            return category
+        return raw_code
 
     def _supports_battle_context(self) -> bool:
         try:
@@ -2647,6 +3247,10 @@ class AutoplayOrchestrator:
         step_kind: str | None = None,
         phase_kind: str | None = None,
         transition_elapsed_seconds: float = 0.0,
+        reject_category: str = "",
+        reject_raw_code: str = "",
+        gate_status: str = "",
+        gate_reason: str = "",
     ) -> None:
         effective_phase_kind = phase_kind or self._phase_kind(
             snapshot,
@@ -2680,10 +3284,17 @@ class AutoplayOrchestrator:
                 actions_this_turn=actions_this_turn,
                 total_actions=total_actions,
                 waiting_for_player_turn=waiting_for_player_turn,
+                rejects_total=self._rejects_total,
+                recoverable_rejects=self._recoverable_rejects,
+                hard_rejects=self._hard_rejects,
                 recovery_attempts=self._recovery_attempts,
                 recovery_successes=self._recovery_successes,
                 recovery_streak=self._recovery_streak,
                 last_recovery_reason=self._last_recovery_reason,
+                reject_category=reject_category,
+                reject_raw_code=reject_raw_code,
+                gate_status=gate_status,
+                gate_reason=gate_reason,
                 phase_kind=effective_phase_kind,
                 step_kind=effective_step_kind,
                 transition_elapsed_seconds=transition_elapsed_seconds,
@@ -2746,6 +3357,13 @@ class AutoplayOrchestrator:
             map_actions_taken=self._map_actions_taken,
             non_combat_steps=self._non_combat_steps,
             next_combat_entered=self._next_combat_entered,
+            rejects_total=self._rejects_total,
+            recoverable_rejects=self._recoverable_rejects,
+            hard_rejects=self._hard_rejects,
+            gate_intercepts=self._gate_intercepts,
+            reject_counts=dict(self._reject_counts),
+            reject_code_counts=dict(self._reject_code_counts),
+            last_reject=dict(self._last_reject),
             recovery_attempts=self._recovery_attempts,
             recovery_successes=self._recovery_successes,
             recovery_streak=self._recovery_streak,
@@ -2795,13 +3413,13 @@ class AutoplayOrchestrator:
         if reward_mode not in {"skip", "skip-only", "safe-default"}:
             return None
         skip_action = next((action for action in legal_actions if action.type == "skip_reward"), None)
-        if skip_action is not None:
+        if skip_action is not None and reward_mode in {"skip", "skip-only"}:
             return skip_action
         if reward_mode in {"skip", "skip-only"}:
             return None
         reward_actions = [action for action in legal_actions if action.type == "choose_reward"]
         if not reward_actions:
-            return None
+            return skip_action
         for action in reward_actions:
             label = str(action.label or action.params.get("reward") or "").lower()
             if "gold" in label or "金币" in label:

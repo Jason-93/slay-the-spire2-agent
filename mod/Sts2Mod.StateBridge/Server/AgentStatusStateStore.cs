@@ -50,6 +50,12 @@ internal static class AgentStatusStateStore
     {
         lock (Gate)
         {
+            if (_current is not null
+                && !string.Equals(_current.SessionId, request.SessionId, StringComparison.Ordinal))
+            {
+                History.Clear();
+            }
+
             _current = new StoredAgentStatus(
                 request.SessionId!.Trim(),
                 request.Phase!.Trim(),
@@ -73,6 +79,14 @@ internal static class AgentStatusStateStore
         lock (Gate)
         {
             return CreateResponse(_current, DateTimeOffset.UtcNow);
+        }
+    }
+
+    internal static AgentStatusResponse GetCurrent(DateTimeOffset now)
+    {
+        lock (Gate)
+        {
+            return CreateResponse(_current, now);
         }
     }
 
