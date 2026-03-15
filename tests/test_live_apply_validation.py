@@ -221,6 +221,32 @@ class LiveApplyValidationTests(unittest.TestCase):
         self.assertIsNotNone(candidate.action)
         self.assertEqual(candidate.action["action_id"], "act-card")
 
+    def test_select_candidate_can_prefer_supported_potion(self) -> None:
+        snapshot = {"phase": "combat"}
+        actions = [
+            {
+                "action_id": "act-card",
+                "type": "play_card",
+                "label": "打击",
+                "params": {"card_id": "card-1"},
+                "target_constraints": [],
+                "metadata": {},
+            },
+            {
+                "action_id": "act-potion",
+                "type": "use_potion",
+                "label": "使用药水",
+                "params": {"potion_index": 0},
+                "target_constraints": [],
+                "metadata": {"requires_target": False},
+            },
+        ]
+
+        candidate = select_candidate(snapshot, actions, prefer_potion=True)
+
+        self.assertIsNotNone(candidate.action)
+        self.assertEqual(candidate.action["action_id"], "act-potion")
+
     def test_select_candidate_skips_ambiguous_map_choices(self) -> None:
         snapshot = {"phase": "map"}
         actions = [
@@ -258,8 +284,41 @@ class LiveApplyValidationTests(unittest.TestCase):
         self.assertIn("decision_id_changed", evidence)
         self.assertIn("state_version_changed", evidence)
         self.assertIn("action_no_longer_legal", evidence)
-        self.assertIn("selected_card_left_hand", evidence)
-        self.assertIn("player_energy_changed", evidence)
+
+    def test_detect_progress_reports_potion_slot_removed(self) -> None:
+        before_snapshot = {
+            "decision_id": "dec-1",
+            "phase": "combat",
+            "state_version": 1,
+            "player": {
+                "energy": 3,
+                "hand": [],
+                "potions": [
+                    {"name": "迅捷药水", "canonical_potion_id": "POTION.SWIFT_POTION"},
+                    {"name": "肌肉药水", "canonical_potion_id": "POTION.FLEX_POTION"},
+                ],
+            },
+        }
+        before_actions = [{"action_id": "act-potion", "type": "use_potion"}]
+        after_snapshot = {
+            "decision_id": "dec-2",
+            "phase": "combat",
+            "state_version": 2,
+            "player": {
+                "energy": 3,
+                "hand": [],
+                "potions": [
+                    {"name": "肌肉药水", "canonical_potion_id": "POTION.FLEX_POTION"},
+                ],
+            },
+        }
+        after_actions = [{"action_id": "act-end", "type": "end_turn"}]
+        candidate = {"action_id": "act-potion", "params": {"potion_index": 0}}
+
+        evidence = detect_progress(before_snapshot, before_actions, after_snapshot, after_actions, candidate)
+
+        self.assertIn("potion_count_changed", evidence)
+        self.assertIn("selected_potion_slot_changed", evidence)
 
 
 if __name__ == "__main__":

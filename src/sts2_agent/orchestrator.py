@@ -2698,12 +2698,10 @@ class AutoplayOrchestrator:
     def _effective_legal_actions(snapshot, legal_actions):
         player = getattr(snapshot, "player", None)
         if player is None:
-            return [action for action in legal_actions if action.type != "use_potion"]
+            return list(legal_actions)
         hand_by_id = {card.card_id: card for card in player.hand}
         effective_actions = []
         for action in legal_actions:
-            if action.type == "use_potion":
-                continue
             if action.type != "play_card":
                 effective_actions.append(action)
                 continue

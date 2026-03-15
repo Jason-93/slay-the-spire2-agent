@@ -94,7 +94,31 @@ def read_actions(base_url: str) -> list[dict[str, Any]]:
     return [action for action in payload if isinstance(action, dict)]
 
 
-def action_priority(action: dict[str, Any], phase: str, action_counts: dict[str, int]) -> tuple[int, str]:
+def extract_player_potions(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    player = snapshot.get("player")
+    if not isinstance(player, dict):
+        return []
+    potions = player.get("potions")
+    if not isinstance(potions, list):
+        return []
+    return [potion for potion in potions if isinstance(potion, dict)]
+
+
+def action_supports_direct_potion_use(action: dict[str, Any]) -> tuple[bool, str]:
+    metadata = action.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    if bool(metadata.get("requires_target")):
+        return False, "药水需要显式目标，当前验证脚本不会自动猜测目标。"
+    return True, "药水动作不要求显式目标，可纳入 live apply 验证。"
+
+
+def action_priority(
+    action: dict[str, Any],
+    phase: str,
+    action_counts: dict[str, int],
+    *,
+    prefer_potion: bool = False,
+) -> tuple[int, str]:
     action_type = str(action.get("type") or "")
     params = action.get("params")
     params = params if isinstance(params, dict) else {}
@@ -107,6 +131,12 @@ def action_priority(action: dict[str, Any], phase: str, action_counts: dict[str,
         selection_kind = str(metadata.get("selection_kind") or "")
         if action_type == "choose_combat_card" and params.get("card_id"):
             return 120, f"当前处于战斗额外选牌窗口，优先执行 choose_combat_card（selection_kind={selection_kind or 'unknown'}）。"
+        if action_type == "use_potion" and params.get("potion_index") is not None:
+            supported, note = action_supports_direct_potion_use(action)
+            if not supported:
+                return 0, note
+            priority = 110 if prefer_potion else 80
+            return priority, ("显式要求优先验证药水动作。" if prefer_potion else "当前支持直接执行的 use_potion，可作为战斗写入候选。")
         if action_type == "cancel_combat_selection":
             return 40, "战斗额外选牌窗口允许取消，但默认优先级低于 choose_combat_card。"
         if action_type == "play_card" and params.get("card_id") and not target_constraints:
@@ -138,6 +168,8 @@ def select_candidate(
     snapshot: dict[str, Any],
     actions: list[dict[str, Any]],
     requested_action_id: str | None = None,
+    *,
+    prefer_potion: bool = False,
 ) -> CandidateSelection:
     phase = str(snapshot.get("phase") or "unknown")
 
@@ -165,7 +197,7 @@ def select_candidate(
     ranked: list[tuple[int, int, dict[str, Any], str]] = []
     rejected_notes: list[str] = []
     for index, action in enumerate(actions):
-        score, note = action_priority(action, phase, action_counts)
+        score, note = action_priority(action, phase, action_counts, prefer_potion=prefer_potion)
         if score > 0:
             ranked.append((score, -index, action, note))
         else:
@@ -239,6 +271,21 @@ def detect_progress(
     if isinstance(before_player, dict) and isinstance(after_player, dict):
         if before_player.get("energy") != after_player.get("energy"):
             evidence.append("player_energy_changed")
+        before_potions = extract_player_potions(before_snapshot)
+        after_potions = extract_player_potions(after_snapshot)
+        if len(before_potions) != len(after_potions):
+            evidence.append("potion_count_changed")
+        potion_index = params.get("potion_index")
+        if isinstance(potion_index, int):
+            if potion_index >= len(after_potions):
+                evidence.append("selected_potion_slot_removed")
+            elif potion_index < len(before_potions):
+                before_potion = before_potions[potion_index]
+                after_potion = after_potions[potion_index]
+                if before_potion.get("canonical_potion_id") != after_potion.get("canonical_potion_id"):
+                    evidence.append("selected_potion_slot_changed")
+                elif before_potion.get("name") != after_potion.get("name"):
+                    evidence.append("selected_potion_name_changed")
 
     return evidence
 
@@ -722,6 +769,8 @@ def build_result(
     after_schema_summary: dict[str, Any] | None = None,
     runtime_log_summary: dict[str, Any] | None = None,
     description_audit: dict[str, Any] | None = None,
+    before_potions: list[dict[str, Any]] | None = None,
+    after_potions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return {
         "mode": mode,
@@ -740,6 +789,8 @@ def build_result(
         "after_schema_summary": after_schema_summary,
         "runtime_log_summary": runtime_log_summary,
         "description_audit": description_audit,
+        "before_potions": before_potions,
+        "after_potions": after_potions,
         "verdict": verdict,
         "summary": summary,
         "http_status": http_status,
@@ -814,11 +865,13 @@ def run_validation(args: argparse.Namespace) -> int:
     write_json(artifact_dir / "before_schema_summary.json", before_schema_summary)
     before_description_audit = audit_card_descriptions(snapshot, actions)
     write_json(artifact_dir / "before_description_audit.json", before_description_audit)
+    before_potions = extract_player_potions(snapshot)
+    write_json(artifact_dir / "before_potions.json", before_potions)
     runtime_log_summary = summarize_runtime_log(discover_runtime_log())
     if runtime_log_summary is not None:
         write_json(artifact_dir / "runtime_log_summary.json", runtime_log_summary)
 
-    candidate = select_candidate(snapshot, actions, args.action_id)
+    candidate = select_candidate(snapshot, actions, args.action_id, prefer_potion=args.prefer_potion)
     write_json(
         artifact_dir / "candidate.json",
         {
@@ -843,6 +896,7 @@ def run_validation(args: argparse.Namespace) -> int:
             before_schema_summary=before_schema_summary,
             runtime_log_summary=runtime_log_summary,
             description_audit=before_description_audit,
+            before_potions=before_potions,
         )
         write_json(artifact_dir / "result.json", result)
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -862,6 +916,7 @@ def run_validation(args: argparse.Namespace) -> int:
             before_schema_summary=before_schema_summary,
             runtime_log_summary=runtime_log_summary,
             description_audit=before_description_audit,
+            before_potions=before_potions,
         )
         write_json(artifact_dir / "result.json", result)
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -881,6 +936,7 @@ def run_validation(args: argparse.Namespace) -> int:
             before_schema_summary=before_schema_summary,
             runtime_log_summary=runtime_log_summary,
             description_audit=before_description_audit,
+            before_potions=before_potions,
         )
         write_json(artifact_dir / "result.json", result)
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -900,6 +956,7 @@ def run_validation(args: argparse.Namespace) -> int:
             before_schema_summary=before_schema_summary,
             runtime_log_summary=runtime_log_summary,
             description_audit=before_description_audit,
+            before_potions=before_potions,
         )
         write_json(artifact_dir / "result.json", result)
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -919,6 +976,7 @@ def run_validation(args: argparse.Namespace) -> int:
             before_schema_summary=before_schema_summary,
             runtime_log_summary=runtime_log_summary,
             description_audit=before_description_audit,
+            before_potions=before_potions,
         )
         write_json(artifact_dir / "result.json", result)
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -938,6 +996,7 @@ def run_validation(args: argparse.Namespace) -> int:
             before_schema_summary=before_schema_summary,
             runtime_log_summary=runtime_log_summary,
             description_audit=before_description_audit,
+            before_potions=before_potions,
         )
         write_json(artifact_dir / "result.json", result)
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -975,6 +1034,8 @@ def run_validation(args: argparse.Namespace) -> int:
     write_json(artifact_dir / "after_schema_summary.json", after_schema_summary)
     after_description_audit = audit_card_descriptions(after_snapshot, after_actions)
     write_json(artifact_dir / "after_description_audit.json", after_description_audit)
+    after_potions = extract_player_potions(after_snapshot)
+    write_json(artifact_dir / "after_potions.json", after_potions)
     runtime_log_summary = summarize_runtime_log(discover_runtime_log())
     if runtime_log_summary is not None:
         write_json(artifact_dir / "runtime_log_summary.json", runtime_log_summary)
@@ -1043,6 +1104,8 @@ def run_validation(args: argparse.Namespace) -> int:
         after_schema_summary=after_schema_summary,
         runtime_log_summary=runtime_log_summary,
         description_audit=after_description_audit,
+        before_potions=before_potions,
+        after_potions=after_potions,
     )
     write_json(artifact_dir / "result.json", result)
     print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -1056,6 +1119,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--wait-seconds", type=float, default=30.0, help="How long to wait for bridge /health.")
     parser.add_argument("--artifact-root", help="Override output root for validation artifacts.")
     parser.add_argument("--action-id", help="Use a specific action_id instead of automatic candidate selection.")
+    parser.add_argument(
+        "--prefer-potion",
+        action="store_true",
+        help="When auto-selecting in combat, prefer a directly usable use_potion action over play_card.",
+    )
     parser.add_argument("--launch", action="store_true", help="Build, install, and launch the game before validation.")
     parser.add_argument(
         "--enable-writes",

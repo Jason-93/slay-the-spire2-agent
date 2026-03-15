@@ -96,6 +96,7 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                 _currentPhase = DecisionPhase.Map;
                 break;
             case "play_card":
+            case "use_potion":
             case "end_turn":
                 _currentPhase = DecisionPhase.Reward;
                 _rewardStage = 0;
@@ -125,11 +126,19 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
         }
 
         var nextSnapshot = Export(null).Snapshot;
-        return Accept(request, action, "Fixture action applied.", new Dictionary<string, object?>
+        var metadata = new Dictionary<string, object?>
         {
             ["next_decision_id"] = nextSnapshot.DecisionId,
             ["next_phase"] = nextSnapshot.Phase,
-        });
+        };
+        if (string.Equals(action.Type, "use_potion", StringComparison.Ordinal))
+        {
+            metadata["action_type"] = "use_potion";
+            metadata["potion_index"] = action.Params.TryGetValue("potion_index", out var potionIndex) ? potionIndex : null;
+            metadata["runtime_handler"] = "fixture.use_potion";
+        }
+
+        return Accept(request, action, "Fixture action applied.", metadata);
     }
 
     private ExportedWindow Export(string? requestedPhase)

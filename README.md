@@ -82,6 +82,18 @@ python tools/validate_live_apply.py \
 
 Each run writes structured artifacts to `tmp/live-apply-validation/<timestamp>/`, including `health.json`, `before_snapshot.json`, `before_actions.json`, `apply_request.json`, `apply_response.json`, `after_snapshot.json`, `after_actions.json`, and `result.json`.
 
+To explicitly validate potion execution in a live combat, prefer a directly usable `use_potion` action:
+
+```bash
+python tools/validate_live_apply.py \
+  --apply \
+  --allow-write \
+  --enable-writes \
+  --prefer-potion
+```
+
+Current support covers potions that do not require an explicit target parameter. If a potion needs a live target selection that the bridge cannot safely infer, `/apply` rejects it with `target_required`.
+
 ### Reward -> Map -> Next Battle Validation
 
 When the game is already at a reward or map window and the bridge allows writes, you can validate the full transition with a conservative default policy:

@@ -16,6 +16,7 @@ from sts2_agent.bridge import (
     StaleActionError,
 )
 from sts2_agent.models import ActionSubmission
+from sts2_agent.models import ActionStatus
 
 
 class MockBridgeTests(unittest.TestCase):
@@ -88,6 +89,23 @@ class MockBridgeTests(unittest.TestCase):
                     action_id="act-not-legal",
                 )
             )
+
+    def test_bridge_accepts_use_potion_action(self) -> None:
+        snapshot = self.bridge.get_snapshot(self.session.session_id)
+        use_potion = next(action for action in self.bridge.get_legal_actions(self.session.session_id) if action.type == "use_potion")
+
+        result = self.bridge.submit_action(
+            ActionSubmission(
+                session_id=snapshot.session_id,
+                decision_id=snapshot.decision_id,
+                state_version=snapshot.state_version,
+                action_id=use_potion.action_id,
+            )
+        )
+
+        self.assertEqual(result.status, ActionStatus.ACCEPTED)
+        self.assertEqual(result.accepted_action_id, use_potion.action_id)
+        self.assertEqual(result.metadata["phase"], "reward")
 
 
 class FakeHttpResponse:

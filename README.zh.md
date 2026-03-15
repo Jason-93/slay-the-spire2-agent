@@ -82,6 +82,18 @@ python tools/validate_live_apply.py \
 
 每次执行都会在 `tmp/live-apply-validation/<timestamp>/` 下输出结构化 artifacts，包括 `health.json`、`before_snapshot.json`、`before_actions.json`、`apply_request.json`、`apply_response.json`、`after_snapshot.json`、`after_actions.json` 和 `result.json`。
 
+如果要显式验证战斗中的药水执行链路，可优先选择直接可用的 `use_potion`：
+
+```bash
+python tools/validate_live_apply.py \
+  --apply \
+  --allow-write \
+  --enable-writes \
+  --prefer-potion
+```
+
+当前已支持“不需要显式目标参数”的药水动作；如果某瓶药水必须额外指定目标，而 bridge 还不能安全推断目标，`/apply` 会返回 `target_required`。
+
 ### reward -> map -> 下一场战斗链路验证
 
 当游戏已经来到 reward 或 map 窗口，且 bridge 允许写入时，可用保守默认策略验证整段过渡链路：

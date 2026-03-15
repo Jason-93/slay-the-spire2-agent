@@ -26,6 +26,21 @@ internal sealed class RuntimeActionResult(bool accepted, string message, string?
     public IReadOnlyDictionary<string, object?> Metadata { get; } = metadata ?? new Dictionary<string, object?>();
 }
 
+internal sealed record PotionTargetProbe(
+    bool RequiresTarget,
+    string? TargetType,
+    string? Usage,
+    string? SelectionPrompt,
+    string ProbeSource,
+    string? ProbeMessage);
+
+internal sealed record ResolvedPotionAction(
+    object Slot,
+    object PotionModel,
+    RuntimePotionState PotionState,
+    object? Holder,
+    string HolderResolution);
+
 internal sealed record EnemyMoveNameResolution(
     string? Value,
     string? SuppressedReason = null,
@@ -386,6 +401,7 @@ internal sealed class Sts2RuntimeReflectionReader
         return action.Type switch
         {
             "play_card" => ExecutePlayCard(root.RunNode, root.RunState, request, action),
+            "use_potion" => ExecuteUsePotion(root.RunNode, root.RunState, request, action),
             "end_turn" => ExecuteEndTurn(root.RunState, request),
             "choose_combat_card" => ExecuteChooseCombatCard(root.RunNode, root.RunState, request, action),
             "cancel_combat_selection" => ExecuteCancelCombatSelection(root.RunNode, root.RunState, request, action),
@@ -1405,6 +1421,8 @@ internal sealed class Sts2RuntimeReflectionReader
                 actionMetadata));
         }
 
+        var livePlayer = GetPlayers(runState).FirstOrDefault();
+        var livePotionSlots = EnumerateObjects(ResolvePotionCollection(livePlayer)).ToList();
         if (player is not null)
         {
             for (var potionIndex = 0; potionIndex < player.Potions.Count; potionIndex += 1)
@@ -1420,6 +1438,28 @@ internal sealed class Sts2RuntimeReflectionReader
                 if (potionPreview.Count > 0)
                 {
                     actionMetadata["potion_preview"] = potionPreview;
+                }
+                if (potionIndex >= 0 && potionIndex < livePotionSlots.Count)
+                {
+                    var potionSource = ResolvePotionActionModel(livePotionSlots[potionIndex]);
+                    if (potionSource is not null)
+                    {
+                        var probe = ProbePotionTargetRequirement(potionSource);
+                        if (!string.IsNullOrWhiteSpace(probe.TargetType))
+                        {
+                            actionMetadata["target_type"] = probe.TargetType;
+                        }
+                        if (!string.IsNullOrWhiteSpace(probe.Usage))
+                        {
+                            actionMetadata["potion_usage"] = probe.Usage;
+                        }
+                        if (!string.IsNullOrWhiteSpace(probe.SelectionPrompt))
+                        {
+                            actionMetadata["selection_prompt"] = probe.SelectionPrompt;
+                        }
+
+                        actionMetadata["requires_target"] = probe.RequiresTarget;
+                    }
                 }
 
                 actions.Add(new RuntimeActionDefinition(
@@ -6898,6 +6938,457 @@ internal sealed class Sts2RuntimeReflectionReader
                 ["overlay_top_type"] = OverlayTopType,
             };
         }
+    }
+
+    private RuntimeActionResult ExecuteUsePotion(object runNode, object runState, ActionRequest request, LegalAction action)
+    {
+        var metadata = new Dictionary<string, object?>
+        {
+            ["action_type"] = "use_potion",
+            ["runtime_handler_candidates"] = new[]
+            {
+                "potion_model.EnqueueManualUse",
+                "potion_holder.UsePotion",
+            },
+        };
+
+        if (!IsPlayerTurn(runState))
+        {
+            metadata["failure_stage"] = "phase_gate";
+            return new RuntimeActionResult(false, "Potions can only be used during the player's turn.", "not_player_turn", metadata);
+        }
+
+        var potionIndex = GetNullableIntFromObject(GetDictionaryValue(action.Params, "potion_index"));
+        if (potionIndex is null)
+        {
+            metadata["failure_stage"] = "action_validation";
+            return new RuntimeActionResult(false, "Action does not contain a potion_index.", "invalid_action", metadata);
+        }
+
+        metadata["potion_index"] = potionIndex.Value;
+        var requestedCanonicalPotionId = ConvertToText(GetDictionaryValue(action.Params, "canonical_potion_id"));
+        var requestedPotionName = ConvertToText(GetDictionaryValue(action.Params, "potion"));
+        if (!string.IsNullOrWhiteSpace(requestedCanonicalPotionId))
+        {
+            metadata["canonical_potion_id"] = requestedCanonicalPotionId;
+        }
+
+        if (!string.IsNullOrWhiteSpace(requestedPotionName))
+        {
+            metadata["potion_name"] = requestedPotionName;
+        }
+
+        var player = GetPlayers(runState).FirstOrDefault();
+        if (player is null)
+        {
+            metadata["failure_stage"] = "player_resolution";
+            return new RuntimeActionResult(false, "Player state is not available.", "runtime_not_ready", metadata);
+        }
+
+        if (!TryResolvePotionAction(runNode, player, potionIndex.Value, requestedCanonicalPotionId, requestedPotionName, metadata, out var resolved, out var errorCode, out var errorMessage))
+        {
+            metadata["failure_stage"] ??= "potion_resolution";
+            return new RuntimeActionResult(false, errorMessage ?? "Potion is no longer available.", errorCode ?? "stale_action", metadata);
+        }
+
+        metadata["holder_resolution"] = resolved!.HolderResolution;
+        metadata["holder_found"] = resolved.Holder is not null;
+        if (resolved.Holder is not null)
+        {
+            metadata["holder_type"] = GetTypeName(resolved.Holder);
+            metadata["holder_usable"] = GetBoolean(resolved.Holder, "IsPotionUsable", defaultValue: true);
+        }
+
+        var probe = ProbePotionTargetRequirement(resolved.PotionModel);
+        if (!string.IsNullOrWhiteSpace(probe.TargetType))
+        {
+            metadata["target_type"] = probe.TargetType;
+        }
+
+        if (!string.IsNullOrWhiteSpace(probe.Usage))
+        {
+            metadata["potion_usage"] = probe.Usage;
+        }
+
+        if (!string.IsNullOrWhiteSpace(probe.SelectionPrompt))
+        {
+            metadata["selection_prompt"] = probe.SelectionPrompt;
+        }
+
+        metadata["target_probe_source"] = probe.ProbeSource;
+        if (!string.IsNullOrWhiteSpace(probe.ProbeMessage))
+        {
+            metadata["target_probe_message"] = probe.ProbeMessage;
+        }
+
+        if (probe.RequiresTarget)
+        {
+            metadata["failure_stage"] = "target_validation";
+            metadata["requires_target"] = true;
+            return new RuntimeActionResult(false, "This potion requires an explicit target.", "target_required", metadata);
+        }
+
+        metadata["requires_target"] = false;
+
+        if (GetBoolean(resolved.PotionModel, "HasBeenRemovedFromState"))
+        {
+            metadata["failure_stage"] = "potion_resolution";
+            return new RuntimeActionResult(false, "Potion has already been removed from the live state.", "stale_action", metadata);
+        }
+
+        if (!GetBoolean(resolved.PotionModel, "PassesCustomUsabilityCheck", defaultValue: true))
+        {
+            metadata["failure_stage"] = "usability_check";
+            return new RuntimeActionResult(false, "Current rules do not allow this potion to be used.", "not_allowed", metadata);
+        }
+
+        if (resolved.Holder is not null && !GetBoolean(resolved.Holder, "IsPotionUsable", defaultValue: true))
+        {
+            metadata["failure_stage"] = "usability_check";
+            return new RuntimeActionResult(false, "Potion holder is currently not usable.", "not_allowed", metadata);
+        }
+
+        if (TryExecutePotionViaModel(resolved.PotionModel, metadata, out var modelFailure))
+        {
+            metadata["runtime_handler"] = "potion_model.EnqueueManualUse";
+            return new RuntimeActionResult(true, $"Used potion '{resolved.PotionState.Name}'.", metadata: metadata);
+        }
+
+        string? holderFailure = null;
+        if (resolved.Holder is not null && TryExecutePotionViaHolder(resolved.Holder, metadata, out holderFailure))
+        {
+            metadata["runtime_handler"] = "potion_holder.UsePotion";
+            return new RuntimeActionResult(true, $"Used potion '{resolved.PotionState.Name}'.", metadata: metadata);
+        }
+
+        metadata["failure_stage"] = "runtime_handler";
+        if (!string.IsNullOrWhiteSpace(modelFailure))
+        {
+            metadata["model_handler_failure"] = modelFailure;
+        }
+
+        if (!string.IsNullOrWhiteSpace(holderFailure))
+        {
+            metadata["holder_handler_failure"] = holderFailure;
+        }
+
+        return new RuntimeActionResult(false, "Potion runtime handlers are not available in this runtime.", "runtime_incompatible", metadata);
+    }
+
+    private bool TryResolvePotionAction(
+        object runNode,
+        object player,
+        int potionIndex,
+        string? requestedCanonicalPotionId,
+        string? requestedPotionName,
+        Dictionary<string, object?> metadata,
+        out ResolvedPotionAction? resolved,
+        out string? errorCode,
+        out string? errorMessage)
+    {
+        resolved = null;
+        errorCode = null;
+        errorMessage = null;
+
+        var potionCollection = ResolvePotionCollection(player);
+        var slots = EnumerateObjects(potionCollection).ToList();
+        metadata["live_potion_slot_count"] = slots.Count;
+        if (potionIndex < 0 || potionIndex >= slots.Count)
+        {
+            metadata["failure_stage"] = "potion_resolution";
+            errorCode = "stale_action";
+            errorMessage = "Potion slot is no longer available.";
+            return false;
+        }
+
+        var slot = slots[potionIndex];
+        var textDiagnostics = new TextDiagnosticsCollector();
+        var potionState = DescribePotion(slot, $"apply.use_potion[{potionIndex}]", textDiagnostics);
+        if (potionState is null)
+        {
+            metadata["failure_stage"] = "potion_resolution";
+            errorCode = "stale_action";
+            errorMessage = "Potion slot no longer contains a usable potion.";
+            return false;
+        }
+
+        var potionModel = ResolvePotionActionModel(slot);
+        if (potionModel is null)
+        {
+            metadata["failure_stage"] = "potion_resolution";
+            errorCode = "runtime_incompatible";
+            errorMessage = "Could not resolve the live potion model for this action.";
+            return false;
+        }
+
+        metadata["live_potion_name"] = potionState.Name;
+        if (!string.IsNullOrWhiteSpace(potionState.CanonicalPotionId))
+        {
+            metadata["live_canonical_potion_id"] = potionState.CanonicalPotionId;
+        }
+
+        metadata["live_potion_preview"] = BuildPotionPreview(potionState);
+
+        if (!PotionMatchesRequestedAction(potionState, requestedCanonicalPotionId, requestedPotionName, metadata))
+        {
+            metadata["failure_stage"] = "consistency_check";
+            errorCode = "stale_action";
+            errorMessage = "Potion slot no longer matches the exported action.";
+            return false;
+        }
+
+        var holder = ResolvePotionHolder(runNode, potionIndex, potionModel, potionState, metadata, out var holderResolution);
+        resolved = new ResolvedPotionAction(slot, potionModel, potionState, holder, holderResolution);
+        return true;
+    }
+
+    private bool PotionMatchesRequestedAction(
+        RuntimePotionState potionState,
+        string? requestedCanonicalPotionId,
+        string? requestedPotionName,
+        Dictionary<string, object?> metadata)
+    {
+        if (!string.IsNullOrWhiteSpace(requestedCanonicalPotionId) &&
+            !string.IsNullOrWhiteSpace(potionState.CanonicalPotionId) &&
+            !string.Equals(requestedCanonicalPotionId, potionState.CanonicalPotionId, StringComparison.OrdinalIgnoreCase))
+        {
+            metadata["consistency_error"] = "canonical_potion_id_changed";
+            metadata["requested_canonical_potion_id"] = requestedCanonicalPotionId;
+            metadata["live_canonical_potion_id"] = potionState.CanonicalPotionId;
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(requestedPotionName) &&
+            !string.IsNullOrWhiteSpace(potionState.Name) &&
+            !string.Equals(
+                NormalizeComparisonText(requestedPotionName),
+                NormalizeComparisonText(potionState.Name),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            metadata["consistency_error"] = "potion_name_changed";
+            metadata["requested_potion_name"] = requestedPotionName;
+            metadata["live_potion_name"] = potionState.Name;
+            return false;
+        }
+
+        return true;
+    }
+
+    private object? ResolvePotionHolder(
+        object runNode,
+        int potionIndex,
+        object potionModel,
+        RuntimePotionState potionState,
+        Dictionary<string, object?> metadata,
+        out string resolution)
+    {
+        var holders = DiscoverPotionHolders(runNode);
+        metadata["potion_holder_count"] = holders.Count;
+        if (holders.Count == 0)
+        {
+            resolution = "holder_missing";
+            return null;
+        }
+
+        if (potionIndex >= 0 && potionIndex < holders.Count)
+        {
+            var indexedHolder = holders[potionIndex];
+            if (PotionHolderMatches(indexedHolder, potionModel, potionState))
+            {
+                resolution = "slot_index";
+                return indexedHolder;
+            }
+
+            metadata["holder_index_mismatch"] = true;
+        }
+
+        var matchedHolder = holders.FirstOrDefault(holder => PotionHolderMatches(holder, potionModel, potionState));
+        if (matchedHolder is not null)
+        {
+            resolution = "scan_match";
+            return matchedHolder;
+        }
+
+        if (potionIndex >= 0 && potionIndex < holders.Count)
+        {
+            resolution = "slot_index_fallback";
+            return holders[potionIndex];
+        }
+
+        resolution = "holder_missing";
+        return null;
+    }
+
+    private List<object> DiscoverPotionHolders(object runNode)
+    {
+        var holders = new List<object>();
+        var seen = new HashSet<object>(ReferenceEqualityComparer.Instance);
+        foreach (var container in EnumerateNodeDescendants(runNode, maxDepth: 8).Prepend(runNode))
+        {
+            var typeName = GetTypeName(container) ?? string.Empty;
+            if (!typeName.Contains("NPotionContainer", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            foreach (var holder in EnumerateObjects(GetMemberValue(container, "_holders") ?? GetMemberValue(container, "Holders")))
+            {
+                if (seen.Add(holder))
+                {
+                    holders.Add(holder);
+                }
+            }
+        }
+
+        if (holders.Count > 0)
+        {
+            return holders;
+        }
+
+        foreach (var node in EnumerateNodeDescendants(runNode, maxDepth: 8).Prepend(runNode))
+        {
+            var typeName = GetTypeName(node) ?? string.Empty;
+            if (!typeName.Contains("NPotionHolder", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (seen.Add(node))
+            {
+                holders.Add(node);
+            }
+        }
+
+        return holders;
+    }
+
+    private bool PotionHolderMatches(object holder, object potionModel, RuntimePotionState potionState)
+    {
+        var holderPotion = ResolvePotionActionModel(GetMemberValue(holder, "Potion") ?? holder);
+        if (holderPotion is not null && ReferenceEquals(holderPotion, potionModel))
+        {
+            return true;
+        }
+
+        var textDiagnostics = new TextDiagnosticsCollector();
+        var holderPotionState = DescribePotion(GetMemberValue(holder, "Potion") ?? holder, "holder.potion", textDiagnostics);
+        if (holderPotionState is null)
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(potionState.CanonicalPotionId) &&
+            !string.IsNullOrWhiteSpace(holderPotionState.CanonicalPotionId) &&
+            string.Equals(potionState.CanonicalPotionId, holderPotionState.CanonicalPotionId, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return string.Equals(
+            NormalizeComparisonText(potionState.Name),
+            NormalizeComparisonText(holderPotionState.Name),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static object? ResolvePotionActionModel(object? slotOrPotion)
+    {
+        return GetMemberValue(slotOrPotion, "Potion")
+               ?? GetMemberValue(slotOrPotion, "Model")
+               ?? GetMemberValue(slotOrPotion, "PotionModel")
+               ?? GetMemberValue(slotOrPotion, "CanonicalInstance")
+               ?? slotOrPotion;
+    }
+
+    private bool TryExecutePotionViaModel(object potionModel, Dictionary<string, object?> metadata, out string? failure)
+    {
+        failure = null;
+        var method = potionModel.GetType().GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+            .FirstOrDefault(candidate => string.Equals(candidate.Name, "EnqueueManualUse", StringComparison.Ordinal) &&
+                                         candidate.GetParameters().Length == 1);
+        if (method is null)
+        {
+            failure = "enqueue_manual_use_missing";
+            return false;
+        }
+
+        try
+        {
+            method.Invoke(potionModel, new object?[] { null });
+            metadata["model_handler_type"] = potionModel.GetType().FullName ?? potionModel.GetType().Name;
+            return true;
+        }
+        catch (TargetInvocationException ex) when (LooksLikePotionTargetRequired(ex.GetBaseException().Message))
+        {
+            metadata["failure_stage"] = "target_validation";
+            failure = ex.GetBaseException().Message;
+            return false;
+        }
+        catch (Exception ex)
+        {
+            failure = ex.GetBaseException().Message;
+            return false;
+        }
+    }
+
+    private bool TryExecutePotionViaHolder(object holder, Dictionary<string, object?> metadata, out string? failure)
+    {
+        failure = null;
+        try
+        {
+            var task = TryInvokeParameterlessMethod(holder, "UsePotion");
+            metadata["holder_handler_type"] = holder.GetType().FullName ?? holder.GetType().Name;
+            if (task is Task asyncTask)
+            {
+                metadata["holder_task_status"] = asyncTask.Status.ToString();
+            }
+
+            return task is not null;
+        }
+        catch (Exception ex)
+        {
+            failure = ex.GetBaseException().Message;
+            return false;
+        }
+    }
+
+    private PotionTargetProbe ProbePotionTargetRequirement(object potionModel)
+    {
+        var targetType = ConvertToText(GetMemberValue(potionModel, "TargetType"));
+        var usage = ConvertToText(GetMemberValue(potionModel, "Usage"));
+        var selectionPrompt = ConvertToText(GetMemberValue(potionModel, "SelectionScreenPrompt"));
+        var assertMethod = potionModel.GetType().GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+            .FirstOrDefault(method => string.Equals(method.Name, "AssertValidForTargetedPotion", StringComparison.Ordinal) &&
+                                      method.GetParameters().Length == 1);
+        if (assertMethod is null)
+        {
+            return new PotionTargetProbe(false, targetType, usage, selectionPrompt, "no_probe_method", null);
+        }
+
+        try
+        {
+            assertMethod.Invoke(potionModel, new object?[] { null });
+            return new PotionTargetProbe(false, targetType, usage, selectionPrompt, "assert_valid_for_targeted_potion", null);
+        }
+        catch (TargetInvocationException ex) when (LooksLikePotionTargetRequired(ex.GetBaseException().Message))
+        {
+            return new PotionTargetProbe(true, targetType, usage, selectionPrompt, "assert_valid_for_targeted_potion", ex.GetBaseException().Message);
+        }
+        catch (Exception ex)
+        {
+            return new PotionTargetProbe(false, targetType, usage, selectionPrompt, "assert_valid_for_targeted_potion_probe_failed", ex.GetBaseException().Message);
+        }
+    }
+
+    private static bool LooksLikePotionTargetRequired(string? message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return false;
+        }
+
+        return message.Contains("target must be present", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("single target potion", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("targeted potion", StringComparison.OrdinalIgnoreCase);
     }
 
     private RuntimeActionResult ExecutePlayCard(object runNode, object runState, ActionRequest request, LegalAction action)

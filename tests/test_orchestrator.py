@@ -1157,7 +1157,7 @@ class OrchestratorTests(unittest.TestCase):
             self.assertEqual(summary.ended_by, "auto_end_turn")
             self.assertEqual(bridge.submissions, ["end_turn"])
 
-    def test_orchestrator_filters_unsupported_potion_actions(self) -> None:
+    def test_orchestrator_allows_supported_potion_actions(self) -> None:
         bridge = SequencedCombatBridge(
             [
                 make_window(
@@ -1180,8 +1180,8 @@ class OrchestratorTests(unittest.TestCase):
             summary = orchestrator.run(scenario="live")
 
             self.assertTrue(summary.completed)
-            self.assertEqual(summary.ended_by, "auto_end_turn")
-            self.assertEqual(bridge.submissions, ["end_turn"])
+            self.assertEqual(summary.ended_by, "phase_changed")
+            self.assertEqual(bridge.submissions, ["use_potion"])
 
     def test_battle_mode_waits_for_enemy_turn_then_resumes(self) -> None:
         bridge = SequencedCombatBridge(
