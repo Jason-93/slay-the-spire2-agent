@@ -10,13 +10,14 @@ internal sealed partial class AgentStatusOverlayNode : Control
 {
     public const string NodeNameValue = "Sts2AgentStatusOverlay";
 
-    private const float PanelWidth = 348.0f;
-    private const float PanelHeight = 124.0f;
-    private const float TopOffset = 96.0f;
-    private const float RightMargin = 24.0f;
-    private const int TitleFontSize = 15;
-    private const int BodyFontSize = 14;
-    private const int MaxReasonLength = 80;
+    private const float PanelWidth = 388.0f;
+    private const float PanelHeight = 168.0f;
+    private const float TopOffset = 84.0f;
+    private const float RightMargin = 20.0f;
+    private const int TitleFontSize = 14;
+    private const int BodyFontSize = 13;
+    private const int MaxSummaryLength = 72;
+    private const int MaxDetailLength = 240;
 
     private ColorRect? _background;
     private Label? _titleLabel;
@@ -118,7 +119,7 @@ internal sealed partial class AgentStatusOverlayNode : Control
             MouseFilter = MouseFilterEnum.Ignore,
             AutowrapMode = TextServer.AutowrapMode.WordSmart,
             Position = new Vector2(12.0f, 30.0f),
-            Size = new Vector2(Size.X - 24.0f, Size.Y - 40.0f),
+            Size = new Vector2(Size.X - 24.0f, Size.Y - 42.0f),
             Visible = true,
         };
         _bodyLabel.AddThemeColorOverride("default_color", new Color(0.95f, 0.96f, 0.97f, 0.95f));
@@ -215,26 +216,26 @@ internal sealed partial class AgentStatusOverlayNode : Control
     {
         if (snapshot.Empty)
         {
-            return "status: idle\nphase: idle\nwaiting for agent status";
+            return "状态: idle\n阶段: idle\n等待 agent 状态同步";
         }
 
         var builder = new StringBuilder();
-        builder.Append("status: ").Append(snapshot.Status);
+        builder.Append("状态: ").Append(snapshot.Status);
         if (snapshot.Stale && !string.IsNullOrWhiteSpace(snapshot.SourceStatus))
         {
             builder.Append(" (").Append(snapshot.SourceStatus).Append(')');
         }
         builder.AppendLine();
 
-        builder.Append("phase: ").Append(snapshot.Phase ?? "unknown").AppendLine();
-        builder.Append("action: ").Append(snapshot.ActionLabel ?? snapshot.ActionId ?? "none").AppendLine();
+        builder.Append("阶段: ").Append(snapshot.Phase ?? "unknown").AppendLine();
+        builder.Append("动作: ").Append(snapshot.ActionLabel ?? snapshot.ActionId ?? "none").AppendLine();
 
         if (!string.IsNullOrWhiteSpace(snapshot.Confidence) || snapshot.Turn is not null || snapshot.Step is not null)
         {
-            builder.Append("meta: ");
+            builder.Append("元信息: ");
             if (!string.IsNullOrWhiteSpace(snapshot.Confidence))
             {
-                builder.Append("conf ").Append(snapshot.Confidence);
+                builder.Append("置信 ").Append(snapshot.Confidence);
             }
             if (snapshot.Turn is not null || snapshot.Step is not null)
             {
@@ -242,21 +243,27 @@ internal sealed partial class AgentStatusOverlayNode : Control
                 {
                     builder.Append("  ");
                 }
-                builder.Append("turn ").Append(snapshot.Turn?.ToString() ?? "-").Append('/').Append(snapshot.Step?.ToString() ?? "-");
+                builder.Append("回合 ").Append(snapshot.Turn?.ToString() ?? "-").Append('/').Append(snapshot.Step?.ToString() ?? "-");
             }
             builder.AppendLine();
         }
 
-        var reason = Truncate(snapshot.Reason, MaxReasonLength);
-        if (!string.IsNullOrWhiteSpace(reason))
+        var summary = NormalizeSingleLine(snapshot.Reason, MaxSummaryLength);
+        if (!string.IsNullOrWhiteSpace(summary))
         {
-            builder.Append("reason: ").Append(reason);
+            builder.Append("摘要: ").Append(summary).AppendLine();
+        }
+
+        var detail = NormalizeMultiline(snapshot.Detail, MaxDetailLength);
+        if (!string.IsNullOrWhiteSpace(detail))
+        {
+            builder.Append("思路: ").Append(detail.Replace("\n", "\n      ", StringComparison.Ordinal));
         }
 
         return builder.ToString().TrimEnd();
     }
 
-    private static string Truncate(string? value, int limit)
+    private static string NormalizeSingleLine(string? value, int limit)
     {
         if (string.IsNullOrWhiteSpace(value))
         {
@@ -269,6 +276,32 @@ internal sealed partial class AgentStatusOverlayNode : Control
             .Replace('\n', ' ')
             .Trim();
 
+        if (normalized.Length <= limit)
+        {
+            return normalized;
+        }
+
+        return normalized[..Math.Max(0, limit - 1)].TrimEnd() + "...";
+    }
+
+    private static string NormalizeMultiline(string? value, int limit)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        var lines = value
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n')
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        if (lines.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        var normalized = string.Join("\n", lines);
         if (normalized.Length <= limit)
         {
             return normalized;

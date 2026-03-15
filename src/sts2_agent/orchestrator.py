@@ -99,6 +99,7 @@ class AutoplayOrchestrator:
             action_id=policy_output.action_id,
             action_label=action_label,
             reason=policy_output.reason,
+            detail=self._agent_status_detail(policy_output),
             confidence=None if confidence is None else str(confidence),
             turn=current_turn_index if current_turn_index > 0 else None,
             step=step_index,
@@ -107,6 +108,23 @@ class AutoplayOrchestrator:
             updater(payload)
         except Exception:
             return
+
+    @staticmethod
+    def _agent_status_detail(policy_output: PolicyDecision) -> str | None:
+        if policy_output.detail and policy_output.detail.strip():
+            return policy_output.detail.strip()
+        if policy_output.reason and policy_output.reason.strip():
+            return policy_output.reason.strip()
+        return None
+
+    @staticmethod
+    def _thinking_policy_output() -> PolicyDecision:
+        return PolicyDecision(
+            action_id=None,
+            reason="等待策略决策",
+            detail="正在读取当前局面并生成下一步动作。",
+            metadata={"agent_status_only": True},
+        )
 
     def _clear_agent_status(self) -> None:
         clearer = getattr(self.bridge, "clear_agent_status", None)
@@ -788,6 +806,13 @@ class AutoplayOrchestrator:
                 metadata={"reward_mode": reward_mode, "step_kind": phase_kind},
             )
         else:
+            self._publish_agent_status(
+                snapshot=snapshot,
+                policy_output=self._thinking_policy_output(),
+                status="thinking",
+                step_index=step_index,
+                current_turn_index=current_turn_index,
+            )
             policy_output = self._decide(snapshot, legal_actions)
             if policy_output.halt or not policy_output.action_id:
                 self._record(
@@ -1091,6 +1116,13 @@ class AutoplayOrchestrator:
                 metadata={"map_mode": map_mode, "step_kind": phase_kind},
             )
         else:
+            self._publish_agent_status(
+                snapshot=snapshot,
+                policy_output=self._thinking_policy_output(),
+                status="thinking",
+                step_index=step_index,
+                current_turn_index=current_turn_index,
+            )
             policy_output = self._decide(snapshot, legal_actions)
             if policy_output.halt or not policy_output.action_id:
                 self._record(
@@ -1937,6 +1969,13 @@ class AutoplayOrchestrator:
     ) -> dict[str, object]:
         try:
             step_index += 1
+            self._publish_agent_status(
+                snapshot=snapshot,
+                policy_output=self._thinking_policy_output(),
+                status="thinking",
+                step_index=step_index,
+                current_turn_index=current_turn_index,
+            )
             policy_output = self._decide(snapshot, legal_actions, battle_context=battle_context)
             if policy_output.halt or not policy_output.action_id:
                 self._publish_agent_status(

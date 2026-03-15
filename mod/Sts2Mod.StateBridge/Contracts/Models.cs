@@ -178,6 +178,7 @@ public sealed record AgentStatusUpdateRequest(
     string? ActionId = null,
     string? ActionLabel = null,
     string? Reason = null,
+    string? Detail = null,
     string? Confidence = null,
     int? Turn = null,
     int? Step = null);
@@ -192,6 +193,7 @@ public sealed record AgentStatusResponse(
     string? ActionId = null,
     string? ActionLabel = null,
     string? Reason = null,
+    string? Detail = null,
     string? Confidence = null,
     int? Turn = null,
     int? Step = null,

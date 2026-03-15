@@ -219,7 +219,13 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
                 {
                     "message": {
                         "content": json.dumps(
-                            {"action_id": "act-1", "reason": "先出防御更稳", "halt": False, "confidence": "high"},
+                            {
+                                "action_id": "act-1",
+                                "reason": "先出防御更稳",
+                                "detail": "敌方下回合 11 伤害，先补格挡更稳。",
+                                "halt": False,
+                                "confidence": "high",
+                            },
                             ensure_ascii=False,
                         )
                     }
@@ -232,6 +238,7 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
 
         self.assertEqual(decision.action_id, "act-1")
         self.assertFalse(decision.halt)
+        self.assertEqual(decision.detail, "敌方下回合 11 伤害，先补格挡更稳。")
         self.assertEqual(decision.confidence, "high")
         self.assertEqual(decision.metadata["confidence"], "high")
         self.assertEqual(decision.metadata["provider"], "chat_completions")
@@ -304,6 +311,7 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
 
         self.assertEqual(decision.action_id, "act-1")
         self.assertEqual(decision.reason, "先出防御")
+        self.assertEqual(decision.detail, "先出防御")
         self.assertFalse(decision.halt)
 
     def test_policy_persists_action_args_metadata(self) -> None:

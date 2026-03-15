@@ -205,6 +205,7 @@ class AgentStatusUpdate:
     action_id: str | None = None
     action_label: str | None = None
     reason: str | None = None
+    detail: str | None = None
     confidence: str | None = None
     turn: int | None = None
     step: int | None = None
@@ -214,6 +215,7 @@ class AgentStatusUpdate:
 class PolicyDecision:
     action_id: str | None
     reason: str
+    detail: str | None = None
     halt: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)
     confidence: str | float | None = None

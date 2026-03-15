@@ -161,6 +161,7 @@ class CapturingBridge:
                 "action_id": payload.action_id,
                 "action_label": payload.action_label,
                 "reason": payload.reason,
+                "detail": payload.detail,
                 "confidence": payload.confidence,
                 "turn": payload.turn,
                 "step": payload.step,
@@ -413,8 +414,9 @@ class OrchestratorTests(unittest.TestCase):
             summary = orchestrator.run(scenario="live")
 
             self.assertTrue(summary.completed)
-            self.assertEqual([item["status"] for item in bridge.agent_status_updates], ["planned", "submitted", "accepted"])
-            self.assertEqual(bridge.agent_status_updates[0]["action_label"], "Play Strike")
+            self.assertEqual([item["status"] for item in bridge.agent_status_updates], ["thinking", "planned", "submitted", "accepted"])
+            self.assertEqual(bridge.agent_status_updates[0]["detail"], "正在读取当前局面并生成下一步动作。")
+            self.assertEqual(bridge.agent_status_updates[1]["action_label"], "Play Strike")
             self.assertEqual(bridge.agent_status_updates[-1]["phase"], "combat")
             self.assertEqual(bridge.agent_status_clears, 1)
 

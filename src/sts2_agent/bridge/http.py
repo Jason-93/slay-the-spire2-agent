@@ -202,6 +202,8 @@ class HttpGameBridge(GameBridge):
                 payload["action_label"] = status.action_label
             if status.reason:
                 payload["reason"] = status.reason
+            if status.detail:
+                payload["detail"] = status.detail
             if status.confidence:
                 payload["confidence"] = status.confidence
             if status.turn is not None:

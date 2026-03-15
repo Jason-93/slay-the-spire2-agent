@@ -315,6 +315,7 @@ class HttpBridgeTests(unittest.TestCase):
                     action_id="act-live1234",
                     action_label="Play Strike",
                     reason="test sync",
+                    detail="因为当前只有一张可出的攻击牌。",
                     confidence="0.82",
                     turn=1,
                     step=3,

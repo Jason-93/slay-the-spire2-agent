@@ -56,6 +56,7 @@ class ChatCompletionsPolicy:
         decision = PolicyDecision(
             action_id=parsed["action_id"],
             reason=parsed["reason"],
+            detail=parsed["detail"],
             halt=parsed["halt"],
             metadata={
                 "provider": "chat_completions",
@@ -88,10 +89,12 @@ class ChatCompletionsPolicy:
             "你是 Slay the Spire 2 自动打牌 agent。"
             "只能从给定 legal actions 中选择一个 action_id。"
             "battle_context 只用于理解最近发生了什么，里面若出现历史动作摘要也绝不能直接复用旧 action_id。"
-            "必须返回 JSON，字段为 action_id、target_id、reason、halt、confidence。"
+            "必须返回 JSON，字段为 action_id、target_id、reason、detail、halt、confidence。"
             "如果你认为当前不应继续自动操作，可以返回 halt=true 且 action_id=null。"
             "若所选动作有多个 target_constraints，必须显式返回一个合法 target_id。"
             "confidence 必须返回你对本次决策把握度的简短分级，例如 high、medium、low。"
+            "reason 用一句短话概括本次动作。"
+            "detail 用 1-3 句中文说明关键依据，便于在游戏 HUD 中显示；不要长篇展开。"
             "snapshot 里的手牌、敌人、powers、intent 和 run_state 都是当前局面的事实层信息，应优先基于这些字段判断，而不是只猜卡名。"
             "当 snapshot.phase=combat 且 metadata.window_kind=combat_card_selection 时，说明当前不是普通出牌窗口，而是在处理战斗中的额外选牌；"
             "此时应优先在 choose_combat_card 或 cancel_combat_selection 中决策，而不是继续选择 play_card。"
@@ -107,6 +110,7 @@ class ChatCompletionsPolicy:
                 "action_id": "string|null",
                 "target_id": "string|null, required when selected action has multiple target_constraints",
                 "reason": "string",
+                "detail": "string, optional concise rationale for HUD",
                 "halt": "boolean",
                 "confidence": "string|number",
             },
@@ -193,6 +197,7 @@ class ChatCompletionsPolicy:
         action_id = payload.get("action_id")
         target_id = payload.get("target_id")
         reason = payload.get("reason")
+        detail = payload.get("detail")
         halt = payload.get("halt")
         confidence = payload.get("confidence")
         args = payload.get("args")
@@ -202,6 +207,8 @@ class ChatCompletionsPolicy:
             raise ChatCompletionsParseError("target_id must be a string or null")
         if not isinstance(reason, str) or not reason.strip():
             raise ChatCompletionsParseError("reason must be a non-empty string")
+        if detail is not None and (not isinstance(detail, str) or not detail.strip()):
+            raise ChatCompletionsParseError("detail must be a non-empty string when provided")
         if not isinstance(halt, bool):
             raise ChatCompletionsParseError("halt must be a boolean")
         if confidence is None or not isinstance(confidence, (str, int, float)) or isinstance(confidence, bool):
@@ -220,6 +227,7 @@ class ChatCompletionsPolicy:
         return {
             "action_id": action_id,
             "reason": reason.strip(),
+            "detail": detail.strip() if isinstance(detail, str) and detail.strip() else reason.strip(),
             "halt": halt,
             "args": normalized_args,
             "confidence": confidence,
