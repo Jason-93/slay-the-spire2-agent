@@ -19,6 +19,7 @@ internal sealed partial class AgentStatusOverlayNode : Control
     private const int MaxSummaryLength = 72;
     private const int MaxDetailLength = 240;
     private const int MaxHistorySummaryLength = 44;
+    private const int MaxHistoryDetailLength = 96;
     private const int MaxHistoryEntries = 6;
 
     private ColorRect? _background;
@@ -288,21 +289,27 @@ internal sealed partial class AgentStatusOverlayNode : Control
     private static string FormatHistoryEntry(AgentStatusHistoryEntry entry)
     {
         var builder = new StringBuilder();
-        builder.Append(entry.Status);
+        builder.Append('[').Append(entry.Status).Append(']');
         if (!string.IsNullOrWhiteSpace(entry.ActionLabel))
         {
-            builder.Append(" / ").Append(entry.ActionLabel);
+            builder.Append(' ').Append(entry.ActionLabel);
         }
 
         var summary = NormalizeSingleLine(entry.Reason, MaxHistorySummaryLength);
         if (!string.IsNullOrWhiteSpace(summary))
         {
-            builder.Append(" / ").Append(summary);
+            builder.Append("\n    摘要: ").Append(summary);
+        }
+
+        var detail = NormalizeMultiline(entry.Detail, MaxHistoryDetailLength);
+        if (!string.IsNullOrWhiteSpace(detail) && !string.Equals(detail, summary, StringComparison.Ordinal))
+        {
+            builder.Append("\n    思路: ").Append(detail.Replace("\n", "\n          ", StringComparison.Ordinal));
         }
 
         if (entry.Turn is not null || entry.Step is not null)
         {
-            builder.Append(" / ");
+            builder.Append("\n    回合: ");
             builder.Append(entry.Turn?.ToString() ?? "-");
             builder.Append('/');
             builder.Append(entry.Step?.ToString() ?? "-");

@@ -139,6 +139,12 @@ internal static class AgentStatusStateStore
             return;
         }
 
+        if (History.Count > 0 && IsSameDecisionEntry(History[^1], current))
+        {
+            History[^1] = current;
+            return;
+        }
+
         History.Add(current);
         if (History.Count > HistoryLimit)
         {
@@ -156,6 +162,19 @@ internal static class AgentStatusStateStore
             && string.Equals(left.Confidence, right.Confidence, StringComparison.Ordinal)
             && left.Turn == right.Turn
             && left.Step == right.Step;
+    }
+
+    private static bool IsSameDecisionEntry(StoredAgentStatus left, StoredAgentStatus right)
+    {
+        return string.Equals(left.Phase, right.Phase, StringComparison.Ordinal)
+            && string.Equals(left.ActionLabel, right.ActionLabel, StringComparison.Ordinal)
+            && string.Equals(left.Reason, right.Reason, StringComparison.Ordinal)
+            && string.Equals(left.Detail, right.Detail, StringComparison.Ordinal)
+            && string.Equals(left.Confidence, right.Confidence, StringComparison.Ordinal)
+            && left.Turn == right.Turn
+            && left.Step == right.Step
+            && !string.IsNullOrWhiteSpace(left.ActionLabel)
+            && !string.IsNullOrWhiteSpace(right.ActionLabel);
     }
 
     private static IReadOnlyList<AgentStatusHistoryEntry> BuildHistory(DateTimeOffset now)
