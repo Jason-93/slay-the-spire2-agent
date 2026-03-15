@@ -414,11 +414,10 @@ public sealed class RewardPhaseDetectionTests
         Assert.Contains(enemy.MoveGlossary ?? Array.Empty<GlossaryAnchor>(), anchor => anchor.GlossaryId == "block" && anchor.Source == "runtime_hover_tip");
         Assert.Contains("beast", enemy.Traits ?? Array.Empty<string>());
         Assert.Contains("damage", enemy.Keywords ?? Array.Empty<string>());
-        Assert.Contains("vulnerable", enemy.Keywords ?? Array.Empty<string>());
-        Assert.Contains("Vulnerable", enemy.Powers?.Select(power => power.Name) ?? Array.Empty<string>());
-        Assert.Contains(enemy.Powers ?? Array.Empty<PowerView>(), power =>
-            power.PowerId == "vulnerable" &&
-            (power.Glossary ?? Array.Empty<GlossaryAnchor>()).Any(anchor => anchor.GlossaryId == "vulnerable" && anchor.Source == "model_description"));
+        Assert.DoesNotContain("POWER.SLIPPERY_POWER", enemy.Keywords ?? Array.Empty<string>());
+        var enemyPower = Assert.Single(enemy.Powers ?? Array.Empty<PowerView>());
+        Assert.Equal("Vulnerable", enemyPower.Name);
+        Assert.DoesNotContain(enemyPower.Glossary ?? Array.Empty<GlossaryAnchor>(), anchor => anchor.GlossaryId == "vulnerable" && anchor.Source == "model_description");
 
         var runStateSnapshot = exported.Snapshot.RunState;
         Assert.NotNull(runStateSnapshot);
@@ -438,7 +437,8 @@ public sealed class RewardPhaseDetectionTests
         Assert.Equal(1, discardPileExport["exported_count"]);
         Assert.Equal(false, discardPileExport["degraded"]);
         var enemyExport = Assert.IsAssignableFrom<IReadOnlyDictionary<string, object?>>(exported.Snapshot.Metadata["enemy_export"]);
-        Assert.Equal(false, enemyExport["degraded"]);
+        Assert.Equal(true, enemyExport["degraded"]);
+        Assert.True((int)enemyExport["entry_count"] >= 1);
     }
 
     [Fact]
@@ -525,6 +525,51 @@ public sealed class RewardPhaseDetectionTests
         Assert.Equal("fallback_builtin", debuffGlossary.Source);
         Assert.Equal("会削弱目标。", debuffGlossary.Hint);
         Assert.DoesNotContain(logger.WarnMessages, message => message.Contains("Glossary hint missing glossary_id=debuff", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void BuildCombatWindow_NormalizesRichTextEnemyIntentAndFiltersInternalKeywordNoise()
+    {
+        var logger = new FakeBridgeLogger();
+        var reader = CreateReader(logger);
+        var runNode = new FakeRunNode(new FakeScreenTracker());
+        var runState = new FakeRunState(
+            new[]
+            {
+                new FakeEnemy("enemy-1", true, intent: "2[font_size=18]x3[/font_size]", intentDamage: 2, intentHits: 3)
+                {
+                    CurrentMove = new FakeEnemyMove("2[font_size=18]x3[/font_size]")
+                    {
+                        Description = "Deal 2 [gold]damage[/gold] 3 times.",
+                        Keywords = new[] { "damage", "POWER.SLIPPERY_POWER" },
+                    },
+                    Keywords = new[] { "damage", "POWER.SLIPPERY_POWER" },
+                    Powers =
+                    {
+                        new FakePower("POWER.SLIPPERY_POWER", "Slippery", 1, "This creature can only lose 1 HP the next time it would lose HP.")
+                        {
+                            HoverTips = new[]
+                            {
+                                new FakeHoverTip("powerslipperypower", "Slippery", "This creature can only lose 1 HP the next time it would lose HP."),
+                            },
+                        },
+                    },
+                },
+            });
+
+        var window = InvokeBuildCombatWindow(reader, runNode, runState);
+        var exported = new CombatWindowExtractor().Export(window, new BridgeSessionState(new BridgeOptions()));
+        var enemy = Assert.Single(exported.Snapshot.Enemies);
+
+        Assert.Equal("attack_2x3", enemy.Intent);
+        Assert.Equal("2x3", enemy.IntentRaw);
+        Assert.Equal("attack", enemy.IntentType);
+        Assert.Null(enemy.MoveName);
+        Assert.DoesNotContain("[font_size", enemy.MoveDescription ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(enemy.Keywords ?? Array.Empty<string>(), keyword => keyword.Contains("POWER.", StringComparison.Ordinal));
+        Assert.Contains(logger.WarnMessages, message => message.Contains("field=move_name", StringComparison.Ordinal));
+        Assert.Contains(logger.WarnMessages, message => message.Contains("field=keywords", StringComparison.Ordinal));
+        Assert.Contains(logger.WarnMessages, message => message.Contains("Power glossary filtered", StringComparison.Ordinal));
     }
 
     [Fact]

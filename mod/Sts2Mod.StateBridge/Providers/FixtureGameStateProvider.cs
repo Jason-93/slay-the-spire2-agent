@@ -333,7 +333,7 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                                 3,
                                 "Increases attack damage.",
                                 "strength",
-                                Glossary: new[] { new GlossaryAnchor("strength", "Strength", "Increases attack damage.", "model_description") }),
+                                Glossary: new[] { new GlossaryAnchor("damage", "Damage", "Reduces HP.", "runtime_hover_tip") }),
                         },
                         MoveName: "Chomp",
                         MoveDescription: "Deal 11 **damage**.",

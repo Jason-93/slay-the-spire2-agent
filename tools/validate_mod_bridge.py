@@ -142,9 +142,14 @@ def main() -> int:
         assert combat_snapshot["enemies"][0]["move_glossary"]
         assert combat_snapshot["enemies"][0]["traits"]
         assert combat_snapshot["enemies"][0]["keywords"]
+        for keyword in combat_snapshot["enemies"][0]["keywords"]:
+            assert "." not in keyword
         assert combat_snapshot["enemies"][0]["powers"][0]["name"]
         assert combat_snapshot["enemies"][0]["powers"][0]["glossary"]
-        assert any(anchor["source"] == "model_description" for anchor in combat_snapshot["enemies"][0]["powers"][0]["glossary"])
+        assert not any(
+            anchor["glossary_id"] == combat_snapshot["enemies"][0]["powers"][0].get("canonical_power_id")
+            for anchor in combat_snapshot["enemies"][0]["powers"][0]["glossary"]
+        )
         assert "degraded" in combat_snapshot["metadata"]["enemy_export"]
         assert combat_snapshot["run_state"]["act"] == 1
         assert combat_snapshot["run_state"]["map"]["reachable_nodes"]

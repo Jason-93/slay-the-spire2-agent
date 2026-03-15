@@ -26,6 +26,12 @@ internal sealed class RuntimeActionResult(bool accepted, string message, string?
     public IReadOnlyDictionary<string, object?> Metadata { get; } = metadata ?? new Dictionary<string, object?>();
 }
 
+internal sealed record EnemyMoveNameResolution(
+    string? Value,
+    string? SuppressedReason = null,
+    string? SuppressedCandidate = null,
+    string? Source = null);
+
 internal sealed class Sts2RuntimeReflectionReader
 {
     private const string Sts2AssemblyName = "sts2";
@@ -1879,7 +1885,7 @@ internal sealed class Sts2RuntimeReflectionReader
         var enemyId = ResolveEnemyId(enemy, index);
         var monster = GetMemberValue(enemy, "Monster");
         var intent = ResolveEnemyIntent(enemy, playerTargets, $"{path}.intent", textDiagnostics);
-        var powers = ExtractPowers(monster ?? enemy, $"{path}.powers", textDiagnostics);
+        var powers = ExtractPowers(monster ?? enemy, $"{path}.powers", textDiagnostics, index, enemyId, diagnostics);
         var enrichment = DescribeEnemyEnrichment(enemy, enemyId, index, playerTargets, intent, powers, textDiagnostics, diagnostics);
         return new RuntimeEnemyState(
             EnemyId: enemyId,
@@ -1926,7 +1932,7 @@ internal sealed class Sts2RuntimeReflectionReader
             IntentHits: intent.Hits,
             IntentBlock: intent.Block,
             IntentEffects: intent.Effects,
-            Powers: ExtractPowers(GetMemberValue(enemy, "Monster") ?? enemy, $"{path}.powers", textDiagnostics),
+            Powers: ExtractPowers(GetMemberValue(enemy, "Monster") ?? enemy, $"{path}.powers", textDiagnostics, index, enemyId),
             MoveGlossary: Array.Empty<GlossaryAnchor>(),
             Traits: Array.Empty<string>(),
             Keywords: Array.Empty<string>());
@@ -1965,25 +1971,62 @@ internal sealed class Sts2RuntimeReflectionReader
             }
         }
 
-        var moveName = SafeRead(
+        var moveNameResolution = SafeRead(
             "move_name",
             () => ResolveEnemyMoveName(enemy, moveSource, playerTargets, intent, path, textDiagnostics),
-            fallback: null as string);
-        var traits = SafeRead(
+            fallback: new EnemyMoveNameResolution(null));
+        if (!string.IsNullOrWhiteSpace(moveNameResolution.SuppressedReason) &&
+            !string.IsNullOrWhiteSpace(moveNameResolution.SuppressedCandidate))
+        {
+            RecordEnemyFieldFilter(
+                index,
+                enemyId,
+                "move_name",
+                moveNameResolution.SuppressedReason!,
+                $"source={moveNameResolution.Source ?? "unknown"} candidate=\"{AbbreviateForLog(moveNameResolution.SuppressedCandidate)}\"",
+                diagnostics);
+        }
+
+        var moveName = moveNameResolution.Value;
+        var rawTraits = SafeRead(
             "traits",
             () => ExtractEnemyTraits(enemy, monster, moveSource, $"{path}.traits", textDiagnostics),
             fallback: Array.Empty<string>());
+        var traits = FilterEnemyTerms(
+            rawTraits,
+            index,
+            enemyId,
+            "traits",
+            $"{path}.traits",
+            diagnostics);
         var placeholderKeywords = Array.Empty<string>();
         var moveDescription = SafeRead(
             "move_description",
             () => ResolveEnemyMoveDescription(enemy, moveSource, playerTargets, path, textDiagnostics, moveName, traits, placeholderKeywords),
             fallback: new DescriptionExtraction(null, null, null, null, null, Array.Empty<DescriptionVariable>(), Array.Empty<GlossaryAnchor>()));
-        var keywords = SafeRead(
+        var moveGlossary = FilterEnemyMoveGlossary(
+            moveDescription.Glossary,
+            moveName,
+            moveDescription.Description,
+            index,
+            enemyId,
+            $"{path}.move_glossary",
+            diagnostics);
+        var rawKeywords = SafeRead(
             "keywords",
-            () => ExtractEnemyKeywords(intent, moveDescription.Glossary, traits, powers, enemy, monster, moveSource, $"{path}.keywords", textDiagnostics),
+            () => ExtractEnemyKeywords(intent, moveGlossary, traits, powers, enemy, monster, moveSource, $"{path}.keywords", textDiagnostics),
             fallback: Array.Empty<string>());
+        var keywords = FilterEnemyTerms(
+            rawKeywords,
+            index,
+            enemyId,
+            "keywords",
+            $"{path}.keywords",
+            diagnostics);
 
-        if (string.IsNullOrWhiteSpace(moveName) && !string.Equals(intent.Display, "unknown", StringComparison.OrdinalIgnoreCase))
+        if (string.IsNullOrWhiteSpace(moveName) &&
+            string.IsNullOrWhiteSpace(moveNameResolution.SuppressedReason) &&
+            !string.Equals(intent.Display, "unknown", StringComparison.OrdinalIgnoreCase))
         {
             diagnostics.Add(CreateEnemyExportDiagnostic(index, enemyId, "move_name", "not_found", "no readable move name found", "unresolved"));
         }
@@ -1996,7 +2039,7 @@ internal sealed class Sts2RuntimeReflectionReader
         return new EnemyEnrichmentDescriptor(
             moveName,
             moveDescription.Description,
-            moveDescription.Glossary,
+            moveGlossary,
             traits,
             keywords);
     }
@@ -3714,18 +3757,18 @@ internal sealed class Sts2RuntimeReflectionReader
 
     private static EnemyIntentDescriptor ResolveEnemyIntent(object enemy, object? playerTargets, string path, TextDiagnosticsCollector textDiagnostics)
     {
-        var raw = ConvertToText(
+        var raw = NormalizeEnemyUiText(ConvertToText(
             GetMemberValue(enemy, "Intent")
             ?? GetMemberValue(GetMemberValue(enemy, "Monster"), "Intent"),
             path,
             textDiagnostics,
-            "Intent");
+            "Intent"));
         var intentObject = ResolvePrimaryEnemyIntentObject(enemy);
         var owner = ResolveEnemyOwnerCreature(enemy);
         var hoverTip = intentObject is not null && owner is not null
             ? TryInvokeCompatibleMethod(intentObject, "GetHoverTip", playerTargets, owner)
             : null;
-        raw ??= ConvertToText(
+        raw ??= NormalizeEnemyUiText(ConvertToText(
             intentObject is not null && owner is not null
                 ? TryInvokeCompatibleMethod(intentObject, "GetIntentLabel", playerTargets, owner)
                 : null,
@@ -3733,8 +3776,8 @@ internal sealed class Sts2RuntimeReflectionReader
             textDiagnostics,
             "Title",
             "Text",
-            "Label");
-        var hoverTipTitle = ConvertToText(GetMemberValue(hoverTip, "Title"), $"{path}.hover_tip_title", textDiagnostics, "Title");
+            "Label"));
+        var hoverTipTitle = NormalizeEnemyUiText(ConvertToText(GetMemberValue(hoverTip, "Title"), $"{path}.hover_tip_title", textDiagnostics, "Title"));
         if (IsLowQualityIntentLabel(raw) && !string.IsNullOrWhiteSpace(hoverTipTitle))
         {
             raw = hoverTipTitle;
@@ -3745,9 +3788,9 @@ internal sealed class Sts2RuntimeReflectionReader
         }
 
         var moveSource = ResolveEnemyMoveSource(enemy);
-        var hoverDescription = ConvertToText(GetMemberValue(hoverTip, "Description"), $"{path}.hover_tip_description", textDiagnostics, "Description", "Text");
+        var hoverDescription = NormalizeEnemyUiText(ConvertToText(GetMemberValue(hoverTip, "Description"), $"{path}.hover_tip_description", textDiagnostics, "Description", "Text"));
         var semanticDescription = hoverDescription
-            ?? ConvertDescriptionTemplateToText(
+            ?? NormalizeEnemyUiText(ConvertDescriptionTemplateToText(
                 GetFirstMemberValue(
                     moveSource,
                     "Description",
@@ -3772,7 +3815,7 @@ internal sealed class Sts2RuntimeReflectionReader
                 "Text",
                 "TooltipText",
                 "IntentDescription",
-                "IntentText");
+                "IntentText"));
         var damage = GetNullableInt(enemy, "IntentDamage")
                      ?? GetNullableInt(enemy, "DisplayedIntentDamage")
                      ?? GetNullableInt(enemy, "AttackDamage")
@@ -3809,7 +3852,7 @@ internal sealed class Sts2RuntimeReflectionReader
                 : $"{type}_{damage}";
         }
 
-        display ??= raw ?? type ?? "unknown";
+        display = NormalizeEnemyUiText(display) ?? raw ?? type ?? "unknown";
 
         return new EnemyIntentDescriptor(
             Display: display,
@@ -3821,7 +3864,7 @@ internal sealed class Sts2RuntimeReflectionReader
             Effects: effects);
     }
 
-    private string? ResolveEnemyMoveName(
+    private EnemyMoveNameResolution ResolveEnemyMoveName(
         object enemy,
         object? moveSource,
         object? playerTargets,
@@ -3829,11 +3872,48 @@ internal sealed class Sts2RuntimeReflectionReader
         string path,
         TextDiagnosticsCollector textDiagnostics)
     {
+        EnemyMoveNameResolution EvaluateCandidate(string? value, string source)
+        {
+            var candidate = NormalizeEnemyUiText(value);
+            if (string.IsNullOrWhiteSpace(candidate))
+            {
+                return new EnemyMoveNameResolution(null);
+            }
+
+            if (IsGenericIntentLabel(candidate))
+            {
+                return new EnemyMoveNameResolution(null, "generic_intent_label", candidate, source);
+            }
+
+            var comparisonKey = NormalizeIntentLabelKey(candidate);
+            if (!string.IsNullOrWhiteSpace(intent.Raw) &&
+                string.Equals(comparisonKey, NormalizeIntentLabelKey(intent.Raw), StringComparison.OrdinalIgnoreCase))
+            {
+                return new EnemyMoveNameResolution(null, "duplicate_intent_raw", candidate, source);
+            }
+
+            if (!string.IsNullOrWhiteSpace(intent.Display) &&
+                string.Equals(comparisonKey, NormalizeIntentLabelKey(intent.Display), StringComparison.OrdinalIgnoreCase))
+            {
+                return new EnemyMoveNameResolution(null, "duplicate_intent_display", candidate, source);
+            }
+
+            if (!string.IsNullOrWhiteSpace(intent.Type) &&
+                string.Equals(comparisonKey, NormalizeIntentLabelKey(intent.Type), StringComparison.OrdinalIgnoreCase))
+            {
+                return new EnemyMoveNameResolution(null, "duplicate_intent_type", candidate, source);
+            }
+
+            return new EnemyMoveNameResolution(candidate, Source: source);
+        }
+
         var intentObject = ResolvePrimaryEnemyIntentObject(enemy);
         var owner = ResolveEnemyOwnerCreature(enemy);
         var hoverTip = intentObject is not null && owner is not null
             ? TryInvokeCompatibleMethod(intentObject, "GetHoverTip", playerTargets, owner)
             : null;
+        EnemyMoveNameResolution? suppressed = null;
+
         var moveName = ConvertToText(
             GetFirstMemberValue(
                 moveSource,
@@ -3849,9 +3929,15 @@ internal sealed class Sts2RuntimeReflectionReader
             "Title",
             "DisplayName",
             "Label");
-        if (!string.IsNullOrWhiteSpace(moveName) && !IsGenericIntentLabel(moveName))
+        var resolution = EvaluateCandidate(moveName, "move_source");
+        if (!string.IsNullOrWhiteSpace(resolution.Value))
         {
-            return moveName;
+            return resolution;
+        }
+
+        if (!string.IsNullOrWhiteSpace(resolution.SuppressedReason))
+        {
+            suppressed ??= resolution;
         }
 
         moveName = ConvertToText(
@@ -3863,24 +3949,27 @@ internal sealed class Sts2RuntimeReflectionReader
             "Title",
             "Text",
             "Label");
-        if (!string.IsNullOrWhiteSpace(moveName))
+        resolution = EvaluateCandidate(moveName, "intent_label");
+        if (!string.IsNullOrWhiteSpace(resolution.Value))
         {
-            var hoverTitle = ConvertToText(GetMemberValue(hoverTip, "Title"), $"{path}.move_name_hover_tip", textDiagnostics, "Title");
-            if (IsGenericIntentLabel(moveName) && !string.IsNullOrWhiteSpace(hoverTitle) && !IsGenericIntentLabel(hoverTitle))
-            {
-                return hoverTitle;
-            }
+            return resolution;
+        }
 
-            if (!IsGenericIntentLabel(moveName))
-            {
-                return moveName;
-            }
+        if (!string.IsNullOrWhiteSpace(resolution.SuppressedReason))
+        {
+            suppressed ??= resolution;
         }
 
         moveName = ConvertToText(GetMemberValue(hoverTip, "Title"), $"{path}.move_name_hover_tip", textDiagnostics, "Title");
-        if (!string.IsNullOrWhiteSpace(moveName) && !IsGenericIntentLabel(moveName))
+        resolution = EvaluateCandidate(moveName, "hover_tip");
+        if (!string.IsNullOrWhiteSpace(resolution.Value))
         {
-            return moveName;
+            return resolution;
+        }
+
+        if (!string.IsNullOrWhiteSpace(resolution.SuppressedReason))
+        {
+            suppressed ??= resolution;
         }
 
         moveName = ConvertToText(
@@ -3896,23 +3985,18 @@ internal sealed class Sts2RuntimeReflectionReader
             "IntentName",
             "MoveName",
             "ActionName");
-        if (!string.IsNullOrWhiteSpace(moveName) && !IsGenericIntentLabel(moveName))
+        resolution = EvaluateCandidate(moveName, "enemy_fallback");
+        if (!string.IsNullOrWhiteSpace(resolution.Value))
         {
-            return moveName;
+            return resolution;
         }
 
-        if (!string.IsNullOrWhiteSpace(intent.Raw) &&
-            !string.Equals(intent.Raw, "unknown", StringComparison.OrdinalIgnoreCase) &&
-            !IsGenericIntentLabel(intent.Raw))
+        if (!string.IsNullOrWhiteSpace(resolution.SuppressedReason))
         {
-            return intent.Raw;
+            suppressed ??= resolution;
         }
 
-        return !string.IsNullOrWhiteSpace(intent.Display) &&
-               !string.Equals(intent.Display, "unknown", StringComparison.OrdinalIgnoreCase) &&
-               !IsGenericIntentLabel(intent.Display)
-            ? intent.Display
-            : null;
+        return suppressed ?? new EnemyMoveNameResolution(null);
     }
 
     private DescriptionExtraction ResolveEnemyMoveDescription(
@@ -4108,10 +4192,6 @@ internal sealed class Sts2RuntimeReflectionReader
         keywords.AddRange(intent.Effects ?? Array.Empty<string>());
         keywords.AddRange(moveGlossary.Select(anchor => anchor.GlossaryId));
         keywords.AddRange(traits.Select(trait => NormalizeGlossaryId(trait) ?? trait));
-        keywords.AddRange(
-            powers.Select(power => !string.IsNullOrWhiteSpace(power.CanonicalPowerId)
-                ? power.CanonicalPowerId!
-                : power.PowerId));
         return keywords
             .Where(keyword => !string.IsNullOrWhiteSpace(keyword))
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -4312,11 +4392,17 @@ internal sealed class Sts2RuntimeReflectionReader
         return liveEnemyIds;
     }
 
-    private IReadOnlyList<RuntimePowerState> ExtractPowers(object? source, string path, TextDiagnosticsCollector textDiagnostics)
+    private IReadOnlyList<RuntimePowerState> ExtractPowers(
+        object? source,
+        string path,
+        TextDiagnosticsCollector textDiagnostics,
+        int? enemyIndex = null,
+        string? enemyId = null,
+        List<IReadOnlyDictionary<string, object?>>? enemyDiagnostics = null)
     {
         var collection = ResolvePowerCollection(source);
         return EnumerateObjects(collection)
-            .Select((power, index) => DescribePower(power, $"{path}[{index}]", textDiagnostics))
+            .Select((power, index) => DescribePower(power, $"{path}[{index}]", textDiagnostics, enemyIndex, enemyId, enemyDiagnostics))
             .Where(power => power is not null)
             .Cast<RuntimePowerState>()
             .ToArray();
@@ -4603,6 +4689,168 @@ internal sealed class Sts2RuntimeReflectionReader
         return count == 0 ? string.Empty : new string(buffer, 0, count);
     }
 
+    private IReadOnlyList<GlossaryAnchor> FilterEnemyMoveGlossary(
+        IReadOnlyList<GlossaryAnchor> glossary,
+        string? moveName,
+        string? moveDescription,
+        int enemyIndex,
+        string enemyId,
+        string path,
+        List<IReadOnlyDictionary<string, object?>> diagnostics)
+    {
+        if (glossary.Count == 0)
+        {
+            return glossary;
+        }
+
+        var filtered = new List<GlossaryAnchor>(glossary.Count);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var anchor in glossary)
+        {
+            var reason = ClassifyEnemyMoveGlossaryFilterReason(anchor, moveName, moveDescription);
+            if (reason is not null)
+            {
+                RecordEnemyFieldFilter(
+                    enemyIndex,
+                    enemyId,
+                    "move_glossary",
+                    reason,
+                    $"glossary_id={anchor.GlossaryId} source={anchor.Source ?? "unknown"} display_text=\"{AbbreviateForLog(anchor.DisplayText)}\"",
+                    diagnostics);
+                continue;
+            }
+
+            var dedupeKey = string.Join("|",
+                NormalizeComparisonText(anchor.GlossaryId),
+                NormalizeComparisonText(anchor.DisplayText),
+                NormalizeComparisonText(anchor.Hint));
+            if (!seen.Add(dedupeKey))
+            {
+                RecordEnemyFieldFilter(
+                    enemyIndex,
+                    enemyId,
+                    "move_glossary",
+                    "duplicate_glossary",
+                    $"glossary_id={anchor.GlossaryId} source={anchor.Source ?? "unknown"}",
+                    diagnostics);
+                continue;
+            }
+
+            filtered.Add(anchor);
+        }
+
+        return filtered;
+    }
+
+    private static string? ClassifyEnemyMoveGlossaryFilterReason(
+        GlossaryAnchor anchor,
+        string? moveName,
+        string? moveDescription)
+    {
+        if (string.IsNullOrWhiteSpace(anchor.Hint))
+        {
+            return "empty_hint";
+        }
+
+        if (string.Equals(anchor.Source, "missing_hint", StringComparison.OrdinalIgnoreCase))
+        {
+            return "missing_hint";
+        }
+
+        if (ContainsDescriptionPlaceholder(anchor.Hint))
+        {
+            return "template_hint";
+        }
+
+        if (!string.IsNullOrWhiteSpace(moveName) &&
+            string.Equals(NormalizeComparisonText(anchor.DisplayText), NormalizeComparisonText(moveName), StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(NormalizeComparisonText(anchor.Hint), NormalizeComparisonText(moveDescription), StringComparison.OrdinalIgnoreCase))
+        {
+            return "duplicate_move_identity";
+        }
+
+        return LooksLikeInternalEnemyToken(anchor.GlossaryId) ? "internal_glossary_id" : null;
+    }
+
+    private IReadOnlyList<string> FilterEnemyTerms(
+        IReadOnlyList<string> values,
+        int enemyIndex,
+        string enemyId,
+        string field,
+        string path,
+        List<IReadOnlyDictionary<string, object?>> diagnostics)
+    {
+        if (values.Count == 0)
+        {
+            return values;
+        }
+
+        var filtered = new List<string>(values.Count);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var value in values)
+        {
+            var cleaned = NormalizeEnemyUiText(value);
+            var reason = ClassifyEnemyTermFilterReason(value, cleaned);
+            if (reason is not null)
+            {
+                RecordEnemyFieldFilter(
+                    enemyIndex,
+                    enemyId,
+                    field,
+                    reason,
+                    $"path={path} value=\"{AbbreviateForLog(value)}\"",
+                    diagnostics);
+                continue;
+            }
+
+            var output = NormalizeGlossaryId(cleaned) ?? cleaned!;
+            if (!seen.Add(output))
+            {
+                RecordEnemyFieldFilter(
+                    enemyIndex,
+                    enemyId,
+                    field,
+                    "duplicate_term",
+                    $"path={path} value=\"{AbbreviateForLog(value)}\"",
+                    diagnostics);
+                continue;
+            }
+
+            filtered.Add(output);
+        }
+
+        return filtered;
+    }
+
+    private static string? ClassifyEnemyTermFilterReason(string? rawValue, string? cleanedValue)
+    {
+        if (string.IsNullOrWhiteSpace(cleanedValue))
+        {
+            return "empty_term";
+        }
+
+        return LooksLikeInternalEnemyToken(rawValue) || LooksLikeInternalEnemyToken(cleanedValue)
+            ? "internal_token"
+            : null;
+    }
+
+    private void RecordEnemyFieldFilter(
+        int enemyIndex,
+        string enemyId,
+        string field,
+        string source,
+        string detail,
+        List<IReadOnlyDictionary<string, object?>> diagnostics)
+    {
+        diagnostics.Add(CreateEnemyExportDiagnostic(enemyIndex, enemyId, field, source, detail, "filtered"));
+        _logger?.Warn($"Enemy field filtered enemy={enemyId} field={field} source={source} detail={detail}");
+    }
+
+    private static string NormalizeEnemyDiagnosticField(string path)
+    {
+        return Regex.Replace(path, "^enemies\\[[0-9]+\\]\\.", string.Empty, RegexOptions.CultureInvariant);
+    }
+
     private static object? ResolvePowerCollection(object? source)
     {
         if (source is null)
@@ -4637,7 +4885,13 @@ internal sealed class Sts2RuntimeReflectionReader
         return null;
     }
 
-    private RuntimePowerState? DescribePower(object? power, string path, TextDiagnosticsCollector textDiagnostics)
+    private RuntimePowerState? DescribePower(
+        object? power,
+        string path,
+        TextDiagnosticsCollector textDiagnostics,
+        int? enemyIndex = null,
+        string? enemyId = null,
+        List<IReadOnlyDictionary<string, object?>>? enemyDiagnostics = null)
     {
         var name = ConvertToText(
             GetMemberValue(power, "Name") ?? GetMemberValue(power, "DisplayName") ?? power,
@@ -4673,6 +4927,7 @@ internal sealed class Sts2RuntimeReflectionReader
         var canonicalPowerId = ResolvePowerCanonicalId(power);
         var vars = ExtractDescriptionVariables(power, raw, ResolvePowerDescriptionSeedVariables(power, canonicalPowerId));
         var renderOutcome = RenderDescription(raw, rendered, vars);
+        var canonicalDescription = ChooseCanonicalDescription(renderOutcome.Text, raw);
         var glossary = ExtractGlossaryAnchors(
             canonicalPowerId,
             name,
@@ -4681,12 +4936,24 @@ internal sealed class Sts2RuntimeReflectionReader
             traits: null,
             path: $"{path}.glossary",
             power);
+        if (enemyIndex is not null)
+        {
+            glossary = FilterPowerGlossary(
+                canonicalPowerId,
+                name,
+                canonicalDescription,
+                glossary,
+                path,
+                enemyIndex,
+                enemyId,
+                enemyDiagnostics);
+        }
         LogDescriptionDiagnostics(
             kind: "power",
             identifier: canonicalPowerId ?? name,
             path: path,
             raw: raw,
-            rendered: ChooseCanonicalDescription(renderOutcome.Text, raw),
+            rendered: canonicalDescription,
             quality: renderOutcome.Quality,
             source: renderOutcome.Source,
             variables: vars,
@@ -4698,7 +4965,7 @@ internal sealed class Sts2RuntimeReflectionReader
             Amount: GetNullableInt(power, "Amount")
                     ?? GetNullableInt(power, "Stacks")
                     ?? GetNullableInt(power, "Value"),
-            Description: ChooseCanonicalDescription(renderOutcome.Text, raw),
+            Description: canonicalDescription,
             CanonicalPowerId: canonicalPowerId,
             Glossary: glossary);
     }
@@ -4899,6 +5166,124 @@ internal sealed class Sts2RuntimeReflectionReader
             $"Potion glossary filtered potion={identifier} path={path} glossary_id={anchor.GlossaryId} " +
             $"display_text={anchor.DisplayText} source={anchor.Source ?? "unknown"} reason={reason} hint=\"{AbbreviateForLog(anchor.Hint)}\"";
         _logger?.Warn(message);
+    }
+
+    private IReadOnlyList<GlossaryAnchor> FilterPowerGlossary(
+        string? canonicalPowerId,
+        string powerName,
+        string? canonicalDescription,
+        IReadOnlyList<GlossaryAnchor> glossary,
+        string path,
+        int? enemyIndex = null,
+        string? enemyId = null,
+        List<IReadOnlyDictionary<string, object?>>? enemyDiagnostics = null)
+    {
+        if (glossary.Count == 0)
+        {
+            return glossary;
+        }
+
+        var filtered = new List<GlossaryAnchor>(glossary.Count);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var anchor in glossary)
+        {
+            var reason = ClassifyPowerGlossaryFilterReason(anchor, canonicalPowerId, powerName, canonicalDescription);
+            if (reason is not null)
+            {
+                LogPowerGlossaryFilter(canonicalPowerId ?? powerName, path, anchor, reason);
+                RecordEnemyPowerGlossaryFilter(enemyIndex, enemyId, path, anchor, reason, enemyDiagnostics);
+                continue;
+            }
+
+            var dedupeKey = string.Join("|",
+                NormalizeComparisonText(anchor.GlossaryId),
+                NormalizeComparisonText(anchor.DisplayText),
+                NormalizeComparisonText(anchor.Hint));
+            if (!seen.Add(dedupeKey))
+            {
+                LogPowerGlossaryFilter(canonicalPowerId ?? powerName, path, anchor, "duplicate_glossary");
+                RecordEnemyPowerGlossaryFilter(enemyIndex, enemyId, path, anchor, "duplicate_glossary", enemyDiagnostics);
+                continue;
+            }
+
+            filtered.Add(anchor);
+        }
+
+        return filtered;
+    }
+
+    private static string? ClassifyPowerGlossaryFilterReason(
+        GlossaryAnchor anchor,
+        string? canonicalPowerId,
+        string powerName,
+        string? canonicalDescription)
+    {
+        if (string.IsNullOrWhiteSpace(anchor.Hint))
+        {
+            return "empty_hint";
+        }
+
+        if (string.Equals(anchor.Source, "missing_hint", StringComparison.OrdinalIgnoreCase))
+        {
+            return "missing_hint";
+        }
+
+        if (ContainsDescriptionPlaceholder(anchor.Hint))
+        {
+            return "template_hint";
+        }
+
+        var normalizedGlossaryId = NormalizeGlossaryId(anchor.GlossaryId);
+        var normalizedPowerId = NormalizeGlossaryId(canonicalPowerId);
+        var normalizedDisplay = NormalizeComparisonText(anchor.DisplayText);
+        var normalizedName = NormalizeComparisonText(powerName);
+        if (!string.IsNullOrWhiteSpace(canonicalDescription) &&
+            string.Equals(NormalizeComparisonText(anchor.Hint), NormalizeComparisonText(canonicalDescription), StringComparison.OrdinalIgnoreCase))
+        {
+            return "duplicate_power_description";
+        }
+
+        if (!string.IsNullOrWhiteSpace(normalizedDisplay) &&
+            string.Equals(normalizedDisplay, normalizedName, StringComparison.OrdinalIgnoreCase))
+        {
+            if (!string.IsNullOrWhiteSpace(normalizedGlossaryId) &&
+                string.Equals(normalizedGlossaryId, normalizedPowerId, StringComparison.OrdinalIgnoreCase))
+            {
+                return "duplicate_power_identity";
+            }
+        }
+
+        return null;
+    }
+
+    private void LogPowerGlossaryFilter(string identifier, string path, GlossaryAnchor anchor, string reason)
+    {
+        var message =
+            $"Power glossary filtered power={identifier} path={path} glossary_id={anchor.GlossaryId} " +
+            $"display_text={anchor.DisplayText} source={anchor.Source ?? "unknown"} reason={reason} hint=\"{AbbreviateForLog(anchor.Hint)}\"";
+        _logger?.Warn(message);
+    }
+
+    private void RecordEnemyPowerGlossaryFilter(
+        int? enemyIndex,
+        string? enemyId,
+        string path,
+        GlossaryAnchor anchor,
+        string reason,
+        List<IReadOnlyDictionary<string, object?>>? enemyDiagnostics)
+    {
+        if (enemyIndex is null || string.IsNullOrWhiteSpace(enemyId) || enemyDiagnostics is null)
+        {
+            return;
+        }
+
+        RecordEnemyFieldFilter(
+            enemyIndex.Value,
+            enemyId!,
+            NormalizeEnemyDiagnosticField(path),
+            $"power_glossary_{reason}",
+            $"glossary_id={anchor.GlossaryId} source={anchor.Source ?? "unknown"} display_text=\"{AbbreviateForLog(anchor.DisplayText)}\"",
+            enemyDiagnostics);
     }
 
     private static IReadOnlyList<DescriptionVariable> ResolveCardDescriptionSeedVariables(object? card, string? raw, IReadOnlyList<string>? keywords)
@@ -5183,6 +5568,16 @@ internal sealed class Sts2RuntimeReflectionReader
 
         var normalized = NormalizeDescriptionRichText(text).Trim();
         return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
+    }
+
+    private static string? NormalizeEnemyUiText(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
+        return NormalizeDescriptionText(text.Replace('×', 'x'));
     }
 
     private static string NormalizeDescriptionRichText(string text)
@@ -5938,6 +6333,11 @@ internal sealed class Sts2RuntimeReflectionReader
         }
 
         var key = NormalizeIntentLabelKey(value);
+        if (Regex.IsMatch(key, "^[0-9]+(x[0-9]+)?$", RegexOptions.CultureInvariant))
+        {
+            return true;
+        }
+
         if (Regex.IsMatch(key, "^(attack|block|buff|debuff|attack_buff|attack_block|attack_debuff)(_[0-9]+(x[0-9]+)?)?$", RegexOptions.CultureInvariant))
         {
             return true;
@@ -5958,6 +6358,7 @@ internal sealed class Sts2RuntimeReflectionReader
             "attack_block" or
             "attack_debuff" or
             "攻击" or
+            "攻势" or
             "格挡" or
             "防御" or
             "增益" or
@@ -5998,7 +6399,32 @@ internal sealed class Sts2RuntimeReflectionReader
             return string.Empty;
         }
 
-        return Regex.Replace(value.Trim().ToLowerInvariant(), "[^\\p{L}\\p{Nd}]+", "_").Trim('_');
+        return Regex.Replace(value.Trim().Replace('×', 'x').ToLowerInvariant(), "[^\\p{L}\\p{Nd}]+", "_").Trim('_');
+    }
+
+    private static bool LooksLikeInternalEnemyToken(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        var trimmed = value.Trim();
+        if (Regex.IsMatch(trimmed, "^(POWER|MONSTER|RELIC|CARD|STATUS|INTENT|ROOM)\\.", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+        {
+            return true;
+        }
+
+        if (!trimmed.Contains(' ') &&
+            (trimmed.Contains('.', StringComparison.Ordinal) ||
+             trimmed.Contains("::", StringComparison.Ordinal) ||
+             trimmed.Contains('/', StringComparison.Ordinal) ||
+             trimmed.Contains('\\', StringComparison.Ordinal)))
+        {
+            return true;
+        }
+
+        return Regex.IsMatch(trimmed, "^[A-Z][A-Za-z0-9]+(?:Power|Enemy|Monster|Move|Intent|State|Data|Behavior)$", RegexOptions.CultureInvariant);
     }
 
     private static IReadOnlyDictionary<string, object?> BuildCardPreview(HandCardDescriptor card)

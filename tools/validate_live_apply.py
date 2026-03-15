@@ -22,6 +22,8 @@ except ImportError:
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PORT = 17654
 DESCRIPTION_PLACEHOLDER_RE = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*(?::[^}]+)?\}")
+RICH_TEXT_MARKUP_RE = re.compile(r"\[[^\]]+\]")
+INTERNAL_TOKEN_RE = re.compile(r"^(?:POWER|MONSTER|RELIC|CARD|STATUS|INTENT|ROOM)\.", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -251,6 +253,70 @@ def normalize_comparison_text(text: Any) -> str:
     return "".join(ch.lower() for ch in text if ch.isalnum())
 
 
+def normalize_enemy_label(text: Any) -> str:
+    if not isinstance(text, str):
+        return ""
+    lowered = text.strip().replace("×", "x").lower()
+    return re.sub(r"[^\w\u0080-\uffff]+", "_", lowered).strip("_")
+
+
+def contains_enemy_markup(text: Any) -> bool:
+    return isinstance(text, str) and bool(RICH_TEXT_MARKUP_RE.search(text))
+
+
+def looks_like_internal_token(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    trimmed = value.strip()
+    if not trimmed:
+        return False
+    if INTERNAL_TOKEN_RE.search(trimmed):
+        return True
+    if " " not in trimmed and any(token in trimmed for token in (".", "::", "/", "\\")):
+        return True
+    return bool(re.fullmatch(r"[A-Z][A-Za-z0-9]+(?:Power|Enemy|Monster|Move|Intent|State|Data|Behavior)", trimmed))
+
+
+def classify_enemy_move_name(enemy: dict[str, Any]) -> str | None:
+    move_name = enemy.get("move_name")
+    if not isinstance(move_name, str) or not move_name.strip():
+        return None
+    normalized_move = normalize_enemy_label(move_name)
+    if not normalized_move:
+        return None
+    if re.fullmatch(r"[0-9]+(?:x[0-9]+)?", normalized_move):
+        return "generic_numeric_move_name"
+    if normalized_move in {
+        "unknown",
+        "intent",
+        "action",
+        "move",
+        "strategy",
+        "skill",
+        "attack",
+        "block",
+        "defend",
+        "buff",
+        "debuff",
+        "攻击",
+        "攻势",
+        "格挡",
+        "防御",
+        "增益",
+        "负面效果",
+        "策略",
+        "技巧",
+        "未知",
+    }:
+        return "generic_move_name"
+
+    for field_name in ("intent", "intent_raw", "intent_type"):
+        normalized_field = normalize_enemy_label(enemy.get(field_name))
+        if normalized_field and normalized_field == normalized_move:
+            return f"duplicate_{field_name}"
+    return None
+
+
 def classify_low_quality_glossary(
     anchor: dict[str, Any],
     *,
@@ -270,13 +336,13 @@ def classify_low_quality_glossary(
 
     normalized_display = normalize_comparison_text(anchor.get("display_text"))
     normalized_name = normalize_comparison_text(owner_name)
+    if normalize_comparison_text(hint) == normalize_comparison_text(owner_description):
+        return f"duplicate_{owner_kind}_description"
     if normalized_display and normalized_display == normalized_name:
         normalized_glossary_id = normalize_comparison_text(anchor.get("glossary_id"))
         normalized_owner_id = normalize_comparison_text(owner_id)
         if normalized_glossary_id and normalized_glossary_id == normalized_owner_id:
             return f"duplicate_{owner_kind}_identity"
-        if normalize_comparison_text(hint) == normalize_comparison_text(owner_description):
-            return f"duplicate_{owner_kind}_description"
 
     return None
 
@@ -289,9 +355,15 @@ def audit_card_descriptions(
     preview_mismatches: list[dict[str, str]] = []
     low_quality_relic_glossary: list[dict[str, Any]] = []
     low_quality_potion_glossary: list[dict[str, Any]] = []
+    rich_text_enemy_fields: list[dict[str, Any]] = []
+    duplicate_enemy_move_names: list[dict[str, Any]] = []
+    internal_enemy_keywords: list[dict[str, Any]] = []
+    low_quality_enemy_power_glossary: list[dict[str, Any]] = []
     audited_card_count = 0
     audited_relic_count = 0
     audited_potion_count = 0
+    audited_enemy_count = 0
+    audited_enemy_power_count = 0
 
     player = snapshot.get("player")
     player = player if isinstance(player, dict) else {}
@@ -374,6 +446,71 @@ def audit_card_descriptions(
                     }
                 )
 
+    enemies = snapshot.get("enemies")
+    enemies = enemies if isinstance(enemies, list) else []
+    for enemy_index, enemy in enumerate(enemies):
+        if not isinstance(enemy, dict):
+            continue
+        audited_enemy_count += 1
+        for field_name in ("intent", "intent_raw", "move_name", "move_description"):
+            value = enemy.get(field_name)
+            if contains_enemy_markup(value):
+                rich_text_enemy_fields.append(
+                    {
+                        "path": f"snapshot.enemies[{enemy_index}].{field_name}",
+                        "reason": "rich_text_markup",
+                        "value": value,
+                    }
+                )
+        move_name_reason = classify_enemy_move_name(enemy)
+        if move_name_reason is not None:
+            duplicate_enemy_move_names.append(
+                {
+                    "path": f"snapshot.enemies[{enemy_index}].move_name",
+                    "reason": move_name_reason,
+                    "move_name": enemy.get("move_name"),
+                }
+            )
+        keywords = enemy.get("keywords")
+        keywords = keywords if isinstance(keywords, list) else []
+        for keyword_index, keyword in enumerate(keywords):
+            if looks_like_internal_token(keyword):
+                internal_enemy_keywords.append(
+                    {
+                        "path": f"snapshot.enemies[{enemy_index}].keywords[{keyword_index}]",
+                        "reason": "internal_token",
+                        "keyword": keyword,
+                    }
+                )
+
+        powers = enemy.get("powers")
+        powers = powers if isinstance(powers, list) else []
+        for power_index, power in enumerate(powers):
+            if not isinstance(power, dict):
+                continue
+            audited_enemy_power_count += 1
+            glossary = power.get("glossary")
+            glossary = glossary if isinstance(glossary, list) else []
+            for glossary_index, anchor in enumerate(glossary):
+                if not isinstance(anchor, dict):
+                    continue
+                reason = classify_low_quality_glossary(
+                    anchor,
+                    owner_kind="power",
+                    owner_name=power.get("name"),
+                    owner_id=power.get("canonical_power_id") or power.get("power_id"),
+                    owner_description=power.get("description"),
+                )
+                if reason is not None:
+                    low_quality_enemy_power_glossary.append(
+                        {
+                            "path": f"snapshot.enemies[{enemy_index}].powers[{power_index}].glossary[{glossary_index}]",
+                            "reason": reason,
+                            "glossary_id": anchor.get("glossary_id"),
+                            "source": anchor.get("source"),
+                        }
+                    )
+
     for index, action in enumerate(actions):
         if not isinstance(action, dict):
             continue
@@ -404,6 +541,8 @@ def audit_card_descriptions(
         "audited_card_count": audited_card_count,
         "audited_relic_count": audited_relic_count,
         "audited_potion_count": audited_potion_count,
+        "audited_enemy_count": audited_enemy_count,
+        "audited_enemy_power_count": audited_enemy_power_count,
         "placeholder_description_count": len(placeholder_paths),
         "placeholder_description_paths": placeholder_paths[:20],
         "preview_mismatch_count": len(preview_mismatches),
@@ -412,6 +551,14 @@ def audit_card_descriptions(
         "low_quality_relic_glossary": low_quality_relic_glossary[:20],
         "low_quality_potion_glossary_count": len(low_quality_potion_glossary),
         "low_quality_potion_glossary": low_quality_potion_glossary[:20],
+        "enemy_rich_text_field_count": len(rich_text_enemy_fields),
+        "enemy_rich_text_fields": rich_text_enemy_fields[:20],
+        "duplicate_enemy_move_name_count": len(duplicate_enemy_move_names),
+        "duplicate_enemy_move_names": duplicate_enemy_move_names[:20],
+        "internal_enemy_keyword_count": len(internal_enemy_keywords),
+        "internal_enemy_keywords": internal_enemy_keywords[:20],
+        "low_quality_enemy_power_glossary_count": len(low_quality_enemy_power_glossary),
+        "low_quality_enemy_power_glossary": low_quality_enemy_power_glossary[:20],
     }
 
 
@@ -517,7 +664,7 @@ def summarize_runtime_log(log_path: Path | None) -> dict[str, Any] | None:
     interesting = [
         line.strip()
         for line in lines
-        if "Description " in line or "Text resolution issues" in line
+        if "Description " in line or "Text resolution issues" in line or "Enemy field filtered" in line or "Power glossary filtered" in line
     ]
     return {
         "path": str(log_path),
@@ -860,6 +1007,22 @@ def run_validation(args: argparse.Namespace) -> int:
     elif after_description_audit["low_quality_potion_glossary_count"] > 0:
         verdict = "failed"
         summary = "live snapshot 的 potion glossary 仍包含空 hint、missing_hint、模板化或重复本体说明条目。"
+        exit_code = 1
+    elif after_description_audit["enemy_rich_text_field_count"] > 0:
+        verdict = "failed"
+        summary = "live snapshot 的 enemy richer fields 仍包含 UI 富文本或展示性 markup。"
+        exit_code = 1
+    elif after_description_audit["duplicate_enemy_move_name_count"] > 0:
+        verdict = "failed"
+        summary = "live snapshot 的 enemy move_name 仍重复 intent 或保留低价值展示标签。"
+        exit_code = 1
+    elif after_description_audit["internal_enemy_keyword_count"] > 0:
+        verdict = "failed"
+        summary = "live snapshot 的 enemy keywords 仍泄漏内部 token 或 canonical id。"
+        exit_code = 1
+    elif after_description_audit["low_quality_enemy_power_glossary_count"] > 0:
+        verdict = "failed"
+        summary = "live snapshot 的 enemy power glossary 仍包含重复本体说明、空 hint 或模板化条目。"
         exit_code = 1
 
     result = build_result(

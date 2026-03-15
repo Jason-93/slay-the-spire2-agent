@@ -125,6 +125,52 @@ class LiveApplyValidationTests(unittest.TestCase):
         self.assertEqual(audit["low_quality_potion_glossary_count"], 1)
         self.assertEqual(audit["low_quality_potion_glossary"][0]["reason"], "template_hint")
 
+    def test_audit_card_descriptions_reports_enemy_runtime_text_issues(self) -> None:
+        snapshot = {
+            "phase": "combat",
+            "player": {
+                "hand": [],
+                "draw_pile_cards": [],
+                "discard_pile_cards": [],
+                "exhaust_pile_cards": [],
+                "relics": [],
+                "potions": [],
+            },
+            "enemies": [
+                {
+                    "intent": "2[font_size=18]x3[/font_size]",
+                    "intent_raw": "2[font_size=18]x3[/font_size]",
+                    "intent_type": "attack",
+                    "move_name": "2[font_size=18]x3[/font_size]",
+                    "move_description": "这个敌人将要**攻击**造成2点伤害3次。",
+                    "keywords": ["damage", "POWER.SLIPPERY_POWER"],
+                    "powers": [
+                        {
+                            "name": "滑溜",
+                            "power_id": "POWER.SLIPPERY_POWER",
+                            "description": "这个生物下一次要失去生命值时，只会失去1点生命。",
+                            "glossary": [
+                                {
+                                    "glossary_id": "powerslipperypower",
+                                    "display_text": "滑溜",
+                                    "hint": "这个生物下一次要失去生命值时，只会失去1点生命。",
+                                    "source": "runtime_hover_tip",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+
+        audit = audit_card_descriptions(snapshot, [])
+
+        self.assertEqual(audit["enemy_rich_text_field_count"], 3)
+        self.assertEqual(audit["duplicate_enemy_move_name_count"], 1)
+        self.assertEqual(audit["internal_enemy_keyword_count"], 1)
+        self.assertEqual(audit["low_quality_enemy_power_glossary_count"], 1)
+        self.assertEqual(audit["low_quality_enemy_power_glossary"][0]["reason"], "duplicate_power_description")
+
     def test_select_candidate_prefers_choose_combat_card_in_combat_selection(self) -> None:
         snapshot = {"phase": "combat"}
         actions = [
