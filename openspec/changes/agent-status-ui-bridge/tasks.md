@@ -1,23 +1,23 @@
-## 1. Bridge 协议与内存状态
+## 1. HUD 挂载与结构重构
 
-- [x] 1.1 在 `mod/Sts2Mod.StateBridge.Contracts` 中定义 `/agent-status` 对应的请求/响应模型与最小字段校验规则。
-- [x] 1.2 在 `LocalBridgeServer` 中新增 `POST /agent-status`、`GET /agent-status`、`DELETE /agent-status` 路由，并保持与 `/apply` 解耦。
-- [x] 1.3 在 mod 侧实现单份 `AgentStatusSnapshot` 内存状态容器，支持覆盖更新、读取、清空和 TTL 失效判断。
+- [ ] 1.1 将 `AgentStatusOverlayNode` 重构为参考 `sts2_typing` 的 `CanvasLayer` HUD，并使用独立根 `Control` 管理布局。
+- [ ] 1.2 将 HUD 挂载入口改为延迟 `AddChild`，避免 `_Ready`、父容器可见性和裁剪带来的不稳定行为。
+- [ ] 1.3 保留必要的节点存在性检查与轻量重挂逻辑，但移除实验性的大色块与临时可见性 hack。
 
-## 2. 游戏内 overlay
+## 2. 紧凑状态卡片布局
 
-- [x] 2.1 在 in-game runtime 挂载一个只读 overlay 节点，并接入 `AgentStatusSnapshot` 的最新状态读取。
-- [x] 2.2 实现 overlay 的摘要渲染规则，至少覆盖 `phase`、动作标签或动作标识、`reason`、`status`、`confidence`、`turn`、`step`。
-- [x] 2.3 实现 stale 或 idle、长文本截断和 `session_id` 切换时的 UI 刷新逻辑，避免旧状态残留。
+- [ ] 2.1 将 HUD 缩减为低遮挡的小尺寸状态卡片，默认放置在不遮挡核心图标的角落区域。
+- [ ] 2.2 使用 `PanelContainer`、`StyleBoxFlat`、统一边距和透明背景重做视觉样式，避免当前大框遮挡问题。
+- [ ] 2.3 为 `status`、`phase`、动作标签、`confidence`、`turn/step`、`reason` 定义稳定的摘要布局与最大展示长度。
 
-## 3. Runner 同步链路
+## 3. 字体与文本可读性
 
-- [x] 3.1 在 Python bridge client 中新增 `/agent-status` 调用封装，支持写入、读取和清空。
-- [x] 3.2 在 autoplay / runner 中于“模型给出计划动作”“提交动作前”“收到 bridge 回执后”推送最新 agent 状态。
-- [x] 3.3 在 runner 停止、异常退出或会话切换时主动清理 `/agent-status`，并保证失败时不影响主 autoplay 流程。
+- [ ] 3.1 参考 `sts2_typing` 引入更清晰的字体处理方案，改善中文渲染和缩放下的可读性。
+- [ ] 3.2 使用支持自动换行的文本控件并修复当前字号、行高和文本溢出问题。
+- [ ] 3.3 校验 stale、idle、长文本截断和空字段场景下的卡片布局稳定性。
 
-## 4. 验证与文档
+## 4. Live 验证与文档
 
-- [x] 4.1 为 `/agent-status` 的协议和生命周期补充单元测试或等效验证脚本。
-- [ ] 4.2 进行一次 live 联调，确认 overlay 能随 `planned -> submitted -> accepted/rejected` 生命周期更新，并在停止后进入 `idle` 或清空。
-- [x] 4.3 更新 README 或调试文档，说明 `/agent-status` 的用途、payload 字段和常见联调方式。
+- [ ] 4.1 在菜单、战斗、奖励三个界面进行 live 验证，确认 HUD 稳定可见且不明显遮挡原生 UI。
+- [ ] 4.2 更新 `README.md` / `README.zh.md` 或相关调试文档，说明 HUD 的用途、位置和调试方式。
+- [ ] 4.3 清理临时诊断日志与调试代码，只保留对后续联调仍有价值的最小诊断能力。

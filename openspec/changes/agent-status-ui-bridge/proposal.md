@@ -1,25 +1,25 @@
 ## Why
 
-当前自动打牌链路已经能够调用大模型并执行动作，但调试时只能依赖终端日志和 trace 文件，无法在游戏内直接看到“模型准备做什么、为什么这样做、动作是否被接受”。这会显著拖慢 live 联调、问题复现和策略迭代，尤其在 reward、map、额外选牌等多阶段窗口切换时更难定位错误来源。
+当前 `/agent-status` bridge 与游戏内 HUD 已经打通，但 live 联调表明现有 overlay 在实际菜单与战斗 UI 中仍有明显可用性问题：挂载时机不稳定、面板过大、字体容易溢出、并且会遮挡原生图标与提示信息。继续在现有实现上做零散修补，调试收益有限，应该尽快把 HUD 重构为更接近游戏原生 UI 的轻量状态卡片。
 
 ## What Changes
 
-- 新增一个面向 mod 的 agent 状态同步能力，允许外部 runner 通过本地 bridge 主动推送“最新决策结果、理由与执行状态”到游戏进程内。
-- 在本地 bridge 新增扁平接口 `/agent-status`，支持写入、读取与清空当前 agent UI 状态，不复用 `/apply` 的动作语义。
-- 在游戏内 mod 挂载一个轻量级 overlay，将最近一次大模型决策、理由、置信度和执行状态直接显示到 UI。
-- 为状态同步定义超时失效、会话隔离与文本截断规则，避免旧决策残留、UI 遮挡或跨局串状态。
-- 更新 autoplay / runner 调试链路，使其在生成决策、提交动作、收到 bridge 回执后同步刷新 overlay 状态。
+- 保留现有 `/agent-status` 协议与 runner 同步链路，不再改动 endpoint 语义。
+- 将游戏内 HUD 从实验性 overlay 重构为稳定的 `CanvasLayer` 状态卡片，参考 `sts2_typing` 的挂载与布局方式。
+- 使用延迟挂载、独立根 `Control`、受控尺寸与自动换行，解决 `_Ready` 不稳定、文本溢出和父容器裁剪问题。
+- 收紧默认展示内容，只保留 `status`、`phase`、动作标签、简短 `reason`、`confidence`、`turn/step` 等摘要字段，避免遮挡核心战斗信息。
+- 补充 HUD 位置、字号、截断、透明度和可见性验证要求，确保菜单、战斗、奖励等界面都能稳定显示。
 
 ## Capabilities
 
 ### New Capabilities
-- `agent-status-ui-bridge`: 定义外部 agent 通过本地 bridge 将最新决策状态同步到游戏内 overlay 的协议、生命周期和展示约束。
+- `agent-status-ui-bridge`: 定义外部 agent 通过本地 bridge 将最新决策状态同步到游戏内 HUD，并约束 HUD 的稳定挂载、摘要展示与低遮挡行为。
 
 ### Modified Capabilities
 - None.
 
 ## Impact
 
-- 受影响代码主要包括 `mod/Sts2Mod.StateBridge/Server/`、`mod/Sts2Mod.StateBridge/InGame/`、`src/sts2_agent/orchestrator.py`、`src/sts2_agent/policy/` 与相关调试脚本。
-- 本地 HTTP bridge 将新增 `/agent-status` endpoint，但不影响既有 `/health`、`/snapshot`、`/actions`、`/apply` 语义。
-- 游戏内将新增一个只读调试 overlay；它不直接改变游戏状态，也不应受写动作开关约束。
+- 受影响代码主要集中在 `mod/Sts2Mod.StateBridge/InGame/` 的 overlay 节点与挂载入口。
+- `/agent-status` 的 HTTP 协议、Python bridge client 与 runner 生命周期大体保持不变，影响较小。
+- 文档与验证步骤需要更新，加入“菜单界面可见”“不遮挡关键图标”“中文字体不溢出”等 live 检查项。

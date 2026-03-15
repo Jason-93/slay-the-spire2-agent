@@ -1,69 +1,74 @@
 ## Context
 
-当前系统已经具备 live `snapshot`、`actions`、`/apply` 闭环，外部 runner 能够调用大模型完成自动打牌；但模型的最新决策、理由、置信度与 bridge 回执仍主要停留在终端输出和 trace 文件中。出现 reward、map、combat selection 等窗口切换问题时，开发者需要在游戏、控制台和日志之间来回对照，定位成本较高。
+当前 bridge 协议与 runner 状态同步链路已经可用，问题主要集中在游戏内 HUD 呈现层。最近的 live 调试暴露了几个具体缺陷：节点虽然能进树，但 `_Ready` / `_Process` 生命周期不稳定；直接挂到业务 UI 容器时容易被裁剪或受父容器可见性影响；实验性的大面板与默认 `Label` 布局在中文文本下容易溢出，并遮挡菜单或战斗右上角信息。
 
-现有 `LocalBridgeServer` 已证明“外部进程 -> mod -> 游戏进程”链路可行，因此本次设计优先复用现有本地 HTTP bridge，而不是增加文件轮询或新的独立通道。用户已经明确希望接口保持扁平，避免 `/agent/status` 这类分层路径与额外服务拆分。
+`sts2_typing` 提供了一个更可靠的参考实现：通过 `CanvasLayer` 建立独立 UI 层，使用 `CallDeferred(AddChild, ...)` 延迟挂载，使用 `FullRect` 根容器统一管理布局，并通过 `PanelContainer`、`StyleBoxFlat` 与经过处理的字体获得更稳定的显示效果。本次设计保持 `/agent-status` 协议不变，重点重构 HUD 的挂载方式与布局策略。
 
 ## Goals / Non-Goals
 
 **Goals:**
-- 通过新增扁平 `/agent-status` 接口，把外部 agent 的最新决策状态同步到 mod 进程内。
-- 在游戏 UI 中渲染一个轻量级只读 overlay，直接展示动作、理由、置信度和执行状态。
-- 保证 overlay 生命周期可控，避免跨局串状态、旧状态残留或 UI 长文本污染。
-- 尽量少改现有桥接结构，沿用 `LocalBridgeServer`、in-game node 和现有 runner 生命周期。
+- 让 agent 状态 HUD 在菜单、战斗、奖励等界面都能稳定显示。
+- 将 HUD 缩减为低遮挡、易读的摘要卡片，避免影响原生 UI。
+- 采用更接近游戏原生 Godot UI 的挂载与字体方案，降低中文文本溢出概率。
+- 保留现有 `/agent-status` 数据模型，使本次改动主要局限在 mod UI 层。
 
 **Non-Goals:**
-- 不在本次变更中实现游戏内可交互控制面板。
-- 不把完整 trace、完整 prompt 或长历史决策都塞进 overlay。
-- 不改变 `/apply`、`/snapshot`、`/actions` 的既有协议语义。
-- 不引入额外本地数据库、消息队列或文件轮询机制。
+- 不修改 `/agent-status` 的核心 payload 语义。
+- 不把 HUD 扩展成可交互调试控制台或历史消息面板。
+- 不在本次变更中显示完整 prompt、trace 或多条历史决策。
+- 不继续保留实验性的大尺寸诊断 UI 作为默认实现。
 
 ## Decisions
 
-### 决策 1：使用扁平 `/agent-status` endpoint，而不是文件同步或 `/agent/status`
-- 选择：在 `LocalBridgeServer` 中直接新增 `POST /agent-status`、`GET /agent-status`、`DELETE /agent-status`。
-- 原因：当前 bridge 已经统一承载本地 HTTP 能力，新增同风格 endpoint 成本最低，也最符合仓库现有接口风格：`/health`、`/snapshot`、`/actions`、`/apply`。
+### 决策 1：HUD 改为 `CanvasLayer` + 延迟挂载，而不是依赖运行期临时补挂节点
+- 选择：参考 `sts2_typing`，通过 `NGame.Instance?.CallDeferred(Node.MethodName.AddChild, new AgentStatusOverlayNode())` 挂载 `CanvasLayer`。
+- 原因：延迟挂载更符合 Godot UI 生命周期，能显著降低“节点在树里但 `_Ready` 未稳定触发”的问题。
 - 备选方案：
-  - 文件轮询：实现简单，但有编码、轮询延迟和 stale 清理问题。
-  - `/agent/status`：语义可行，但与现有扁平 endpoint 风格不一致。
+  - 继续在 tick 中尝试补挂：便于兜底，但生命周期混乱，调试成本高。
+  - 挂到 `InspectionContainer` 等业务容器：容易受父容器可见性、布局和裁剪影响。
 
-### 决策 2：mod 内仅维护一份最新 `AgentStatusSnapshot` 内存态
-- 选择：bridge server 在收到请求后更新单份内存对象；overlay 每帧或每 tick 直接读取，不额外引入 provider、service、repository 分层。
-- 原因：需求是“看最新状态”，不是存储历史；单份快照足以支撑调试，且最容易避免过度设计。
-- 备选方案：维护历史队列或独立服务层。优势有限，但会增加状态同步复杂度和代码噪音。
+### 决策 2：HUD 使用独立根 `Control` 和紧凑 `PanelContainer` 布局
+- 选择：`CanvasLayer` 下创建 `FullRect` 根 `Control`，再在右上角放置小尺寸状态卡片；卡片宽度固定在较小范围，使用圆角、透明背景和有限内边距。
+- 原因：根容器负责统一定位，卡片本身只做内容展示，更容易控制不遮挡其他信息。
+- 备选方案：
+  - 直接在 overlay 根节点上摆放多个 `ColorRect`：实现快，但样式粗糙，调尺寸和边框不方便。
+  - 保持左上角大框：验证可见性方便，但与游戏原生图标区域冲突更明显。
 
-### 决策 3：payload 聚焦“最新决策生命周期”，不复用 `/apply` 请求体
-- 选择：`/agent-status` 使用独立 payload，至少包含 `session_id`、`phase`、`action_id`、`action_label`、`reason`、`confidence`、`status`、`turn`、`step`、`updated_at`。
-- 原因：overlay 关心的是“模型解释和动作执行阶段”，而不是游戏动作参数本身；与 `/apply` 解耦更清晰。
-- 备选方案：直接复用 `/apply` metadata。这样会混淆“动作执行协议”和“调试 UI 协议”，不利于后续扩展。
+### 决策 3：默认只展示摘要字段，并对文本做更激进的限制
+- 选择：保留 `status`、`phase`、`action_label`、简短 `reason`、`confidence`、`turn/step`；限制最大行数、最大字符数，`reason` 必须截断。
+- 原因：状态 HUD 的目标是“快速理解模型刚刚做了什么”，而不是替代完整日志。
+- 备选方案：
+  - 保留长文本说明：信息更全，但很容易遮挡战斗和菜单 UI。
+  - 允许折叠展开：交互复杂度更高，不适合作为 v1 默认行为。
 
-### 决策 4：overlay 只展示摘要，并在 mod 侧处理 stale、truncate 与 session 隔离
-- 选择：overlay 默认展示最近一次状态；超出长度的 `reason` 进行截断；若超时未更新则显示 `stale` 或 `idle`；若 `session_id` 变化则覆盖旧状态。
-- 原因：这些规则与 UI 呈现强相关，放在 mod 侧更容易保证展示一致性，runner 只负责推送事实状态。
-- 备选方案：全部让 Python 端预处理。这样会让 UI 行为分散到客户端，调试更难统一。
+### 决策 4：字体与文本组件按中文可读性优化
+- 选择：优先采用与 `sts2_typing` 类似的字体处理思路，使用主题 fallback font 的复制版本并增强 oversampling / MSDF；正文使用支持自动换行的文本控件。
+- 原因：中文在默认 `Label` 下更容易出现模糊、裁切和溢出，字体链需要显式处理。
+- 备选方案：
+  - 继续使用默认 `Label`：实现简单，但 live 表现已证明不够稳定。
+  - 强依赖外部字体资源：可控性强，但会引入额外资源打包与兼容问题。
 
-### 决策 5：runner 在三个关键时点推送状态
-- 选择：至少在“模型给出计划动作后”“准备提交动作时”“收到 bridge 回执后”更新 `/agent-status`；停止运行或退出时调用 `DELETE /agent-status`。
-- 原因：这样能把“计划 -> 提交中 -> 接受/拒绝”的完整生命周期显示在游戏里，覆盖当前最有价值的调试信息。
-- 备选方案：仅在最终结果后同步一次。实现更简单，但无法观察时序问题和 `409`、`stale_action` 之类竞争态。
+### 决策 5：诊断日志仅作为临时调试手段，不进入最终默认 HUD 行为
+- 选择：保留必要的挂载诊断能力，但默认 UI 不再暴露调试边框、大色块或实验性占位元素。
+- 原因：当前问题已经定位到挂载与布局层，正式方案应回归轻量化。
+- 备选方案：继续长期保留诊断边框和大面板。这样虽利于开发，但会影响正常 live 试玩体验。
 
 ## Risks / Trade-offs
 
-- [长理由遮挡游戏 UI] -> mod 侧限制最大显示行数和字符数，必要时增加折叠或热键切换。
-- [runner 异常退出导致旧状态残留] -> 增加 TTL 和 `DELETE /agent-status` 清理路径，overlay 超时后自动进入 `idle`。
-- [多局或重连时串状态] -> payload 强制携带 `session_id`，新会话覆盖旧状态并重置显示。
-- [新增 endpoint 被误判为写游戏状态] -> 明确该接口仅更新调试 UI，不受写动作开关控制，也不得触发游戏逻辑。
-- [重绘过于频繁] -> overlay 只读内存态，不做文件 I/O；文本重建仅在状态变化时发生。
+- [右上角仍与局部原生 UI 冲突] -> 将卡片宽度、顶部偏移、透明度做成集中常量，并在菜单、战斗、奖励界面逐一 live 验证。
+- [中文字体链在不同窗口缩放下表现不一致] -> 参考 `sts2_typing` 的 sharp font 做法，并在窗口缩放或不同分辨率下检查。
+- [延迟挂载后遇到场景切换丢失 HUD] -> 保留轻量级存在性检查，只在节点丢失时重新挂载，而不是每 tick 重建。
+- [摘要过短导致调试信息不够] -> 完整信息继续保留在 runner 日志与 trace 中，HUD 只显示摘要。
 
 ## Migration Plan
 
-1. 先在 mod 侧落地 `AgentStatusSnapshot`、`/agent-status` 和最小 overlay，保持为纯新增能力。
-2. 在 Python bridge client / runner 增加状态推送，但默认仅在 autoplay 调试链路使用。
-3. 补充 live 验证：确认 endpoint 可读写、overlay 能显示最新状态、runner 停止后能清空。
-4. 若实现期间发现 UI 占位或字段不足，再在同一能力下增量扩展 payload，而不回退到文件同步方案。
+1. 先将实验性 overlay 重构为 `CanvasLayer` 状态卡片，替换现有大框实现。
+2. 保持 `/agent-status` 与 runner 侧代码不变，优先用现有 live 状态推送验证 HUD。
+3. 完成菜单、战斗、奖励三类界面的 live 检查，确认可见、低遮挡、无明显中文溢出。
+4. 移除或降级临时诊断 UI，仅保留必要日志，更新 README 与调试说明。
 
 ## Open Questions
 
-- overlay 是否需要默认显示，还是通过热键切换显示。
-- 是否要保留最近 3 条状态历史；v1 更建议仅显示最新一条，先保证稳定性。
-- `confidence` 在不同 policy 后端未必总是可用；实现时需要允许为空并保持 UI 稳定。
+- 默认放右上角还是右下角更不容易遮挡 STS2 原生 UI，需要最终 live 对比。
+- 是否需要提供简单的开关或热键来临时隐藏 HUD；v1 可以先默认常驻。
+- `reason` 是否需要按动作类型定制不同摘要模板，目前先采用统一截断策略。
