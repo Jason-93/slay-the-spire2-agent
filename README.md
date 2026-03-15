@@ -255,6 +255,8 @@ Additional full-battle fields:
 
 When using `HttpGameBridge`, the runner also syncs the latest decision lifecycle to the in-game overlay through `/agent-status`. The overlay shows the latest `phase`, action label, `reason`, `confidence`, and lifecycle states such as `planned`, `submitted`, `accepted`, or `rejected`.
 
+The default HUD is a compact debug card near the top-right corner. It is intentionally read-only, keeps only the latest status snapshot, and truncates long reasons to reduce overlap with the base game UI.
+
 Each step trace includes at least:
 
 - current `snapshot`

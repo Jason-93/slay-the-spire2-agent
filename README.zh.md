@@ -255,6 +255,8 @@ battle 模式下再重点看：
 
 当使用 `HttpGameBridge` 时，runner 还会通过 `/agent-status` 把最近一次决策生命周期同步到游戏内 overlay。overlay 会显示当前 `phase`、动作标签、`reason`、`confidence`，以及 `planned`、`submitted`、`accepted`、`rejected` 等状态，方便直接在游戏里看模型决策。
 
+当前 HUD 默认以右上角紧凑状态卡片展示，只保留最近一次状态快照，并会对过长 `reason` 做截断，以尽量减少对游戏原生 UI 的遮挡。
+
 单步 trace 至少包含：
 
 - 当前 `snapshot`

@@ -47,7 +47,6 @@ public sealed class Sts2InGameModEntryPoint
             EnsurePumpNodeAttached();
             EnsureOverlayNodeAttached();
             _initialized = true;
-            OverlayDiagnostics.Log("Initialize completed");
             _logger.Info("STS2 in-game bridge bootstrap initialized");
         }
     }
@@ -159,48 +158,48 @@ public sealed class Sts2InGameModEntryPoint
             return;
         }
 
+        _overlayNode = null;
+
         var gameInstance = NGame.Instance;
         if (gameInstance is null)
         {
-            OverlayDiagnostics.Log("EnsureOverlayNodeAttached skipped: NGame.Instance is null");
             return;
         }
 
-        var sceneRoot = gameInstance.GetTree()?.Root;
-        if (sceneRoot is null)
-        {
-            OverlayDiagnostics.Log("EnsureOverlayNodeAttached skipped: scene root is null");
-            return;
-        }
-
-        var currentScene = gameInstance.GetTree()?.CurrentScene;
-        var overlayParent = ResolveOverlayParent(gameInstance) ?? gameInstance;
-        OverlayDiagnostics.DumpNodeChain("overlay.attach.gameInstance", gameInstance);
-        OverlayDiagnostics.DumpNodeChain("overlay.attach.sceneRoot", sceneRoot);
-        OverlayDiagnostics.DumpNodeChain("overlay.attach.currentScene", currentScene);
-        OverlayDiagnostics.DumpNodeChain("overlay.attach.parent", overlayParent);
-
-        var existing = overlayParent.GetNodeOrNull<AgentStatusOverlayNode>(AgentStatusOverlayNode.NodeNameValue);
+        var existing = gameInstance.GetNodeOrNull<AgentStatusOverlayNode>(AgentStatusOverlayNode.NodeNameValue);
         if (existing is not null)
         {
             _overlayNode = existing;
             _overlayNode.RefreshFromState(force: false);
-            OverlayDiagnostics.Log("EnsureOverlayNodeAttached found existing overlay on chosen parent");
             return;
         }
 
         var overlayNode = new AgentStatusOverlayNode();
-        overlayParent.AddChild(overlayNode);
         _overlayNode = overlayNode;
-        _overlayNode.RefreshFromState(force: true);
-        OverlayDiagnostics.Log($"EnsureOverlayNodeAttached added overlay node to parent={overlayParent.Name} child_count={overlayParent.GetChildCount()}");
-        OverlayDiagnostics.DumpTree(gameInstance);
-        _logger?.Info($"Attached agent status overlay node to {overlayParent.Name}.");
+        gameInstance.AddChild(overlayNode);
+        _logger?.Info("Attached agent status overlay node.");
     }
 
-    private static Node? ResolveOverlayParent(NGame gameInstance)
+    internal static void NotifyOverlayAttached(AgentStatusOverlayNode node)
     {
-        return gameInstance;
+        lock (Gate)
+        {
+            _overlayNode = node;
+            _overlayNode.RefreshFromState(force: true);
+        }
+    }
+
+    internal static void NotifyOverlayDetached(AgentStatusOverlayNode node)
+    {
+        lock (Gate)
+        {
+            if (!ReferenceEquals(_overlayNode, node))
+            {
+                return;
+            }
+
+            _overlayNode = null;
+        }
     }
 }
 
