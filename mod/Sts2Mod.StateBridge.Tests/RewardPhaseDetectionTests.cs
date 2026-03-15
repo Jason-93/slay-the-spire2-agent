@@ -224,6 +224,41 @@ public sealed class RewardPhaseDetectionTests
     }
 
     [Fact]
+    public void ExtractCardRewardChoiceItems_ReadsPlayerHandHoldersCollections()
+    {
+        var reader = CreateReader();
+        var firstHolder = new FakeNHandCardHolder(new FakeCard("Strike") { CardId = "strike_red" });
+        var secondHolder = new FakeNHandCardHolder(new FakeCard("Defend") { CardId = "defend_red", TargetType = "Self", CardType = "Skill" });
+        var playerHand = new FakeNPlayerHandSelection(firstHolder, secondHolder);
+
+        var choices = InvokeExtractCardRewardChoiceItems(reader, playerHand);
+
+        Assert.Equal(2, choices.Count);
+        Assert.Same(firstHolder, choices[0]);
+        Assert.Same(secondHolder, choices[1]);
+    }
+
+    [Fact]
+    public void TryExecutePlayerHandCombatSelection_SelectsHolderAndConfirms()
+    {
+        var reader = CreateReader();
+        var firstHolder = new FakeNHandCardHolder(new FakeCard("Strike") { CardId = "strike_red" });
+        var secondHolder = new FakeNHandCardHolder(new FakeCard("Defend") { CardId = "defend_red", TargetType = "Self", CardType = "Skill" });
+        var playerHand = new FakeNPlayerHandSelection(firstHolder, secondHolder);
+
+        var (handled, rawResult) = InvokeTryExecutePlayerHandCombatSelection(reader, playerHand, secondHolder, 1);
+        var accepted = (bool)rawResult.GetType().GetProperty("Accepted")!.GetValue(rawResult)!;
+        var metadata = (IReadOnlyDictionary<string, object?>)rawResult.GetType().GetProperty("Metadata")!.GetValue(rawResult)!;
+
+        Assert.True(handled);
+        Assert.True(accepted);
+        Assert.Same(secondHolder, playerHand.LastPressedHolder);
+        Assert.True(playerHand.CheckIfSelectionCompleteCalled);
+        Assert.True(playerHand.ConfirmPressed);
+        Assert.Equal("player_hand_selection.OnHolderPressed", metadata["runtime_handler"]);
+    }
+
+    [Fact]
     public void BuildCombatWindow_ExportsRichCardsEnemiesPowersAndRunState()
     {
         var reader = CreateReader();
@@ -817,6 +852,24 @@ public sealed class RewardPhaseDetectionTests
         return method.Invoke(reader, new[] { runNode, runState, request, action })!;
     }
 
+    private static List<object> InvokeExtractCardRewardChoiceItems(Sts2RuntimeReflectionReader reader, object cardRewardScreen)
+    {
+        var method = typeof(Sts2RuntimeReflectionReader).GetMethod("ExtractCardRewardChoiceItems", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        return (List<object>)method.Invoke(reader, new[] { cardRewardScreen })!;
+    }
+
+    private static (bool Handled, object Result) InvokeTryExecutePlayerHandCombatSelection(
+        Sts2RuntimeReflectionReader reader,
+        object selectionScreen,
+        object choice,
+        int selectedIndex)
+    {
+        var method = typeof(Sts2RuntimeReflectionReader).GetMethod("TryExecutePlayerHandCombatSelection", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var args = new object?[] { selectionScreen, choice, selectedIndex, null };
+        var handled = (bool)method.Invoke(reader, args)!;
+        return (handled, args[3]!);
+    }
+
     private sealed class FakeRunNode(FakeScreenTracker screenStateTracker, FakeGlobalUi? globalUi = null)
     {
         public FakeScreenTracker ScreenStateTracker { get; } = screenStateTracker;
@@ -942,6 +995,57 @@ public sealed class RewardPhaseDetectionTests
     private sealed class FakeCardChoice(FakeCard card)
     {
         public FakeCard Card { get; } = card;
+    }
+
+    private class FakeNCardHolder(FakeCard card)
+    {
+        public FakeCard CardModel { get; } = card;
+    }
+
+    private sealed class FakeNHandCardHolder(FakeCard card) : FakeNCardHolder(card)
+    {
+    }
+
+    private sealed class FakeSelectModeConfirmButton;
+
+    private sealed class FakeNPlayerHandSelection(params FakeNHandCardHolder[] holders)
+    {
+        public bool IsInCardSelection { get; set; } = true;
+        public bool InSelectMode { get; set; } = true;
+        public string SelectionHeader { get; } = "Hand";
+        public IReadOnlyList<FakeNHandCardHolder> Holders { get; } = holders;
+        public IReadOnlyList<FakeNHandCardHolder> ActiveHolders { get; } = holders;
+        public FakeSelectModeConfirmButton _selectModeConfirmButton { get; } = new();
+        public FakeNCardHolder? LastPressedHolder { get; private set; }
+        public bool CheckIfSelectionCompleteCalled { get; private set; }
+        public bool ConfirmPressed { get; private set; }
+
+        public FakeNCardHolder GetCardHolder(FakeCard card)
+        {
+            return Holders.First(holder => ReferenceEquals(holder.CardModel, card));
+        }
+
+        public void OnHolderPressed(FakeNCardHolder holder)
+        {
+            LastPressedHolder = holder;
+        }
+
+        public void SelectCardInSimpleMode(FakeNHandCardHolder holder)
+        {
+            LastPressedHolder = holder;
+        }
+
+        public void CheckIfSelectionComplete()
+        {
+            CheckIfSelectionCompleteCalled = true;
+        }
+
+        public void OnSelectModeConfirmButtonPressed(FakeSelectModeConfirmButton _)
+        {
+            ConfirmPressed = true;
+            InSelectMode = false;
+            IsInCardSelection = false;
+        }
     }
 
     private sealed class FakeCardRewardSelectionScreen(params FakeCardChoice[] choices)

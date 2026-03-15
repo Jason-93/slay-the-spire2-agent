@@ -25,4 +25,4 @@
 ## 5. 文档与回归验证
 
 - [x] 5.1 更新相关文档或说明，记录新的 `window_kind`、`choose_combat_card` / `cancel_combat_selection` 语义与常见失败码。
-- [ ] 5.2 运行 `dotnet test mod\Sts2Mod.StateBridge.Tests\Sts2Mod.StateBridge.Tests.csproj --no-restore`、`$env:PYTHONPATH='src'; python -m unittest discover -s tests -v` 以及针对 live bridge 的专项验证，确认变更可进入 apply 阶段。
+- [x] 5.2 运行 `dotnet test mod\Sts2Mod.StateBridge.Tests\Sts2Mod.StateBridge.Tests.csproj --no-restore`、`$env:PYTHONPATH='src'; python -m unittest discover -s tests -v` 以及针对 live bridge 的专项验证，确认变更可进入 apply 阶段。

@@ -68,6 +68,10 @@ internal sealed class Sts2RuntimeReflectionReader
     {
         "_cardHolders",
         "CardHolders",
+        "_holders",
+        "Holders",
+        "_activeHolders",
+        "ActiveHolders",
         "_cards",
         "Cards",
         "_rewardCards",
@@ -108,6 +112,9 @@ internal sealed class Sts2RuntimeReflectionReader
         "CardSelectedFrom",
         "CardChosenFrom",
         "ConfirmSelection",
+        "OnHolderPressed",
+        "SelectCardInSimpleMode",
+        "SelectCardInUpgradeMode",
     };
 
     private static readonly string[] CardRewardChoiceSkipMethodNames =
@@ -144,6 +151,7 @@ internal sealed class Sts2RuntimeReflectionReader
         "OnCancel",
         "OnClose",
         "OnSkip",
+        "CancelHandSelectionIfNecessary",
     };
     private static readonly string[] CombatSelectionPromptMembers =
     {
@@ -157,6 +165,8 @@ internal sealed class Sts2RuntimeReflectionReader
         "HelpText",
         "HeaderText",
         "BodyText",
+        "_selectionHeader",
+        "SelectionHeader",
     };
     private static readonly string[] RewardAdvanceMethodNames =
     {
@@ -367,7 +377,7 @@ internal sealed class Sts2RuntimeReflectionReader
 
         return action.Type switch
         {
-            "play_card" => ExecutePlayCard(root.RunState, request, action),
+            "play_card" => ExecutePlayCard(root.RunNode, root.RunState, request, action),
             "end_turn" => ExecuteEndTurn(root.RunState, request),
             "choose_combat_card" => ExecuteChooseCombatCard(root.RunNode, root.RunState, request, action),
             "cancel_combat_selection" => ExecuteCancelCombatSelection(root.RunNode, root.RunState, request, action),
@@ -2350,32 +2360,71 @@ internal sealed class Sts2RuntimeReflectionReader
 
     private object? GetCombatCardSelectionScreen(object runNode, object runState, TextDiagnosticsCollector? textDiagnostics = null)
     {
-        var overlayTop = GetOverlayTopScreen(runNode);
-        if (overlayTop is null || IsRewardScreenObject(overlayTop))
-        {
-            return null;
-        }
-
         if (!BuildEnemies(runState, new TextDiagnosticsCollector()).Enemies.Any(enemy => enemy.IsAlive))
         {
             return null;
         }
 
-        var choices = FilterCardRewardSelectionChoices(ExtractCardRewardChoiceItems(overlayTop));
-        if (choices.Count == 0)
+        var playerHandSelection = GetActivePlayerHandSelectionScreen(textDiagnostics);
+        if (playerHandSelection is not null)
         {
-            return null;
+            return playerHandSelection;
         }
 
-        var hasSelectHook = HasAnyMethod(overlayTop, CardRewardChoiceSelectMethodNames) ||
+        var overlayTop = GetOverlayTopScreen(runNode);
+        if (overlayTop is not null &&
+            !IsRewardScreenObject(overlayTop) &&
+            LooksLikeCombatCardSelectionScreen(overlayTop, textDiagnostics))
+        {
+            return overlayTop;
+        }
+
+        var playerHandType = FindSts2Assembly()?.GetType("MegaCrit.Sts2.Core.Nodes.Combat.NPlayerHand");
+        var playerHand = GetMemberValue(playerHandType, "Instance");
+        return IsActivePlayerHandSelectionScreen(playerHand, textDiagnostics)
+            ? playerHand
+            : null;
+    }
+
+    private object? GetActivePlayerHandSelectionScreen(TextDiagnosticsCollector? textDiagnostics)
+    {
+        var playerHandType = FindSts2Assembly()?.GetType("MegaCrit.Sts2.Core.Nodes.Combat.NPlayerHand");
+        var playerHand = GetMemberValue(playerHandType, "Instance");
+        return IsActivePlayerHandSelectionScreen(playerHand, textDiagnostics)
+            ? playerHand
+            : null;
+    }
+
+    private bool IsActivePlayerHandSelectionScreen(object? playerHand, TextDiagnosticsCollector? textDiagnostics)
+    {
+        if (playerHand is null ||
+            (!GetBoolean(playerHand, "IsInCardSelection") && !GetBoolean(playerHand, "InSelectMode")))
+        {
+            return false;
+        }
+
+        var prompt = ResolveCombatSelectionPrompt(playerHand, textDiagnostics);
+        var choices = FilterCardRewardSelectionChoices(ExtractCardRewardChoiceItems(playerHand));
+        return choices.Count > 0 || !string.IsNullOrWhiteSpace(prompt);
+    }
+
+    private bool LooksLikeCombatCardSelectionScreen(object selectionScreen, TextDiagnosticsCollector? textDiagnostics)
+    {
+        var choices = FilterCardRewardSelectionChoices(ExtractCardRewardChoiceItems(selectionScreen));
+        if (choices.Count == 0)
+        {
+            return false;
+        }
+
+        var hasSelectHook = HasAnyMethod(selectionScreen, CardRewardChoiceSelectMethodNames) ||
                             choices.Any(choice => HasAnyMethod(choice, CardRewardChoiceSelectMethodNames));
         if (!hasSelectHook)
         {
-            return null;
+            return false;
         }
 
-        var typeName = GetTypeName(overlayTop) ?? string.Empty;
-        var prompt = ResolveCombatSelectionPrompt(overlayTop, textDiagnostics);
+        var typeName = GetTypeName(selectionScreen) ?? string.Empty;
+        var prompt = ResolveCombatSelectionPrompt(selectionScreen, textDiagnostics);
         var hasTypeHint = CombatCardSelectionTypeHints.Any(hint => typeName.Contains(hint, StringComparison.OrdinalIgnoreCase));
         var hasPromptHint = !string.IsNullOrWhiteSpace(prompt) &&
                             (prompt.Contains("选择", StringComparison.OrdinalIgnoreCase) ||
@@ -2385,12 +2434,7 @@ internal sealed class Sts2RuntimeReflectionReader
                              prompt.Contains("choose", StringComparison.OrdinalIgnoreCase) ||
                              prompt.Contains("exhaust", StringComparison.OrdinalIgnoreCase) ||
                              prompt.Contains("discard", StringComparison.OrdinalIgnoreCase));
-        if (!hasTypeHint && !hasPromptHint)
-        {
-            return null;
-        }
-
-        return overlayTop;
+        return hasTypeHint || hasPromptHint;
     }
 
     private RuntimeCard BuildCombatSelectionCard(object choice, int index, TextDiagnosticsCollector textDiagnostics)
@@ -2409,11 +2453,25 @@ internal sealed class Sts2RuntimeReflectionReader
 
     private string? ResolveCombatSelectionPrompt(object selectionScreen, TextDiagnosticsCollector? textDiagnostics)
     {
-        return ConvertToText(
+        var direct = ConvertToText(
             GetFirstMemberValue(selectionScreen, CombatSelectionPromptMembers),
             "combat_selection.prompt",
             textDiagnostics,
             CombatSelectionPromptMembers);
+        if (!string.IsNullOrWhiteSpace(direct))
+        {
+            return direct;
+        }
+
+        var header = GetMemberValue(selectionScreen, "_selectionHeader") ?? GetMemberValue(selectionScreen, "SelectionHeader");
+        return ConvertToText(
+            GetFirstMemberValue(header, "Text", "Label", "Title", "Name"),
+            "combat_selection.prompt",
+            textDiagnostics,
+            "Text",
+            "Label",
+            "Title",
+            "Name");
     }
 
     private static string ResolveCombatSelectionKind(object selectionScreen, string? prompt)
@@ -5501,7 +5559,7 @@ internal sealed class Sts2RuntimeReflectionReader
         }
     }
 
-    private RuntimeActionResult ExecutePlayCard(object runState, ActionRequest request, LegalAction action)
+    private RuntimeActionResult ExecutePlayCard(object runNode, object runState, ActionRequest request, LegalAction action)
     {
         if (!IsPlayerTurn(runState))
         {
@@ -5526,6 +5584,9 @@ internal sealed class Sts2RuntimeReflectionReader
             return new RuntimeActionResult(false, $"Card '{cardId}' is no longer in hand.", "stale_action");
         }
 
+        var canonicalCardId = ResolveCardCanonicalId(card);
+        var selectionDiagnosticsEnabled = LooksLikeCombatSelectionCard(card, canonicalCardId);
+
         object? target = null;
         var targetId = ConvertToText(GetDictionaryValue(request.Params, "target_id"));
         if (!string.IsNullOrWhiteSpace(targetId))
@@ -5539,23 +5600,427 @@ internal sealed class Sts2RuntimeReflectionReader
             }
         }
 
-        var tryManualPlay = card.GetType().GetMethod("TryManualPlay", BindingFlags.Public | BindingFlags.Instance);
-        if (tryManualPlay is null)
+        var runtimeHandler = "card.TryManualPlay";
+        Dictionary<string, object?>? playPathMetadata = null;
+        var played = false;
+        if (TryExecutePlayCardViaPlayerHand(card, target, out var uiRuntimeHandler, out var uiMetadata))
         {
-            return new RuntimeActionResult(false, "Card.TryManualPlay is not available in this runtime.", "runtime_incompatible");
+            runtimeHandler = uiRuntimeHandler;
+            playPathMetadata = uiMetadata;
+            played = true;
+        }
+        else
+        {
+            if (uiMetadata is not null)
+            {
+                playPathMetadata = uiMetadata;
+            }
+
+            var tryManualPlay = card.GetType().GetMethod("TryManualPlay", BindingFlags.Public | BindingFlags.Instance);
+            if (tryManualPlay is null)
+            {
+                return new RuntimeActionResult(false, "Card.TryManualPlay is not available in this runtime.", "runtime_incompatible");
+            }
+
+            played = tryManualPlay.Invoke(card, new[] { target }) as bool? == true;
+            if (!played)
+            {
+                return new RuntimeActionResult(false, $"Card '{cardId}' could not be played.", "play_rejected");
+            }
         }
 
-        var played = tryManualPlay.Invoke(card, new[] { target }) as bool?;
-        if (played != true)
-        {
-            return new RuntimeActionResult(false, $"Card '{cardId}' could not be played.", "play_rejected");
-        }
-
-        return new RuntimeActionResult(true, $"Played card '{cardId}'.", metadata: new Dictionary<string, object?>
+        var metadata = new Dictionary<string, object?>
         {
             ["card_id"] = cardId,
             ["target_id"] = targetId,
-        });
+            ["runtime_handler"] = runtimeHandler,
+        };
+        if (playPathMetadata is not null)
+        {
+            foreach (var entry in playPathMetadata)
+            {
+                metadata[entry.Key] = entry.Value;
+            }
+        }
+        if (!string.IsNullOrWhiteSpace(canonicalCardId))
+        {
+            metadata["canonical_card_id"] = canonicalCardId;
+        }
+
+        if (selectionDiagnosticsEnabled)
+        {
+            var selectionScreen = GetCombatCardSelectionScreen(runNode, runState);
+            var overlayTop = GetOverlayTopScreen(runNode);
+            metadata["play_card_runtime_type"] = GetTypeName(card);
+            metadata["selection_window_visible_after_play"] = selectionScreen is not null;
+            metadata["overlay_top_type_after_play"] = GetTypeName(overlayTop);
+            metadata["selection_candidate_method_parameters"] = DescribeSelectionMethodParameters(card, runNode, runState, player, target);
+            if (selectionScreen is not null)
+            {
+                metadata["selection_screen_type_after_play"] = GetTypeName(selectionScreen);
+                metadata["selection_prompt_after_play"] = ResolveCombatSelectionPrompt(selectionScreen, textDiagnostics: null);
+                metadata["selection_kind_after_play"] = ResolveCombatSelectionKind(
+                    selectionScreen,
+                    ResolveCombatSelectionPrompt(selectionScreen, textDiagnostics: null));
+                _logger?.Info(
+                    $"Combat selection detected after playing {canonicalCardId ?? cardId}: " +
+                    $"screen={GetTypeName(selectionScreen)} prompt={ResolveCombatSelectionPrompt(selectionScreen, textDiagnostics: null) ?? "<none>"}");
+            }
+            else
+            {
+                var cardMethods = DescribeCandidateMethods(card, maxCount: 20);
+                var handMethods = DescribeCandidateMethods(hand, maxCount: 12);
+                var combatState = GetCombatState(runState);
+                var combatStateMethods = DescribeCandidateMethods(combatState, maxCount: 12);
+                metadata["selection_candidate_card_methods"] = cardMethods;
+                metadata["selection_candidate_hand_methods"] = handMethods;
+                metadata["selection_candidate_combat_state_methods"] = combatStateMethods;
+                _logger?.Warn(
+                    $"Combat selection did not appear after playing {canonicalCardId ?? cardId}; " +
+                    $"overlay={GetTypeName(overlayTop) ?? "<none>"} card_methods=[{string.Join(", ", cardMethods)}] " +
+                    $"hand_methods=[{string.Join(", ", handMethods)}] combat_state_methods=[{string.Join(", ", combatStateMethods)}]");
+            }
+        }
+
+        return new RuntimeActionResult(true, $"Played card '{cardId}'.", metadata: metadata);
+    }
+
+    private bool TryExecutePlayCardViaPlayerHand(
+        object card,
+        object? target,
+        out string runtimeHandler,
+        out Dictionary<string, object?>? metadata)
+    {
+        runtimeHandler = string.Empty;
+        metadata = new Dictionary<string, object?>
+        {
+            ["play_strategy_attempt"] = "player_hand",
+        };
+
+        var playerHandType = FindSts2Assembly()?.GetType("MegaCrit.Sts2.Core.Nodes.Combat.NPlayerHand");
+        metadata["player_hand_type"] = playerHandType?.FullName;
+        var playerHand = GetMemberValue(playerHandType, "Instance");
+        if (playerHand is null)
+        {
+            metadata["play_strategy_failure_step"] = "player_hand_instance_missing";
+            return false;
+        }
+        metadata["player_hand_runtime_type"] = GetTypeName(playerHand);
+
+        var getCardHolder = playerHand.GetType()
+            .GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+            .FirstOrDefault(method => string.Equals(method.Name, "GetCardHolder", StringComparison.Ordinal));
+        if (getCardHolder is null)
+        {
+            metadata["play_strategy_failure_step"] = "get_card_holder_missing";
+            metadata["player_hand_candidate_methods"] = DescribeNamedMethods(playerHand, "Card", "Holder", "Play");
+            return false;
+        }
+
+        object? holder;
+        try
+        {
+            holder = getCardHolder.Invoke(playerHand, new[] { card });
+        }
+        catch
+        {
+            metadata["play_strategy_failure_step"] = "get_card_holder_failed";
+            return false;
+        }
+
+        if (holder is null)
+        {
+            metadata["play_strategy_failure_step"] = "card_holder_missing";
+            return false;
+        }
+
+        var startCardPlay = playerHand.GetType()
+            .GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+            .FirstOrDefault(method => string.Equals(method.Name, "StartCardPlay", StringComparison.Ordinal));
+        if (startCardPlay is null)
+        {
+            metadata["play_strategy_failure_step"] = "start_card_play_missing";
+            metadata["player_hand_candidate_methods"] = DescribeNamedMethods(playerHand, "Card", "Holder", "Play");
+            return false;
+        }
+
+        try
+        {
+            startCardPlay.Invoke(playerHand, new object?[] { holder, false });
+        }
+        catch
+        {
+            metadata["play_strategy_failure_step"] = "start_card_play_failed";
+            return false;
+        }
+
+        var currentCardPlay = GetMemberValue(playerHand, "_currentCardPlay") ?? GetMemberValue(playerHand, "CurrentCardPlay");
+        if (currentCardPlay is null)
+        {
+            metadata["play_strategy_failure_step"] = "current_card_play_missing";
+            TryCancelPlayerHandCardPlay(playerHand);
+            return false;
+        }
+
+        var tryPlayCard = currentCardPlay.GetType()
+            .GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+            .FirstOrDefault(method => string.Equals(method.Name, "TryPlayCard", StringComparison.Ordinal));
+        if (tryPlayCard is null)
+        {
+            metadata["play_strategy_failure_step"] = "try_play_card_missing";
+            metadata["card_play_candidate_methods"] = DescribeNamedMethods(currentCardPlay, "Play", "Target", "Card");
+            TryCancelPlayerHandCardPlay(playerHand);
+            return false;
+        }
+
+        try
+        {
+            tryPlayCard.Invoke(currentCardPlay, new[] { target });
+        }
+        catch
+        {
+            metadata["play_strategy_failure_step"] = "try_play_card_failed";
+            TryCancelPlayerHandCardPlay(playerHand);
+            return false;
+        }
+
+        runtimeHandler = "player_hand.StartCardPlay+ncard_play.TryPlayCard";
+        metadata["play_strategy"] = "player_hand";
+        metadata["card_holder_type"] = GetTypeName(holder);
+        metadata["card_play_type"] = GetTypeName(currentCardPlay);
+        return true;
+    }
+
+    private static IReadOnlyList<string> DescribeNamedMethods(object? target, params string[] fragments)
+    {
+        if (target is null)
+        {
+            return Array.Empty<string>();
+        }
+
+        return target.GetType()
+            .GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static)
+            .Where(method => fragments.Any(fragment => method.Name.Contains(fragment, StringComparison.OrdinalIgnoreCase)))
+            .Select(method =>
+            {
+                var parameters = string.Join(",", method.GetParameters().Select(parameter => parameter.ParameterType.Name));
+                return $"{method.Name}({parameters})";
+            })
+            .Distinct(StringComparer.Ordinal)
+            .Take(24)
+            .ToArray();
+    }
+
+    private static void TryCancelPlayerHandCardPlay(object playerHand)
+    {
+        try
+        {
+            playerHand.GetType()
+                .GetMethod("CancelAllCardPlay", BindingFlags.Public | BindingFlags.Instance)
+                ?.Invoke(playerHand, null);
+        }
+        catch
+        {
+        }
+    }
+
+    private bool LooksLikeCombatSelectionCard(object? card, string? canonicalCardId)
+    {
+        if (!string.IsNullOrWhiteSpace(canonicalCardId) &&
+            canonicalCardId.Contains("TRUE_GRIT", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var text = string.Join(
+            " ",
+            new[]
+            {
+                canonicalCardId,
+                ConvertToText(GetMemberValue(card, "Description")),
+                ConvertToText(GetMemberValue(card, "RenderedDescription")),
+                ConvertToText(GetMemberValue(card, "Name")),
+                ConvertToText(GetMemberValue(card, "Title")),
+            }.Where(value => !string.IsNullOrWhiteSpace(value)));
+        return text.Contains("选择", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("消耗", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("弃", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("choose", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("select", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("exhaust", StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("discard", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static IReadOnlyList<string> DescribeCandidateMethods(object? target, int maxCount)
+    {
+        if (target is null)
+        {
+            return Array.Empty<string>();
+        }
+
+        return target.GetType()
+            .GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static)
+            .Where(method =>
+                method.Name.Contains("Play", StringComparison.OrdinalIgnoreCase) ||
+                method.Name.Contains("Select", StringComparison.OrdinalIgnoreCase) ||
+                method.Name.Contains("Choose", StringComparison.OrdinalIgnoreCase) ||
+                method.Name.Contains("Click", StringComparison.OrdinalIgnoreCase) ||
+                method.Name.Contains("Use", StringComparison.OrdinalIgnoreCase))
+            .Select(method =>
+            {
+                var parameters = string.Join(",", method.GetParameters().Select(parameter => parameter.ParameterType.Name));
+                return $"{method.Name}({parameters})";
+            })
+            .Distinct(StringComparer.Ordinal)
+            .Take(maxCount)
+            .ToArray();
+    }
+
+    private static IReadOnlyDictionary<string, object?> DescribeSelectionMethodParameters(
+        object? card,
+        object runNode,
+        object runState,
+        object? player,
+        object? target)
+    {
+        var result = new Dictionary<string, object?>(StringComparer.Ordinal);
+        if (card is null)
+        {
+            return result;
+        }
+
+        foreach (var methodName in new[] { "OnPlayWrapper", "OnPlay" })
+        {
+            var method = card.GetType()
+                .GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                .FirstOrDefault(candidate => string.Equals(candidate.Name, methodName, StringComparison.Ordinal));
+            if (method is null)
+            {
+                continue;
+            }
+
+            var parameters = method.GetParameters()
+                .Select(parameter => new Dictionary<string, object?>
+                {
+                    ["name"] = parameter.Name,
+                    ["type"] = parameter.ParameterType.FullName ?? parameter.ParameterType.Name,
+                    ["candidates"] = DescribeParameterCandidates(
+                        parameter.ParameterType,
+                        runNode,
+                        runState,
+                        player,
+                        card,
+                        target),
+                })
+                .ToArray();
+            result[methodName] = parameters;
+        }
+
+        return result;
+    }
+
+    private static IReadOnlyList<IReadOnlyDictionary<string, object?>> DescribeParameterCandidates(
+        Type parameterType,
+        object runNode,
+        object runState,
+        object? player,
+        object? card,
+        object? target)
+    {
+        var roots = new (string Path, object? Value)[]
+        {
+            ("runNode", runNode),
+            ("runState", runState),
+            ("player", player),
+            ("card", card),
+            ("target", target),
+        };
+        var matches = new List<IReadOnlyDictionary<string, object?>>();
+        var visited = new HashSet<object>(ReferenceEqualityComparer.Instance);
+        foreach (var root in roots)
+        {
+            DescribeParameterCandidatesRecursive(root.Path, root.Value, parameterType, depth: 0, maxDepth: 3, matches, visited);
+            if (matches.Count >= 8)
+            {
+                break;
+            }
+        }
+
+        return matches.ToArray();
+    }
+
+    private static void DescribeParameterCandidatesRecursive(
+        string path,
+        object? value,
+        Type parameterType,
+        int depth,
+        int maxDepth,
+        List<IReadOnlyDictionary<string, object?>> matches,
+        HashSet<object> visited)
+    {
+        if (value is null || matches.Count >= 8)
+        {
+            return;
+        }
+
+        if (parameterType.IsInstanceOfType(value))
+        {
+            matches.Add(new Dictionary<string, object?>
+            {
+                ["path"] = path,
+                ["runtime_type"] = GetTypeName(value),
+            });
+            return;
+        }
+
+        if (depth >= maxDepth || value is string || value.GetType().IsValueType)
+        {
+            return;
+        }
+
+        if (!visited.Add(value))
+        {
+            return;
+        }
+
+        var flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+        foreach (var property in value.GetType().GetProperties(flags).Where(property => property.GetIndexParameters().Length == 0))
+        {
+            object? child;
+            try
+            {
+                child = property.GetValue(value);
+            }
+            catch
+            {
+                continue;
+            }
+
+            DescribeParameterCandidatesRecursive($"{path}.{property.Name}", child, parameterType, depth + 1, maxDepth, matches, visited);
+            if (matches.Count >= 8)
+            {
+                return;
+            }
+        }
+
+        foreach (var field in value.GetType().GetFields(flags))
+        {
+            object? child;
+            try
+            {
+                child = field.GetValue(value);
+            }
+            catch
+            {
+                continue;
+            }
+
+            DescribeParameterCandidatesRecursive($"{path}.{field.Name}", child, parameterType, depth + 1, maxDepth, matches, visited);
+            if (matches.Count >= 8)
+            {
+                return;
+            }
+        }
     }
 
     private RuntimeActionResult ExecuteEndTurn(object runState, ActionRequest request)
@@ -5607,6 +6072,11 @@ internal sealed class Sts2RuntimeReflectionReader
         }
 
         var choice = choices[selectedIndex];
+        if (TryExecutePlayerHandCombatSelection(selectionScreen, choice, selectedIndex, out var playerHandSelectionResult))
+        {
+            return playerHandSelectionResult;
+        }
+
         var card = ResolveCardRewardChoiceCard(choice);
         var exportedCardId = ConvertToText(GetDictionaryValue(action.Params, "card_id"));
         if (!string.IsNullOrWhiteSpace(exportedCardId))
@@ -5695,6 +6165,20 @@ internal sealed class Sts2RuntimeReflectionReader
             return new RuntimeActionResult(false, "Combat selection window is no longer available.", "selection_window_changed");
         }
 
+        if (LooksLikePlayerHandSelectionScreen(selectionScreen) &&
+            TryInvokeFirstCompatibleMethod(
+                selectionScreen,
+                CombatCardChoiceCancelMethodNames,
+                new[] { Array.Empty<object?>() },
+                out var handCancelMethod))
+        {
+            return new RuntimeActionResult(true, "Cancelled combat selection.", metadata: new Dictionary<string, object?>
+            {
+                ["action_type"] = "cancel_combat_selection",
+                ["runtime_handler"] = $"player_hand_selection.{handCancelMethod}",
+            });
+        }
+
         var argSets = new List<object?[]>
         {
             Array.Empty<object?>(),
@@ -5711,6 +6195,128 @@ internal sealed class Sts2RuntimeReflectionReader
         }
 
         return new RuntimeActionResult(false, "Combat selection cancel hooks are not available.", "runtime_incompatible");
+    }
+
+    private bool TryExecutePlayerHandCombatSelection(
+        object selectionScreen,
+        object choice,
+        int selectedIndex,
+        out RuntimeActionResult result)
+    {
+        result = default!;
+        if (!LooksLikePlayerHandSelectionScreen(selectionScreen))
+        {
+            return false;
+        }
+
+        var holder = ResolvePlayerHandSelectionHolder(selectionScreen, choice);
+        var card = ResolveCardRewardChoiceCard(choice);
+        if (holder is null)
+        {
+            result = new RuntimeActionResult(false, "Combat selection holder is no longer available.", "stale_action");
+            return true;
+        }
+
+        if (TryInvokeFirstCompatibleMethod(
+            selectionScreen,
+            new[] { "OnHolderPressed", "SelectCardInSimpleMode", "SelectCardInUpgradeMode" },
+            new[]
+            {
+                new object?[] { holder },
+                new object?[] { choice },
+                new object?[] { GetMemberValue(choice, "CardNode") ?? GetMemberValue(holder, "CardNode") ?? choice },
+            },
+            out var methodName))
+        {
+            CompletePlayerHandSelectionIfNeeded(selectionScreen);
+            result = new RuntimeActionResult(true, "Selected combat card.", metadata: new Dictionary<string, object?>
+            {
+                ["action_type"] = "choose_combat_card",
+                ["selection_index"] = selectedIndex,
+                ["card_id"] = RuntimeCardIdentity.CreateCardId(card ?? choice, selectedIndex),
+                ["runtime_handler"] = $"player_hand_selection.{methodName}",
+                ["selection_screen_type"] = GetTypeName(selectionScreen),
+                ["holder_type"] = GetTypeName(holder),
+            });
+            return true;
+        }
+
+        return false;
+    }
+
+    private void CompletePlayerHandSelectionIfNeeded(object selectionScreen)
+    {
+        TryInvokeFirstCompatibleMethod(
+            selectionScreen,
+            new[] { "CheckIfSelectionComplete" },
+            new[] { Array.Empty<object?>() },
+            out _);
+
+        if (!LooksLikePlayerHandSelectionScreen(selectionScreen))
+        {
+            return;
+        }
+
+        var confirmButton = GetMemberValue(selectionScreen, "_selectModeConfirmButton")
+                            ?? GetMemberValue(selectionScreen, "SelectModeConfirmButton");
+        if (confirmButton is null)
+        {
+            return;
+        }
+
+        TryInvokeFirstCompatibleMethod(
+            selectionScreen,
+            new[] { "OnSelectModeConfirmButtonPressed" },
+            new[]
+            {
+                new object?[] { confirmButton },
+                new object?[] { null },
+            },
+            out _);
+    }
+
+    private static bool LooksLikePlayerHandSelectionScreen(object selectionScreen)
+    {
+        var typeName = GetTypeName(selectionScreen) ?? string.Empty;
+        return typeName.Contains("NPlayerHand", StringComparison.OrdinalIgnoreCase) ||
+               GetBoolean(selectionScreen, "IsInCardSelection") ||
+               GetBoolean(selectionScreen, "InSelectMode");
+    }
+
+    private static object? ResolvePlayerHandSelectionHolder(object selectionScreen, object choice)
+    {
+        if (LooksLikeCardHolder(choice))
+        {
+            return choice;
+        }
+
+        var card = ResolveCardRewardChoiceCard(choice);
+        var cardModel = GetMemberValue(choice, "CardModel")
+                        ?? GetMemberValue(card, "CardModel")
+                        ?? card;
+        var getCardHolder = selectionScreen.GetType()
+            .GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+            .FirstOrDefault(method => string.Equals(method.Name, "GetCardHolder", StringComparison.Ordinal));
+        if (cardModel is null || getCardHolder is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return getCardHolder.Invoke(selectionScreen, new[] { cardModel });
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static bool LooksLikeCardHolder(object? value)
+    {
+        var typeName = GetTypeName(value) ?? string.Empty;
+        return typeName.Contains("NHandCardHolder", StringComparison.OrdinalIgnoreCase) ||
+               typeName.Contains("NCardHolder", StringComparison.OrdinalIgnoreCase);
     }
 
     private RuntimeActionResult ExecuteChooseReward(object runNode, ActionRequest request, LegalAction action)

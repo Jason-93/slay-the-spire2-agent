@@ -143,7 +143,7 @@ public sealed class RuntimeCardIdentityTests
     private static dynamic InvokeExecutePlayCard(Sts2RuntimeReflectionReader reader, object runState, ActionRequest request, LegalAction action)
     {
         var method = typeof(Sts2RuntimeReflectionReader).GetMethod("ExecutePlayCard", BindingFlags.Instance | BindingFlags.NonPublic)!;
-        return method.Invoke(reader, new object?[] { runState, request, action })!;
+        return method.Invoke(reader, new object?[] { new object(), runState, request, action })!;
     }
 
     private sealed class FakeRunState(params FakeCard[] cards)
