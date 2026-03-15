@@ -16,6 +16,7 @@ from sts2_agent.bridge.base import (
     UnsupportedLifecycleCommandError,
 )
 from sts2_agent.models import (
+    AgentStatusUpdate,
     ActionResult,
     ActionSubmission,
     CardView,
@@ -117,6 +118,26 @@ class HttpGameBridge(GameBridge):
             raise InvalidPayloadError(message)
         raise RemoteBridgeError(message, error_code=str(error_code or "bridge_error"))
 
+    def update_agent_status(self, status: AgentStatusUpdate | dict[str, Any]) -> dict[str, Any]:
+        payload = self._agent_status_payload(status)
+        response = self._post_json("/agent-status", payload)
+        if not isinstance(response, dict):
+            raise RemoteBridgeError("bridge /agent-status returned a non-object payload", error_code="invalid_payload")
+        return response
+
+    def get_agent_status(self) -> dict[str, Any]:
+        response = self._read_json("/agent-status")
+        if not isinstance(response, dict):
+            raise RemoteBridgeError("bridge /agent-status returned a non-object payload", error_code="invalid_payload")
+        return response
+
+    def clear_agent_status(self) -> dict[str, Any]:
+        request = Request(self._url("/agent-status"), method="DELETE")
+        response = self._send(request)
+        if not isinstance(response, dict):
+            raise RemoteBridgeError("bridge /agent-status returned a non-object payload", error_code="invalid_payload")
+        return response
+
     def stop(self, session_id: str) -> BridgeSession:
         raise UnsupportedLifecycleCommandError("http bridge does not support remote stop")
 
@@ -141,7 +162,7 @@ class HttpGameBridge(GameBridge):
         )
         response = self._send(request)
         if not isinstance(response, dict):
-            raise RemoteBridgeError("bridge /apply returned a non-object payload", error_code="invalid_payload")
+            raise RemoteBridgeError(f"bridge {path} returned a non-object payload", error_code="invalid_payload")
         return response
 
     def _send(self, request: Request) -> Any:
@@ -165,6 +186,30 @@ class HttpGameBridge(GameBridge):
 
     def _url(self, path: str) -> str:
         return self.config.base_url.rstrip("/") + path
+
+    @staticmethod
+    def _agent_status_payload(status: AgentStatusUpdate | dict[str, Any]) -> dict[str, Any]:
+        if isinstance(status, AgentStatusUpdate):
+            payload: dict[str, Any] = {
+                "session_id": status.session_id,
+                "phase": status.phase,
+                "status": status.status,
+                "updated_at": status.updated_at,
+            }
+            if status.action_id:
+                payload["action_id"] = status.action_id
+            if status.action_label:
+                payload["action_label"] = status.action_label
+            if status.reason:
+                payload["reason"] = status.reason
+            if status.confidence:
+                payload["confidence"] = status.confidence
+            if status.turn is not None:
+                payload["turn"] = status.turn
+            if status.step is not None:
+                payload["step"] = status.step
+            return payload
+        return dict(status)
 
     @staticmethod
     def _decode_snapshot(payload: Any) -> DecisionSnapshot:

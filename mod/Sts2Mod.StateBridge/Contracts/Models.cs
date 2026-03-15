@@ -170,6 +170,33 @@ public sealed record ActionResponse(
     string Message,
     IReadOnlyDictionary<string, object?> Metadata);
 
+public sealed record AgentStatusUpdateRequest(
+    string? SessionId,
+    string? Phase,
+    string? Status,
+    string? UpdatedAt,
+    string? ActionId = null,
+    string? ActionLabel = null,
+    string? Reason = null,
+    string? Confidence = null,
+    int? Turn = null,
+    int? Step = null);
+
+public sealed record AgentStatusResponse(
+    bool Empty,
+    bool Stale,
+    string Status,
+    string? SourceStatus = null,
+    string? SessionId = null,
+    string? Phase = null,
+    string? ActionId = null,
+    string? ActionLabel = null,
+    string? Reason = null,
+    string? Confidence = null,
+    int? Turn = null,
+    int? Step = null,
+    string? UpdatedAt = null);
+
 public sealed record ErrorResponse(string ErrorCode, string Message, string? TraceId = null);
 
 public sealed record ExportedWindow(DecisionSnapshot Snapshot, IReadOnlyList<LegalAction> Actions);

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from sts2_agent.bridge import BridgeError, GameBridge, InvalidPayloadError, InterruptedSessionError, StaleActionError
-from sts2_agent.models import ActionSubmission, BattleContext, PolicyDecision, RunSummary, TraceEntry, to_dict
+from sts2_agent.models import AgentStatusUpdate, ActionSubmission, BattleContext, PolicyDecision, RunSummary, TraceEntry, to_dict
 from sts2_agent.policy import PolicyDecisionValidationError, PolicyError
 from sts2_agent.trace import JsonlTraceRecorder
 
@@ -75,6 +75,47 @@ class AutoplayOrchestrator:
         self._pending_recovery_reason = ""
         self._last_recovery_reason = ""
         self._last_battle_context = {}
+
+    def _publish_agent_status(
+        self,
+        *,
+        snapshot,
+        policy_output: PolicyDecision,
+        status: str,
+        step_index: int,
+        current_turn_index: int,
+        action_label: str | None = None,
+    ) -> None:
+        updater = getattr(self.bridge, "update_agent_status", None)
+        if not callable(updater):
+            return
+
+        confidence = policy_output.confidence
+        payload = AgentStatusUpdate(
+            session_id=snapshot.session_id,
+            phase=getattr(snapshot, "phase", "unknown"),
+            status=status,
+            updated_at=datetime.now(UTC).isoformat(),
+            action_id=policy_output.action_id,
+            action_label=action_label,
+            reason=policy_output.reason,
+            confidence=None if confidence is None else str(confidence),
+            turn=current_turn_index if current_turn_index > 0 else None,
+            step=step_index,
+        )
+        try:
+            updater(payload)
+        except Exception:
+            return
+
+    def _clear_agent_status(self) -> None:
+        clearer = getattr(self.bridge, "clear_agent_status", None)
+        if not callable(clearer):
+            return
+        try:
+            clearer()
+        except Exception:
+            return
 
     def run(self, scenario: str = "combat_reward_map_terminal") -> RunSummary:
         self._reset_run_state()
@@ -809,6 +850,15 @@ class AutoplayOrchestrator:
                 )
             selected_action = legal_actions_by_id[policy_output.action_id]
 
+        self._publish_agent_status(
+            snapshot=snapshot,
+            policy_output=policy_output,
+            status="planned",
+            step_index=step_index,
+            current_turn_index=current_turn_index,
+            action_label=selected_action.label,
+        )
+
         if self.config.dry_run:
             self._record(
                 recorder=recorder,
@@ -854,6 +904,14 @@ class AutoplayOrchestrator:
             )
 
         try:
+            self._publish_agent_status(
+                snapshot=snapshot,
+                policy_output=policy_output,
+                status="submitted",
+                step_index=step_index,
+                current_turn_index=current_turn_index,
+                action_label=selected_action.label,
+            )
             result = self.bridge.submit_action(
                 ActionSubmission(
                     session_id=snapshot.session_id,
@@ -864,6 +922,14 @@ class AutoplayOrchestrator:
                 )
             )
         except (InvalidPayloadError, InterruptedSessionError, BridgeError) as exc:
+            self._publish_agent_status(
+                snapshot=snapshot,
+                policy_output=policy_output,
+                status="rejected",
+                step_index=step_index,
+                current_turn_index=current_turn_index,
+                action_label=selected_action.label,
+            )
             return self._finalize_failure(
                 exc=exc,
                 recorder=recorder,
@@ -884,6 +950,14 @@ class AutoplayOrchestrator:
 
         total_actions += 1
         self._reward_actions_taken += 1
+        self._publish_agent_status(
+            snapshot=snapshot,
+            policy_output=policy_output,
+            status=str(result.status),
+            step_index=step_index,
+            current_turn_index=current_turn_index,
+            action_label=selected_action.label,
+        )
         reward_stop_reason = "reward_action_submitted"
         if selected_action.type == "skip_reward":
             reward_stop_reason = "reward_skipped"
@@ -1079,6 +1153,15 @@ class AutoplayOrchestrator:
                 )
             selected_action = legal_actions_by_id[policy_output.action_id]
 
+        self._publish_agent_status(
+            snapshot=snapshot,
+            policy_output=policy_output,
+            status="planned",
+            step_index=step_index,
+            current_turn_index=current_turn_index,
+            action_label=selected_action.label,
+        )
+
         if self.config.dry_run:
             self._record(
                 recorder=recorder,
@@ -1124,6 +1207,14 @@ class AutoplayOrchestrator:
             )
 
         try:
+            self._publish_agent_status(
+                snapshot=snapshot,
+                policy_output=policy_output,
+                status="submitted",
+                step_index=step_index,
+                current_turn_index=current_turn_index,
+                action_label=selected_action.label,
+            )
             result = self.bridge.submit_action(
                 ActionSubmission(
                     session_id=snapshot.session_id,
@@ -1134,6 +1225,14 @@ class AutoplayOrchestrator:
                 )
             )
         except (InvalidPayloadError, InterruptedSessionError, BridgeError) as exc:
+            self._publish_agent_status(
+                snapshot=snapshot,
+                policy_output=policy_output,
+                status="rejected",
+                step_index=step_index,
+                current_turn_index=current_turn_index,
+                action_label=selected_action.label,
+            )
             return self._finalize_failure(
                 exc=exc,
                 recorder=recorder,
@@ -1154,6 +1253,14 @@ class AutoplayOrchestrator:
 
         total_actions += 1
         self._map_actions_taken += 1
+        self._publish_agent_status(
+            snapshot=snapshot,
+            policy_output=policy_output,
+            status=str(result.status),
+            step_index=step_index,
+            current_turn_index=current_turn_index,
+            action_label=selected_action.label,
+        )
         self._record(
             recorder=recorder,
             snapshot=snapshot,
@@ -1614,6 +1721,22 @@ class AutoplayOrchestrator:
                     reason="only end_turn remains; runner auto ends turn",
                     metadata={"auto_end_turn": True},
                 )
+                self._publish_agent_status(
+                    snapshot=snapshot,
+                    policy_output=policy_output,
+                    status="planned",
+                    step_index=step_index,
+                    current_turn_index=current_turn_index,
+                    action_label=auto_end_turn.label,
+                )
+                self._publish_agent_status(
+                    snapshot=snapshot,
+                    policy_output=policy_output,
+                    status="submitted",
+                    step_index=step_index,
+                    current_turn_index=current_turn_index,
+                    action_label=auto_end_turn.label,
+                )
                 result = self.bridge.submit_action(
                     ActionSubmission(
                         session_id=snapshot.session_id,
@@ -1627,6 +1750,14 @@ class AutoplayOrchestrator:
                 current_turn_actions += 1
                 stale_action_attempts = 0
                 consecutive_failures = 0
+                self._publish_agent_status(
+                    snapshot=snapshot,
+                    policy_output=policy_output,
+                    status=str(result.status),
+                    step_index=step_index,
+                    current_turn_index=current_turn_index,
+                    action_label=auto_end_turn.label,
+                )
                 stop_reason = "auto_end_turn" if self.config.stop_after_player_turn else ""
                 self._record(
                     recorder=recorder,
@@ -1649,16 +1780,25 @@ class AutoplayOrchestrator:
                 stale_action_attempts += 1
                 consecutive_failures += 1
                 retrying = stale_action_attempts <= self.config.stale_action_retries
+                fallback_output = PolicyDecision(
+                    action_id=legal_actions[0].action_id,
+                    reason="only end_turn remains; runner auto ends turn",
+                    metadata={"auto_end_turn": True},
+                )
+                self._publish_agent_status(
+                    snapshot=snapshot,
+                    policy_output=fallback_output,
+                    status="rejected",
+                    step_index=step_index,
+                    current_turn_index=current_turn_index,
+                    action_label=legal_actions[0].label,
+                )
                 self._note_recovery_attempt(getattr(exc, "error_code", "stale_action"))
                 self._record(
                     recorder=recorder,
                     snapshot=snapshot,
                     legal_actions=legal_actions,
-                    policy_output=PolicyDecision(
-                        action_id=legal_actions[0].action_id,
-                        reason="only end_turn remains; runner auto ends turn",
-                        metadata={"auto_end_turn": True},
-                    ),
+                    policy_output=fallback_output,
                     bridge_result={
                         "status": "interrupted",
                         "error_code": getattr(exc, "error_code", "stale_action"),
@@ -1799,6 +1939,13 @@ class AutoplayOrchestrator:
             step_index += 1
             policy_output = self._decide(snapshot, legal_actions, battle_context=battle_context)
             if policy_output.halt or not policy_output.action_id:
+                self._publish_agent_status(
+                    snapshot=snapshot,
+                    policy_output=policy_output,
+                    status="halted",
+                    step_index=step_index,
+                    current_turn_index=current_turn_index,
+                )
                 self._record(
                     recorder=recorder,
                     snapshot=snapshot,
@@ -1837,6 +1984,13 @@ class AutoplayOrchestrator:
 
             legal_actions_by_id = {action.action_id: action for action in legal_actions}
             if policy_output.action_id not in legal_actions_by_id:
+                self._publish_agent_status(
+                    snapshot=snapshot,
+                    policy_output=policy_output,
+                    status="rejected",
+                    step_index=step_index,
+                    current_turn_index=current_turn_index,
+                )
                 if self.config.stop_after_player_turn:
                     raise InvalidPayloadError("policy returned an action outside the legal action set")
                 consecutive_failures += 1
@@ -1900,6 +2054,14 @@ class AutoplayOrchestrator:
                     ),
                 )
             selected_action = legal_actions_by_id[policy_output.action_id]
+            self._publish_agent_status(
+                snapshot=snapshot,
+                policy_output=policy_output,
+                status="planned",
+                step_index=step_index,
+                current_turn_index=current_turn_index,
+                action_label=selected_action.label,
+            )
 
             if self.config.dry_run:
                 self._record(
@@ -1942,6 +2104,14 @@ class AutoplayOrchestrator:
                     ),
                 )
 
+            self._publish_agent_status(
+                snapshot=snapshot,
+                policy_output=policy_output,
+                status="submitted",
+                step_index=step_index,
+                current_turn_index=current_turn_index,
+                action_label=selected_action.label,
+            )
             result = self.bridge.submit_action(
                 ActionSubmission(
                     session_id=snapshot.session_id,
@@ -1955,6 +2125,14 @@ class AutoplayOrchestrator:
             current_turn_actions += 1
             stale_action_attempts = 0
             consecutive_failures = 0
+            self._publish_agent_status(
+                snapshot=snapshot,
+                policy_output=policy_output,
+                status=str(result.status),
+                step_index=step_index,
+                current_turn_index=current_turn_index,
+                action_label=selected_action.label,
+            )
             stop_reason = self._post_action_stop_reason(selected_action.type, policy_output, result)
             self._record(
                 recorder=recorder,
@@ -2018,6 +2196,15 @@ class AutoplayOrchestrator:
                 "consecutive_failures": consecutive_failures,
             }
             fallback_output = locals().get("policy_output", PolicyDecision(action_id=None, reason="policy unavailable", halt=True))
+            selected_action = locals().get("selected_action")
+            self._publish_agent_status(
+                snapshot=snapshot,
+                policy_output=fallback_output,
+                status="rejected",
+                step_index=step_index,
+                current_turn_index=current_turn_index,
+                action_label=selected_action.label if selected_action is not None else None,
+            )
             self._record(
                 recorder=recorder,
                 snapshot=snapshot,
@@ -2140,6 +2327,13 @@ class AutoplayOrchestrator:
                 halt=True,
                 metadata={"error_code": error_code},
             )
+            self._publish_agent_status(
+                snapshot=snapshot,
+                policy_output=fallback_output,
+                status="rejected",
+                step_index=step_index,
+                current_turn_index=current_turn_index,
+            )
             self._record(
                 recorder=recorder,
                 snapshot=snapshot,
@@ -2202,6 +2396,13 @@ class AutoplayOrchestrator:
             )
         else:
             fallback_output = PolicyDecision(action_id=None, reason="policy unavailable", halt=True)
+        self._publish_agent_status(
+            snapshot=snapshot,
+            policy_output=fallback_output,
+            status="rejected",
+            step_index=step_index,
+            current_turn_index=current_turn_index,
+        )
         self._record(
             recorder=recorder,
             snapshot=snapshot,
@@ -2488,6 +2689,7 @@ class AutoplayOrchestrator:
         total_actions: int = 0,
         current_turn_index: int = 0,
     ) -> RunSummary:
+        self._clear_agent_status()
         return RunSummary(
             session_id=session_id,
             completed=completed,

@@ -19,6 +19,7 @@ public sealed class Sts2InGameModEntryPoint
     private static ConsoleBridgeLogger? _logger;
     private static ModBootstrap? _bootstrap;
     private static BridgePumpNode? _pumpNode;
+    private static AgentStatusOverlayNode? _overlayNode;
     private static bool _initialized;
 
     public static void Initialize()
@@ -44,6 +45,7 @@ public sealed class Sts2InGameModEntryPoint
             _bootstrap.StartAsync().GetAwaiter().GetResult();
             Harmony.PatchAll(Assembly.GetExecutingAssembly());
             EnsurePumpNodeAttached();
+            EnsureOverlayNodeAttached();
             _initialized = true;
             _logger.Info("STS2 in-game bridge bootstrap initialized");
         }
@@ -57,6 +59,7 @@ public sealed class Sts2InGameModEntryPoint
         }
 
         EnsurePumpNodeAttached();
+        EnsureOverlayNodeAttached();
         InGameRuntimeCoordinator.Tick(source);
     }
 
@@ -76,6 +79,11 @@ public sealed class Sts2InGameModEntryPoint
                 {
                     _pumpNode.QueueFree();
                     _pumpNode = null;
+                }
+                if (_overlayNode is not null && GodotObject.IsInstanceValid(_overlayNode))
+                {
+                    _overlayNode.QueueFree();
+                    _overlayNode = null;
                 }
                 _bootstrap?.StopAsync().GetAwaiter().GetResult();
             }
@@ -140,6 +148,32 @@ public sealed class Sts2InGameModEntryPoint
         gameInstance.AddChild(pumpNode);
         _pumpNode = pumpNode;
         _logger?.Info("Attached bridge pump node to NGame.");
+    }
+
+    private static void EnsureOverlayNodeAttached()
+    {
+        if (_overlayNode is not null && GodotObject.IsInstanceValid(_overlayNode))
+        {
+            return;
+        }
+
+        var gameInstance = NGame.Instance;
+        if (gameInstance is null)
+        {
+            return;
+        }
+
+        var existing = gameInstance.GetNodeOrNull<AgentStatusOverlayNode>(AgentStatusOverlayNode.NodeNameValue);
+        if (existing is not null)
+        {
+            _overlayNode = existing;
+            return;
+        }
+
+        var overlayNode = new AgentStatusOverlayNode();
+        gameInstance.AddChild(overlayNode);
+        _overlayNode = overlayNode;
+        _logger?.Info("Attached agent status overlay node to NGame.");
     }
 }
 

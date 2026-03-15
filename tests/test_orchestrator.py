@@ -93,6 +93,8 @@ class FailingPolicy:
 class CapturingBridge:
     def __init__(self) -> None:
         self.submissions: list[ActionSubmission] = []
+        self.agent_status_updates: list[dict[str, object]] = []
+        self.agent_status_clears = 0
 
     def attach_or_start(self, scenario: str = "live") -> BridgeSession:
         return BridgeSession(session_id="sess-test1234", scenario=scenario)
@@ -146,6 +148,29 @@ class CapturingBridge:
 
     def reset(self, session_id: str):
         raise NotImplementedError
+
+    def update_agent_status(self, payload) -> dict[str, object]:
+        if hasattr(payload, "__dict__"):
+            normalized = dict(payload.__dict__)
+        else:
+            normalized = {
+                "session_id": payload.session_id,
+                "phase": payload.phase,
+                "status": payload.status,
+                "updated_at": payload.updated_at,
+                "action_id": payload.action_id,
+                "action_label": payload.action_label,
+                "reason": payload.reason,
+                "confidence": payload.confidence,
+                "turn": payload.turn,
+                "step": payload.step,
+            }
+        self.agent_status_updates.append(normalized)
+        return {"status": normalized["status"], "empty": False}
+
+    def clear_agent_status(self) -> dict[str, object]:
+        self.agent_status_clears += 1
+        return {"status": "idle", "empty": True}
 
 
 class SequencedCombatBridge:
@@ -377,6 +402,22 @@ def make_window(
 
 
 class OrchestratorTests(unittest.TestCase):
+    def test_orchestrator_syncs_agent_status_lifecycle(self) -> None:
+        bridge = CapturingBridge()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orchestrator = AutoplayOrchestrator(
+                bridge=bridge,
+                policy=FirstLegalActionPolicy(),
+                config=OrchestratorConfig(trace_dir=tmpdir),
+            )
+            summary = orchestrator.run(scenario="live")
+
+            self.assertTrue(summary.completed)
+            self.assertEqual([item["status"] for item in bridge.agent_status_updates], ["planned", "submitted", "accepted"])
+            self.assertEqual(bridge.agent_status_updates[0]["action_label"], "Play Strike")
+            self.assertEqual(bridge.agent_status_updates[-1]["phase"], "combat")
+            self.assertEqual(bridge.agent_status_clears, 1)
+
     def test_battle_mode_completes_on_reward_window(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             orchestrator = AutoplayOrchestrator(

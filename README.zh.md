@@ -119,6 +119,14 @@ mod 成功注入后，会在本地暴露以下接口：
 
 `tools/validate_live_apply.py` 会额外要求 `--allow-write` 显式确认，避免误发真实动作。
 
+为了在游戏内做联调，bridge 还额外提供了 agent 状态同步接口：
+
+- `GET /agent-status`：读取当前 overlay 正在展示的 agent 状态
+- `POST /agent-status`：把最新决策摘要推送到 mod overlay
+- `DELETE /agent-status`：清空当前 overlay 状态
+
+`/agent-status` 只用于调试 UI 状态，不会执行任何游戏动作，也不复用 `/apply` 的语义。
+
 ## 大模型自动打牌
 
 仓库现在已经提供了：
@@ -244,6 +252,8 @@ battle 模式下再重点看：
 - `recovery_attempts` / `recovery_successes`：battle 期间 recovery 尝试与恢复成功次数
 - `last_recovery_reason`：最近一次 recovery 原因
 - `battle_context`：最后一次 trace 的 battle 级摘要
+
+当使用 `HttpGameBridge` 时，runner 还会通过 `/agent-status` 把最近一次决策生命周期同步到游戏内 overlay。overlay 会显示当前 `phase`、动作标签、`reason`、`confidence`，以及 `planned`、`submitted`、`accepted`、`rejected` 等状态，方便直接在游戏里看模型决策。
 
 单步 trace 至少包含：
 

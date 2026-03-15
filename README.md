@@ -119,6 +119,14 @@ The bridge starts in read-only mode by default. To execute real in-game actions,
 
 `tools/validate_live_apply.py` also requires `--allow-write` as an explicit confirmation to avoid accidental live actions.
 
+For in-game debugging, the bridge also exposes agent-status synchronization:
+
+- `GET /agent-status`: read the latest agent overlay state
+- `POST /agent-status`: push the latest decision summary to the mod overlay
+- `DELETE /agent-status`: clear the current overlay state
+
+`/agent-status` is debug-only UI state. It does not execute gameplay actions and is independent from `/apply`.
+
 ## LLM Autoplay
 
 The repository already includes:
@@ -244,6 +252,8 @@ Additional full-battle fields:
 - `recovery_attempts` / `recovery_successes`: recovery attempts and successes during the battle
 - `last_recovery_reason`: the most recent recovery reason
 - `battle_context`: the battle-level summary from the last trace
+
+When using `HttpGameBridge`, the runner also syncs the latest decision lifecycle to the in-game overlay through `/agent-status`. The overlay shows the latest `phase`, action label, `reason`, `confidence`, and lifecycle states such as `planned`, `submitted`, `accepted`, or `rejected`.
 
 Each step trace includes at least:
 

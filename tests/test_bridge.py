@@ -15,7 +15,7 @@ from sts2_agent.bridge import (
     RemoteBridgeError,
     StaleActionError,
 )
-from sts2_agent.models import ActionSubmission
+from sts2_agent.models import ActionSubmission, AgentStatusUpdate
 from sts2_agent.models import ActionStatus
 
 
@@ -288,6 +288,47 @@ class HttpBridgeTests(unittest.TestCase):
                         action_id="act-illegal",
                     )
                 )
+
+    def test_http_bridge_supports_agent_status_endpoints(self) -> None:
+        bridge = HttpGameBridge(HttpGameBridgeConfig(base_url="http://127.0.0.1:17654"))
+        calls: list[tuple[str, str]] = []
+
+        responses = iter(
+            [
+                {"status": "planned", "session_id": "sess-live1234", "phase": "combat", "empty": False, "stale": False},
+                {"status": "planned", "session_id": "sess-live1234", "phase": "combat", "empty": False, "stale": False},
+                {"status": "idle", "empty": True, "stale": False},
+            ]
+        )
+
+        def fake_urlopen(request, timeout=0):
+            calls.append((request.method, request.full_url))
+            return FakeHttpResponse(next(responses))
+
+        with patch("sts2_agent.bridge.http.urlopen", side_effect=fake_urlopen):
+            updated = bridge.update_agent_status(
+                AgentStatusUpdate(
+                    session_id="sess-live1234",
+                    phase="combat",
+                    status="planned",
+                    updated_at="2026-03-15T12:00:00Z",
+                    action_id="act-live1234",
+                    action_label="Play Strike",
+                    reason="test sync",
+                    confidence="0.82",
+                    turn=1,
+                    step=3,
+                )
+            )
+            current = bridge.get_agent_status()
+            cleared = bridge.clear_agent_status()
+
+        self.assertEqual(calls[0], ("POST", "http://127.0.0.1:17654/agent-status"))
+        self.assertEqual(calls[1], ("GET", "http://127.0.0.1:17654/agent-status"))
+        self.assertEqual(calls[2], ("DELETE", "http://127.0.0.1:17654/agent-status"))
+        self.assertEqual(updated["status"], "planned")
+        self.assertEqual(current["session_id"], "sess-live1234")
+        self.assertTrue(cleared["empty"])
 
     def test_decode_snapshot_accepts_rich_runtime_fields(self) -> None:
         payload = {

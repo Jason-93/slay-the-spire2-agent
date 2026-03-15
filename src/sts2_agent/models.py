@@ -197,6 +197,20 @@ class ActionResult:
 
 
 @dataclass(slots=True)
+class AgentStatusUpdate:
+    session_id: str
+    phase: str
+    status: str
+    updated_at: str
+    action_id: str | None = None
+    action_label: str | None = None
+    reason: str | None = None
+    confidence: str | None = None
+    turn: int | None = None
+    step: int | None = None
+
+
+@dataclass(slots=True)
 class PolicyDecision:
     action_id: str | None
     reason: str

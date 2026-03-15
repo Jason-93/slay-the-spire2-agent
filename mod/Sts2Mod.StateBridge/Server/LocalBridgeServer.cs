@@ -38,6 +38,7 @@ public sealed class LocalBridgeServer : IAsyncDisposable
             return Task.CompletedTask;
         }
 
+        AgentStatusStateStore.Clear();
         _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         _listener.Start();
         _loopTask = Task.Run(() => RunLoopAsync(_cts.Token), CancellationToken.None);
@@ -58,6 +59,7 @@ public sealed class LocalBridgeServer : IAsyncDisposable
         {
             await _loopTask.ConfigureAwait(false);
         }
+        AgentStatusStateStore.Clear();
         _logger.Info("Local bridge stopped");
     }
 
@@ -100,9 +102,15 @@ public sealed class LocalBridgeServer : IAsyncDisposable
             return;
         }
 
+        if (string.Equals(request.HttpMethod, "DELETE", StringComparison.OrdinalIgnoreCase))
+        {
+            await HandleDeleteAsync(context, path, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         if (!string.Equals(request.HttpMethod, "GET", StringComparison.OrdinalIgnoreCase))
         {
-            await WriteAsync(context.Response, 405, new ErrorResponse("method_not_allowed", "Only GET is supported."), cancellationToken).ConfigureAwait(false);
+            await WriteAsync(context.Response, 405, new ErrorResponse("method_not_allowed", "Only GET, POST, and DELETE are supported."), cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -114,6 +122,7 @@ public sealed class LocalBridgeServer : IAsyncDisposable
                 "/health" => _provider.GetHealth(),
                 "/snapshot" => _provider.GetSnapshot(phase),
                 "/actions" => _provider.GetActions(phase),
+                "/agent-status" => AgentStatusStateStore.GetCurrent(),
                 _ => new ErrorResponse("not_found", $"Unknown endpoint: {path}")
             };
             var statusCode = payload is ErrorResponse ? 404 : 200;
@@ -128,6 +137,12 @@ public sealed class LocalBridgeServer : IAsyncDisposable
 
     private async Task HandlePostAsync(HttpListenerContext context, string path, CancellationToken cancellationToken)
     {
+        if (string.Equals(path, "/agent-status", StringComparison.Ordinal))
+        {
+            await HandleAgentStatusPostAsync(context, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         if (!string.Equals(path, "/apply", StringComparison.Ordinal))
         {
             await WriteAsync(context.Response, 404, new ErrorResponse("not_found", $"Unknown endpoint: {path}"), cancellationToken).ConfigureAwait(false);
@@ -155,6 +170,40 @@ public sealed class LocalBridgeServer : IAsyncDisposable
             }
 
             await WriteAsync(context.Response, statusCode, response, cancellationToken).ConfigureAwait(false);
+        }
+        catch (JsonException ex)
+        {
+            await WriteAsync(context.Response, 400, new ErrorResponse("invalid_json", ex.Message), cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task HandleDeleteAsync(HttpListenerContext context, string path, CancellationToken cancellationToken)
+    {
+        if (!string.Equals(path, "/agent-status", StringComparison.Ordinal))
+        {
+            await WriteAsync(context.Response, 404, new ErrorResponse("not_found", $"Unknown endpoint: {path}"), cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        await WriteAsync(context.Response, 200, AgentStatusStateStore.Clear(), cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task HandleAgentStatusPostAsync(HttpListenerContext context, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var request = await JsonSerializer.DeserializeAsync<AgentStatusUpdateRequest>(
+                context.Request.InputStream,
+                _jsonOptions,
+                cancellationToken).ConfigureAwait(false);
+
+            if (!AgentStatusStateStore.TryValidate(request, out var message))
+            {
+                await WriteAsync(context.Response, 400, new ErrorResponse("invalid_request", message), cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            await WriteAsync(context.Response, 200, AgentStatusStateStore.Update(request!), cancellationToken).ConfigureAwait(false);
         }
         catch (JsonException ex)
         {
