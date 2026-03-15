@@ -114,6 +114,11 @@ def main() -> int:
         assert "description_quality" not in combat_snapshot["player"]["relics"][0]
         assert "description_source" not in combat_snapshot["player"]["relics"][0]
         assert "description_vars" not in combat_snapshot["player"]["relics"][0]
+        for relic in combat_snapshot["player"]["relics"]:
+            for anchor in relic.get("glossary", []):
+                assert anchor.get("hint") not in (None, "")
+                assert anchor.get("source") != "missing_hint"
+                assert "{" not in str(anchor.get("hint") or "")
         assert isinstance(combat_snapshot["player"]["draw_pile_cards"], list)
         assert isinstance(combat_snapshot["player"]["discard_pile_cards"], list)
         assert isinstance(combat_snapshot["player"]["exhaust_pile_cards"], list)

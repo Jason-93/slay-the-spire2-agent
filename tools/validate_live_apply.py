@@ -251,6 +251,7 @@ def audit_card_descriptions(
 ) -> dict[str, Any]:
     placeholder_paths: list[str] = []
     preview_mismatches: list[dict[str, str]] = []
+    low_quality_relic_glossary: list[dict[str, Any]] = []
     audited_card_count = 0
     audited_relic_count = 0
 
@@ -282,6 +283,42 @@ def audit_card_descriptions(
         description = relic.get("description")
         if contains_description_placeholder(description):
             placeholder_paths.append(f"snapshot.player.relics[{index}].description")
+        glossary = relic.get("glossary")
+        glossary = glossary if isinstance(glossary, list) else []
+        for glossary_index, anchor in enumerate(glossary):
+            if not isinstance(anchor, dict):
+                continue
+            hint = anchor.get("hint")
+            source = anchor.get("source")
+            if not isinstance(hint, str) or not hint.strip():
+                low_quality_relic_glossary.append(
+                    {
+                        "path": f"snapshot.player.relics[{index}].glossary[{glossary_index}]",
+                        "reason": "empty_hint",
+                        "glossary_id": anchor.get("glossary_id"),
+                        "source": source,
+                    }
+                )
+                continue
+            if contains_description_placeholder(hint):
+                low_quality_relic_glossary.append(
+                    {
+                        "path": f"snapshot.player.relics[{index}].glossary[{glossary_index}]",
+                        "reason": "template_hint",
+                        "glossary_id": anchor.get("glossary_id"),
+                        "source": source,
+                    }
+                )
+                continue
+            if source == "missing_hint":
+                low_quality_relic_glossary.append(
+                    {
+                        "path": f"snapshot.player.relics[{index}].glossary[{glossary_index}]",
+                        "reason": "missing_hint",
+                        "glossary_id": anchor.get("glossary_id"),
+                        "source": source,
+                    }
+                )
 
     for index, action in enumerate(actions):
         if not isinstance(action, dict):
@@ -316,6 +353,8 @@ def audit_card_descriptions(
         "placeholder_description_paths": placeholder_paths[:20],
         "preview_mismatch_count": len(preview_mismatches),
         "preview_mismatches": preview_mismatches[:10],
+        "low_quality_relic_glossary_count": len(low_quality_relic_glossary),
+        "low_quality_relic_glossary": low_quality_relic_glossary[:20],
     }
 
 
@@ -756,6 +795,10 @@ def run_validation(args: argparse.Namespace) -> int:
     elif after_description_audit["preview_mismatch_count"] > 0:
         verdict = "failed"
         summary = "live snapshot 与 card_preview 的 description 语义不一致。"
+        exit_code = 1
+    elif after_description_audit["low_quality_relic_glossary_count"] > 0:
+        verdict = "failed"
+        summary = "live snapshot 的 relic glossary 仍包含空 hint、missing_hint 或模板化条目。"
         exit_code = 1
 
     result = build_result(

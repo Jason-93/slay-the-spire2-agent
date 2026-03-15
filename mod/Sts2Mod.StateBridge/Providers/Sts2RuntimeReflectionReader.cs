@@ -270,21 +270,23 @@ internal sealed class Sts2RuntimeReflectionReader
     private static readonly IReadOnlyDictionary<string, GlossarySpec> KnownGlossarySpecs =
         new Dictionary<string, GlossarySpec>(StringComparer.OrdinalIgnoreCase)
         {
-            ["block"] = new("block", "格挡", new[] { "格挡", "block" }),
-            ["strength"] = new("strength", "力量", new[] { "力量", "strength" }),
-            ["vulnerable"] = new("vulnerable", "易伤", new[] { "易伤", "vulnerable" }),
-            ["weak"] = new("weak", "虚弱", new[] { "虚弱", "weak" }),
-            ["frail"] = new("frail", "脆弱", new[] { "脆弱", "frail" }),
-            ["dexterity"] = new("dexterity", "敏捷", new[] { "敏捷", "dexterity" }),
-            ["damage"] = new("damage", "伤害", new[] { "伤害", "damage" }),
-            ["draw"] = new("draw", "抽牌", new[] { "抽", "draw" }),
-            ["energy"] = new("energy", "能量", new[] { "能量", "energy" }),
-            ["exhaust"] = new("exhaust", "消耗", new[] { "消耗", "exhaust" }),
-            ["discard"] = new("discard", "弃牌", new[] { "弃", "discard" }),
-            ["status"] = new("status", "状态", new[] { "状态", "status" }),
-            ["debuff"] = new("debuff", "负面效果", new[] { "负面效果", "debuff" }),
-            ["buff"] = new("buff", "增益", new[] { "增益", "buff" }),
-            ["metallicize"] = new("metallicize", "金属化", new[] { "金属化", "metallicize" }),
+            ["block"] = new("block", "格挡", new[] { "格挡", "block" }, "在下个回合前，阻挡伤害。"),
+            ["strength"] = new("strength", "力量", new[] { "力量", "strength" }, "使攻击造成更多伤害。"),
+            ["vulnerable"] = new("vulnerable", "易伤", new[] { "易伤", "vulnerable" }, "易伤的生物从攻击中受到的伤害增加50%。"),
+            ["weak"] = new("weak", "虚弱", new[] { "虚弱", "weak" }, "使攻击造成的伤害降低。"),
+            ["frail"] = new("frail", "脆弱", new[] { "脆弱", "frail" }, "使从牌获得的格挡减少。"),
+            ["dexterity"] = new("dexterity", "敏捷", new[] { "敏捷", "dexterity" }, "使从牌获得的格挡增加。"),
+            ["damage"] = new("damage", "伤害", new[] { "伤害", "damage" }, "会降低目标生命值。"),
+            ["draw"] = new("draw", "抽牌", new[] { "抽", "draw" }, "从抽牌堆抽牌到手牌。"),
+            ["energy"] = new("energy", "能量", new[] { "能量", "energy" }, "用于打出卡牌。"),
+            ["exhaust"] = new("exhaust", "消耗", new[] { "消耗", "exhaust" }, "在战斗结束前移除。"),
+            ["discard"] = new("discard", "弃牌", new[] { "弃", "discard" }, "将牌放入弃牌堆。"),
+            ["status"] = new("status", "状态", new[] { "状态", "status" }, "状态牌通常会带来负面影响。"),
+            ["debuff"] = new("debuff", "负面效果", new[] { "负面效果", "debuff" }, "会削弱目标。"),
+            ["buff"] = new("buff", "增益", new[] { "增益", "buff" }, "会强化目标。"),
+            ["upgrade"] = new("upgrade", "升级", new[] { "升级", "upgrade" }, "永久强化卡牌或其他对象的数值与效果。"),
+            ["relic"] = new("relic", "遗物", new[] { "遗物", "relic" }, "提供被动效果的永久收藏品。"),
+            ["metallicize"] = new("metallicize", "金属化", new[] { "金属化", "metallicize" }, "在回合结束时获得格挡。"),
         };
     private readonly BridgeOptions _options;
     private readonly InstallationProbeResult _probe;
@@ -4459,6 +4461,12 @@ internal sealed class Sts2RuntimeReflectionReader
             source,
             relic,
             hoverTip);
+        glossary = FilterRelicGlossary(
+            canonicalRelicId,
+            name,
+            canonicalDescription,
+            glossary,
+            path);
         LogDescriptionDiagnostics(
             kind: "relic",
             identifier: canonicalRelicId ?? name,
@@ -4479,6 +4487,120 @@ internal sealed class Sts2RuntimeReflectionReader
             Description: canonicalDescription,
             CanonicalRelicId: canonicalRelicId,
             Glossary: glossary);
+    }
+
+    private IReadOnlyList<GlossaryAnchor> FilterRelicGlossary(
+        string? canonicalRelicId,
+        string relicName,
+        string? canonicalDescription,
+        IReadOnlyList<GlossaryAnchor> glossary,
+        string path)
+    {
+        if (glossary.Count == 0)
+        {
+            return glossary;
+        }
+
+        var filtered = new List<GlossaryAnchor>(glossary.Count);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var anchor in glossary)
+        {
+            var reason = ClassifyRelicGlossaryFilterReason(anchor, canonicalRelicId, relicName, canonicalDescription);
+            if (reason is not null)
+            {
+                LogRelicGlossaryFilter(canonicalRelicId ?? relicName, path, anchor, reason);
+                continue;
+            }
+
+            var dedupeKey = string.Join("|",
+                NormalizeComparisonText(anchor.GlossaryId),
+                NormalizeComparisonText(anchor.DisplayText),
+                NormalizeComparisonText(anchor.Hint));
+            if (!seen.Add(dedupeKey))
+            {
+                LogRelicGlossaryFilter(canonicalRelicId ?? relicName, path, anchor, "duplicate_glossary");
+                continue;
+            }
+
+            filtered.Add(anchor);
+        }
+
+        return filtered;
+    }
+
+    private static string? ClassifyRelicGlossaryFilterReason(
+        GlossaryAnchor anchor,
+        string? canonicalRelicId,
+        string relicName,
+        string? canonicalDescription)
+    {
+        if (string.IsNullOrWhiteSpace(anchor.Hint))
+        {
+            return "empty_hint";
+        }
+
+        if (string.Equals(anchor.Source, "missing_hint", StringComparison.OrdinalIgnoreCase))
+        {
+            return "missing_hint";
+        }
+
+        if (ContainsDescriptionPlaceholder(anchor.Hint))
+        {
+            return "template_hint";
+        }
+
+        var normalizedGlossaryId = NormalizeGlossaryId(anchor.GlossaryId);
+        var normalizedRelicId = NormalizeGlossaryId(canonicalRelicId);
+        var normalizedDisplay = NormalizeComparisonText(anchor.DisplayText);
+        var normalizedName = NormalizeComparisonText(relicName);
+        if (!string.IsNullOrWhiteSpace(normalizedDisplay) &&
+            string.Equals(normalizedDisplay, normalizedName, StringComparison.OrdinalIgnoreCase))
+        {
+            if (!string.IsNullOrWhiteSpace(normalizedGlossaryId) &&
+                string.Equals(normalizedGlossaryId, normalizedRelicId, StringComparison.OrdinalIgnoreCase))
+            {
+                return "duplicate_relic_identity";
+            }
+
+            if (string.Equals(NormalizeComparisonText(anchor.Hint), NormalizeComparisonText(canonicalDescription), StringComparison.OrdinalIgnoreCase))
+            {
+                return "duplicate_relic_description";
+            }
+        }
+
+        return null;
+    }
+
+    private void LogRelicGlossaryFilter(string identifier, string path, GlossaryAnchor anchor, string reason)
+    {
+        var message =
+            $"Relic glossary filtered relic={identifier} path={path} glossary_id={anchor.GlossaryId} " +
+            $"display_text={anchor.DisplayText} source={anchor.Source ?? "unknown"} reason={reason} hint=\"{AbbreviateForLog(anchor.Hint)}\"";
+        _logger?.Warn(message);
+    }
+
+    private static string NormalizeComparisonText(string? text)
+    {
+        var normalized = NormalizeDescriptionText(text);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return string.Empty;
+        }
+
+        var buffer = new char[normalized.Length];
+        var count = 0;
+        foreach (var ch in normalized)
+        {
+            if (!char.IsLetterOrDigit(ch))
+            {
+                continue;
+            }
+
+            buffer[count] = char.ToLowerInvariant(ch);
+            count += 1;
+        }
+
+        return count == 0 ? string.Empty : new string(buffer, 0, count);
     }
 
     private static object? ResolvePowerCollection(object? source)
@@ -5269,6 +5391,11 @@ internal sealed class Sts2RuntimeReflectionReader
             return new GlossaryHintResolution(locStringHint, "loc_string");
         }
 
+        if (TryResolveBuiltInGlossaryHint(candidate.GlossaryId, out var builtInHint))
+        {
+            return new GlossaryHintResolution(builtInHint, "fallback_builtin");
+        }
+
         _logger?.Warn(
             $"Glossary hint missing glossary_id={candidate.GlossaryId} display_text={candidate.DisplayText} " +
             $"match_source={candidate.MatchSource} path={path}");
@@ -5384,6 +5511,21 @@ internal sealed class Sts2RuntimeReflectionReader
                 hint = text;
                 return true;
             }
+        }
+
+        hint = null;
+        return false;
+    }
+
+    private static bool TryResolveBuiltInGlossaryHint(string glossaryId, out string? hint)
+    {
+        var normalizedId = NormalizeGlossaryId(glossaryId);
+        if (normalizedId is not null &&
+            KnownGlossarySpecs.TryGetValue(normalizedId, out var spec) &&
+            !string.IsNullOrWhiteSpace(spec.FallbackHint))
+        {
+            hint = spec.FallbackHint;
+            return true;
         }
 
         hint = null;
@@ -6110,7 +6252,8 @@ internal sealed class Sts2RuntimeReflectionReader
     private sealed record GlossarySpec(
         string GlossaryId,
         string DisplayText,
-        IReadOnlyList<string> Terms);
+        IReadOnlyList<string> Terms,
+        string? FallbackHint = null);
 
     private readonly record struct GlossaryCandidate(
         string GlossaryId,

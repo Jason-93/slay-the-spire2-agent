@@ -23,6 +23,7 @@ class LiveApplyValidationTests(unittest.TestCase):
                 "draw_pile_cards": [],
                 "discard_pile_cards": [],
                 "exhaust_pile_cards": [],
+                "relics": [],
             },
         }
         actions = [
@@ -44,6 +45,44 @@ class LiveApplyValidationTests(unittest.TestCase):
         self.assertIn("snapshot.player.hand[0].description", audit["placeholder_description_paths"])
         self.assertEqual(audit["preview_mismatch_count"], 1)
         self.assertEqual(audit["preview_mismatches"][0]["card_id"], "card-true-grit")
+        self.assertEqual(audit["low_quality_relic_glossary_count"], 0)
+
+    def test_audit_card_descriptions_reports_low_quality_relic_glossary(self) -> None:
+        snapshot = {
+            "phase": "combat",
+            "player": {
+                "hand": [],
+                "draw_pile_cards": [],
+                "discard_pile_cards": [],
+                "exhaust_pile_cards": [],
+                "relics": [
+                    {
+                        "name": "永冻冰晶",
+                        "description": "当你在战斗中第一次打出能力牌时，获得6点**格挡**。",
+                        "glossary": [
+                            {
+                                "glossary_id": "block",
+                                "display_text": "格挡",
+                                "hint": None,
+                                "source": "missing_hint",
+                            },
+                            {
+                                "glossary_id": "relicpermafrost",
+                                "display_text": "永冻冰晶",
+                                "hint": "当你在战斗中第一次打出能力牌时，获得{Block}点**格挡**。",
+                                "source": "runtime_hover_tip",
+                            },
+                        ],
+                    }
+                ],
+            },
+        }
+
+        audit = audit_card_descriptions(snapshot, [])
+
+        self.assertEqual(audit["low_quality_relic_glossary_count"], 2)
+        self.assertEqual(audit["low_quality_relic_glossary"][0]["reason"], "empty_hint")
+        self.assertEqual(audit["low_quality_relic_glossary"][1]["reason"], "template_hint")
 
     def test_select_candidate_prefers_choose_combat_card_in_combat_selection(self) -> None:
         snapshot = {"phase": "combat"}
