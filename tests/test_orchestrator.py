@@ -749,7 +749,6 @@ class OrchestratorTests(unittest.TestCase):
                     metadata={
                         "window_kind": "event_choice",
                         "event_title": "神秘神龛",
-                        "event_option_count": 2,
                     },
                 ),
                 make_window(
@@ -771,7 +770,6 @@ class OrchestratorTests(unittest.TestCase):
                         "event_subphase": "card_selection",
                         "event_title": "神秘神龛",
                         "event_selection_prompt": "选择一张攻击牌附魔。",
-                        "event_option_count": 2,
                     },
                 ),
                 make_window(

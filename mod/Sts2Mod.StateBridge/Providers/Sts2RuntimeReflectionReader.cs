@@ -1650,7 +1650,6 @@ internal sealed class Sts2RuntimeReflectionReader
         metadata["window_kind"] = analysis.WindowKind;
         metadata["event_title"] = analysis.Title;
         metadata["event_body"] = analysis.Body;
-        metadata["event_option_count"] = analysis.Options.Count;
         metadata["event_continue_available"] = analysis.ContinueAvailable;
         metadata["event_detection_source"] = analysis.DetectionSource;
         metadata["event_phase_detected"] = analysis.TreatAsEvent;
@@ -1696,7 +1695,7 @@ internal sealed class Sts2RuntimeReflectionReader
                     {
                         ["event_option_index"] = option.Index,
                         ["event_detection_source"] = option.DetectionSource,
-                        ["event_option"] = BuildEventOptionPayload(option),
+                        ["event_option"] = BuildEventOptionActionMetadata(option),
                     }));
                 continue;
             }
@@ -1707,15 +1706,13 @@ internal sealed class Sts2RuntimeReflectionReader
                 new Dictionary<string, object?>
                 {
                     ["option_index"] = option.Index,
-                    ["option_label"] = option.Label,
                     ["card_id"] = option.StableId,
                 },
                 Metadata: new Dictionary<string, object?>
                 {
                     ["event_option_index"] = option.Index,
                     ["event_detection_source"] = option.DetectionSource,
-                    ["option_preview"] = option.PreviewText ?? option.Description,
-                    ["event_option"] = BuildEventOptionPayload(option),
+                    ["event_option"] = BuildEventOptionActionMetadata(option),
                 }));
         }
 
@@ -1758,7 +1755,16 @@ internal sealed class Sts2RuntimeReflectionReader
             ["is_continue"] = option.IsContinue,
             ["detection_source"] = option.DetectionSource,
             ["card_id"] = option.StableId,
-            ["preview_text"] = option.PreviewText ?? option.Description,
+            ["description"] = option.Description,
+            ["keywords"] = option.Keywords,
+            ["glossary"] = option.Glossary,
+        };
+    }
+
+    private Dictionary<string, object?> BuildEventOptionActionMetadata(EventOptionAnalysis option)
+    {
+        return new Dictionary<string, object?>
+        {
             ["description"] = option.Description,
             ["keywords"] = option.Keywords,
             ["glossary"] = option.Glossary,
@@ -9653,12 +9659,7 @@ internal sealed class Sts2RuntimeReflectionReader
             return new RuntimeActionResult(false, "Action does not contain an option_index.", "invalid_action", metadata);
         }
 
-        var requestedLabel = ConvertToText(GetDictionaryValue(action.Params, "option_label"));
         metadata["option_index"] = optionIndex.Value;
-        if (!string.IsNullOrWhiteSpace(requestedLabel))
-        {
-            metadata["option_label"] = requestedLabel;
-        }
 
         var option = analysis.Options.FirstOrDefault(candidate => candidate.Index == optionIndex.Value);
         if (option == default)
@@ -9670,13 +9671,6 @@ internal sealed class Sts2RuntimeReflectionReader
         {
             metadata["resolved_window_kind"] = analysis.WindowKind;
             return new RuntimeActionResult(false, "Event option turned into a continue action.", "selection_window_changed", metadata);
-        }
-
-        if (!string.IsNullOrWhiteSpace(requestedLabel) &&
-            !string.Equals(option.Label, requestedLabel, StringComparison.OrdinalIgnoreCase))
-        {
-            metadata["resolved_option_label"] = option.Label;
-            return new RuntimeActionResult(false, "Event option label changed since the action was generated.", "stale_action", metadata);
         }
 
         var requestedCardId = ConvertToText(GetDictionaryValue(action.Params, "card_id"));

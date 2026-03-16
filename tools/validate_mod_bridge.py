@@ -214,10 +214,10 @@ def main() -> int:
         assert event_snapshot["metadata"]["window_kind"] == "event_choice"
         assert event_snapshot["metadata"]["event_title"]
         assert event_snapshot["metadata"]["event_body"]
-        assert event_snapshot["metadata"]["event_option_count"] >= 1
         assert isinstance(event_snapshot["metadata"]["event_options"], list)
         event_actions = fetch(base_url, "/actions?phase=event")
         choose_event = next(action for action in event_actions if action["type"] == "choose_event_option")
+        assert "option_label" not in choose_event["params"]
         status_code, apply_response = post_json(
             base_url,
             "/apply",
@@ -233,12 +233,12 @@ def main() -> int:
         assert event_card_snapshot["metadata"]["window_kind"] == "event_choice"
         assert event_card_snapshot["metadata"]["event_subphase"] == "card_selection"
         assert event_card_snapshot["metadata"]["event_selection_prompt"]
-        assert event_card_snapshot["metadata"]["event_option_count"] >= 1
         assert event_card_snapshot["metadata"]["event_options"][0]["card_id"]
         assert event_card_snapshot["metadata"]["event_options"][0]["description"]
         assert event_card_snapshot["metadata"]["event_options"][0]["glossary"][0]["source"] == "runtime_hover_tip"
         event_card_actions = fetch(base_url, "/actions?phase=event")
         choose_event_card = next(action for action in event_card_actions if action["type"] == "choose_event_option")
+        assert "option_label" not in choose_event_card["params"]
         assert choose_event_card["metadata"]["event_option"]["description"]
         assert choose_event_card["metadata"]["event_option"]["glossary"][0]["display_text"]
         status_code, apply_response = post_json(

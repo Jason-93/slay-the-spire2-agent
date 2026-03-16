@@ -3390,7 +3390,6 @@ class AutoplayOrchestrator:
                 "event_title",
                 "event_body",
                 "event_selection_prompt",
-                "event_option_count",
                 "event_continue_available",
             )
             if key in metadata

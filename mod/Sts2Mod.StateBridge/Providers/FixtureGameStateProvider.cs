@@ -762,7 +762,6 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                 ["disabled"] = false,
                 ["is_continue"] = false,
                 ["card_id"] = "event-card-0",
-                ["preview_text"] = "造成6点**伤害**。",
                 ["keywords"] = new[] { "sharp" },
                 ["glossary"] = new[]
                 {
@@ -784,7 +783,6 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                 ["disabled"] = false,
                 ["is_continue"] = false,
                 ["card_id"] = "event-card-1",
-                ["preview_text"] = "造成5点**伤害**两次。",
                 ["keywords"] = new[] { "sharp" },
                 ["glossary"] = new[]
                 {
@@ -815,7 +813,6 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                     ["event_title"] = "神秘神龛",
                     ["event_body"] = "你在废墟中发现一座古老神龛，似乎在呼唤你献上些许代价。",
                     ["event_options"] = eventOptions,
-                    ["event_option_count"] = eventOptions.Length,
                     ["event_continue_available"] = false,
                     ["event_detection_source"] = "fixture.event_choice",
                 },
@@ -827,13 +824,17 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                         new Dictionary<string, object?>
                         {
                             ["option_index"] = 0,
-                            ["option_label"] = "献祭：失去6点生命，获得150金币。",
                         },
                         Metadata: new Dictionary<string, object?>
                         {
                             ["event_option_index"] = 0,
                             ["event_detection_source"] = "fixture.event_choice",
-                            ["event_option"] = eventOptions[0],
+                            ["event_option"] = new Dictionary<string, object?>
+                            {
+                                ["description"] = eventOptions[0]["description"],
+                                ["keywords"] = eventOptions[0]["keywords"],
+                                ["glossary"] = eventOptions[0]["glossary"],
+                            },
                         }),
                     new RuntimeActionDefinition(
                         "choose_event_option",
@@ -841,13 +842,17 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                         new Dictionary<string, object?>
                         {
                             ["option_index"] = 1,
-                            ["option_label"] = "离开：什么都不做。",
                         },
                         Metadata: new Dictionary<string, object?>
                         {
                             ["event_option_index"] = 1,
                             ["event_detection_source"] = "fixture.event_choice",
-                            ["event_option"] = eventOptions[1],
+                            ["event_option"] = new Dictionary<string, object?>
+                            {
+                                ["description"] = eventOptions[1]["description"],
+                                ["keywords"] = eventOptions[1]["keywords"],
+                                ["glossary"] = eventOptions[1]["glossary"],
+                            },
                         }),
                 },
                 RunState: new RuntimeRunState(
@@ -876,7 +881,6 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                     ["event_title"] = "神秘神龛",
                     ["event_body"] = "神龛接受了你的决定，空气重新恢复平静。",
                     ["event_options"] = Array.Empty<object>(),
-                    ["event_option_count"] = 0,
                     ["event_continue_available"] = true,
                     ["event_continue_label"] = "继续",
                     ["event_detection_source"] = "fixture.event_continue",
@@ -919,7 +923,6 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                     ["event_body"] = "选择一张攻击牌附魔。附魔后，它在本场战斗中造成额外伤害。",
                     ["event_selection_prompt"] = "选择一张攻击牌附魔。",
                     ["event_options"] = eventCardOptions,
-                    ["event_option_count"] = eventCardOptions.Length,
                     ["event_continue_available"] = false,
                     ["event_detection_source"] = "fixture.event_card_selection",
                 },
@@ -931,15 +934,18 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                         new Dictionary<string, object?>
                         {
                             ["option_index"] = 0,
-                            ["option_label"] = "读下封底\n选择一张攻击牌**附魔**：锋利2。",
                             ["card_id"] = "event-card-0",
                         },
                         Metadata: new Dictionary<string, object?>
                         {
                             ["event_option_index"] = 0,
                             ["event_detection_source"] = "fixture.event_card_selection",
-                            ["option_preview"] = "造成6点**伤害**。",
-                            ["event_option"] = eventCardOptions[0],
+                            ["event_option"] = new Dictionary<string, object?>
+                            {
+                                ["description"] = eventCardOptions[0]["description"],
+                                ["keywords"] = eventCardOptions[0]["keywords"],
+                                ["glossary"] = eventCardOptions[0]["glossary"],
+                            },
                         }),
                     new RuntimeActionDefinition(
                         "choose_event_option",
@@ -947,15 +953,18 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                         new Dictionary<string, object?>
                         {
                             ["option_index"] = 1,
-                            ["option_label"] = "翻到目录\n选择一张攻击牌**附魔**：锋利2。",
                             ["card_id"] = "event-card-1",
                         },
                         Metadata: new Dictionary<string, object?>
                         {
                             ["event_option_index"] = 1,
                             ["event_detection_source"] = "fixture.event_card_selection",
-                            ["option_preview"] = "造成5点**伤害**两次。",
-                            ["event_option"] = eventCardOptions[1],
+                            ["event_option"] = new Dictionary<string, object?>
+                            {
+                                ["description"] = eventCardOptions[1]["description"],
+                                ["keywords"] = eventCardOptions[1]["keywords"],
+                                ["glossary"] = eventCardOptions[1]["glossary"],
+                            },
                         }),
                 },
                 RunState: new RuntimeRunState(

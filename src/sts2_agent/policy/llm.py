@@ -369,7 +369,6 @@ class ChatCompletionsPolicy:
                     "event_subphase",
                     "event_selection_prompt",
                     "event_options",
-                    "event_option_count",
                     "event_continue_available",
                     "event_continue_label",
                 )

@@ -270,7 +270,6 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
             "event_title": "神秘神龛",
             "event_body": "你可以献祭生命换取金币，或者转身离开。",
             "event_selection_prompt": "选择一张攻击牌附魔。",
-            "event_option_count": 2,
             "event_continue_available": False,
             "event_options": [
                 {
@@ -298,7 +297,6 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
         self.assertEqual(summary["metadata"]["event_subphase"], "card_selection")
         self.assertEqual(summary["metadata"]["event_title"], "神秘神龛")
         self.assertEqual(summary["metadata"]["event_selection_prompt"], "选择一张攻击牌附魔。")
-        self.assertEqual(summary["metadata"]["event_option_count"], 2)
         self.assertEqual(summary["metadata"]["event_options"][0]["description"], "选择一张攻击牌**附魔**：锋利2。")
         self.assertEqual(summary["metadata"]["event_options"][0]["glossary"][0]["display_text"], "锋利")
 
