@@ -4,7 +4,7 @@
 定义 STS2 bridge 作为真实游戏内 mod 运行时的状态导出约束，确保 live `health`、`snapshot`、`actions` 在受控线程上下文中稳定可用。
 ## Requirements
 ### Requirement: 游戏内 mod 必须暴露 live runtime bridge
-系统 MUST 能以真实 STS2 mod 的形式运行在游戏进程内，并通过 loopback bridge 对外暴露 live `health`、`snapshot`、`actions` 能力。该 bridge SHALL 复用统一的决策窗口模型，并在游戏内无活动 run、运行时未就绪或版本不兼容时返回可诊断状态，而不是崩溃或阻塞游戏。对于战斗结束后的奖励窗口，bridge MUST 稳定识别并导出 `phase = reward`，不得在 reward 已显示时错误回落到 `combat` 或继续伪造玩家战斗动作。
+系统 MUST 能以真实 STS2 mod 的形式运行在游戏进程内，并通过 loopback bridge 对外暴露 live `health`、`snapshot`、`actions` 能力。该 bridge SHALL 复用统一的决策窗口模型，并在游戏内无活动 run、运行时未就绪或版本不兼容时返回可诊断状态，而不是崩溃或阻塞游戏。对于战斗结束后的奖励窗口，bridge MUST 稳定识别并导出 `phase = reward`，不得在 reward 已显示时错误回落到 `combat` 或继续伪造玩家战斗动作；对于 event 房间，bridge MUST 在可识别时稳定导出 `phase = event`，不得把 event 误判为 `combat_transition`、空 `map` 或未知窗口。
 
 #### Scenario: 游戏内 bridge 成功附着到活动 run
 - **WHEN** STS2 已启动、mod 已加载且玩家进入一局活动 run
@@ -24,10 +24,21 @@
 - **THEN** `snapshot.rewards` MUST 返回当前可见奖励文本
 - **THEN** `actions` MUST 返回 `choose_reward`、`skip_reward` 或等效 reward 合法动作，而不是 `end_turn`
 
+#### Scenario: event 界面显示时导出 event phase
+- **WHEN** 当前房间为 `EventRoom` 或等效事件房间，且 runtime 可观察到事件正文、事件选项或继续按钮
+- **THEN** `snapshot.phase` MUST 返回 `event`
+- **THEN** `snapshot.metadata.window_kind` MUST 标记 `event_choice`、`event_continue` 或等效 event 子窗口
+- **THEN** `actions` MUST 返回与当前事件子窗口匹配的 event 合法动作，而不是继续暴露 `end_turn`、`choose_map_node` 或空动作集合
+
 #### Scenario: 战斗结束过渡态不得伪装为玩家战斗回合
 - **WHEN** 当前战斗敌人已经全部清空，但 reward UI 仍在挂载或切换中
 - **THEN** bridge MUST 优先进入 reward 识别或保守降级路径
 - **THEN** bridge MUST NOT 持续导出 `window_kind = player_turn` 与可重复提交的 `end_turn` 作为主要对外语义
+
+#### Scenario: event 房间不得误判为 combat_transition
+- **WHEN** 当前 run 已进入事件房间，且没有存活敌人、没有普通奖励按钮，但事件界面已经存在可读正文或可点击项
+- **THEN** bridge MUST NOT 将当前窗口长期导出为 `phase = combat` 且 `window_kind = combat_transition`
+- **THEN** bridge MUST 优先识别 event 或进入带 diagnostics 的 `event_transition`
 
 #### Scenario: runtime 读取失败时保持 fail-safe
 - **WHEN** 反射读取、游戏节点发现或窗口识别过程中发生异常
@@ -74,6 +85,50 @@
 - **THEN** bridge MUST 仍返回该 relic 的结构化对象
 - **THEN** bridge MUST 保持整个 `snapshot` 成功，而不是因单个 relic 文本失败中断响应
 
+#### Scenario: relics 与 potions 使用本地化文本导出
+- **WHEN** 玩家状态中包含 relics 或 potions，且对应对象可以解析到本地化显示文本
+- **THEN** `/snapshot.player.relics` 与 `/snapshot.player.potions` MUST 返回可读的本地化名称
+- **THEN** 返回值 MUST NOT 是 `MegaCrit.Sts2.Core.Localization.LocString` 或类似类名字符串
+
+#### Scenario: reward 与 action label 优先使用用户向文本
+- **WHEN** reward 按钮或 legal action 背后同时存在本地化文本与开发者内部标识
+- **THEN** `/snapshot.rewards` 与 `/actions[].label` MUST 优先输出用户实际看到的可读文本
+- **THEN** 若需要稳定行为参数，bridge MUST 通过 `params` 或 metadata 保留结构化标识，而不是仅依赖 label
+
+#### Scenario: 手牌说明优先使用游戏最终描述 API
+- **WHEN** 玩家手牌中的某张卡牌存在可调用的 `GetDescriptionForPile(...)` 或等效最终描述入口
+- **THEN** `snapshot.player.hand[].description` MUST 优先来自该最终描述 API，而不是 bridge 侧模板替换
+- **THEN** 对应文本 MUST 与游戏 UI 当前展示的语义一致或等效一致
+
+#### Scenario: pile cards 与 preview 使用匹配上下文的最终描述
+- **WHEN** bridge 导出 `draw_pile_cards`、`discard_pile_cards`、`exhaust_pile_cards` 或 `actions[].metadata.card_preview`
+- **THEN** bridge MUST 根据所在 pile 或 preview 上下文选择匹配的最终描述入口
+- **THEN** `card_preview` 在升级预览语义可用时 MUST 优先使用 `GetDescriptionForUpgradePreview()` 或等效 API
+
+#### Scenario: 最终描述入口缺失时仍可回退
+- **WHEN** 某张卡牌当前无法稳定调用最终描述 API
+- **THEN** bridge MAY 回退到 `RenderedDescription`、`RenderedText` 或模板 fallback
+- **THEN** 外部 client MUST 仍只消费单个 canonical `description`，不需要理解内部回退顺序
+
+#### Scenario: 基础手牌说明由 mod 端直接解析为 canonical description
+- **WHEN** 玩家手牌中的 `Strike`、`Defend` 等卡牌说明包含 `{Damage:diff()}`、`{Block:diff()}` 或等效模板占位符
+- **THEN** `snapshot.player.hand[].description` MUST 由 mod 端直接导出最终可读文本
+- **THEN** 对应的 `actions[].metadata.card_preview.description` MUST 与快照语义一致
+- **THEN** 外部 client MUST NOT 需要再次执行模板替换或在多个说明字段间自行兜底
+
+#### Scenario: power 说明由 mod 端统一给出可消费语义
+- **WHEN** 玩家或敌人 powers 的说明文本依赖 runtime 数值、富文本标签或本地化变量
+- **THEN** `snapshot.player.powers[]` 与 `snapshot.enemies[].powers[]` MUST 直接导出可读的 `description`
+- **THEN** bridge MUST 同时保留结构化数值来源，便于外部 agent 判断说明可信度
+
+#### Scenario: glossary 高亮以 markdown 风格导出
+- **WHEN** 某条说明文本中包含 glossary 词条高亮，例如 `[gold]格挡[/gold]`
+- **THEN** 对外 `description` MUST 导出为 `**格挡**`
+- **THEN** bridge MUST NOT 在公共文本字段中继续暴露游戏内部富文本标签
+
+
+
+
 ### Requirement: 文本解析失败时必须提供可诊断的降级信息
 系统 MUST 在文本解析失败、只能拿到模板、或仅能部分解析时保持 fail-safe，并在日志、内部 metadata 或等效 diagnostics 结构中暴露足够的调试信息。对于 cards，diagnostics MUST 至少能够定位对象路径、`card_id` 或 `canonical_card_id`、description context、选择的 source 与失败阶段。对于 relics，diagnostics MUST 至少能够定位 relic 名称或 `canonical_relic_id`、对象路径与 description 的 fallback 阶段。bridge MUST 将“最终可读文本”的公开语义继续收敛到单个 `description` 字段，而不是让客户端通过额外公开 schema 猜测哪些文本仍含占位符。bridge MAY 在日志中保留调试原文，但 MUST NOT 因为个别文本字段解析失败而使整个 `snapshot` 或 `actions` 构建失败。
 
@@ -81,6 +136,52 @@
 - **WHEN** 某个 relic 无法从 runtime 文本来源中稳定解析 description
 - **THEN** bridge MUST 记录包含 relic 标识、对象路径与 fallback 阶段的 warning 或等效 diagnostics
 - **THEN** 对外 `snapshot.player.relics[]` MUST 仍返回至少包含 `name` 的结构化对象
+
+#### Scenario: 无法解析本地化文本时仍返回稳定快照
+- **WHEN** 某个 runtime 对象的文本字段无法通过本地化或预定字段解析
+- **THEN** bridge MUST 仍然返回可序列化的 `snapshot` 或 `actions` 响应
+- **THEN** bridge MUST 在 metadata 中指出对应字段使用了 fallback 或存在 unresolved 情况
+
+#### Scenario: diagnostics 不得污染面向 Agent 的主字段
+- **WHEN** bridge 需要暴露文本解析来源或失败原因
+- **THEN** diagnostics MUST 优先放在 metadata 或等效辅助字段中
+- **THEN** `name`、`label`、`relics`、`rewards` 等面向 Agent 的主字段 MUST 保持简洁、稳定和可读
+
+#### Scenario: 最终描述失败时记录日志并安全回退
+- **WHEN** 某张卡牌调用最终描述 API 失败、返回空文本或仍残留模板 DSL
+- **THEN** bridge MUST 记录包含 card 标识、上下文与 fallback 阶段的 warning 或等效 diagnostics
+- **THEN** 对外 `snapshot` 或 `actions` MUST 仍返回可序列化结果
+
+#### Scenario: diagnostics 不再通过公开说明字段泄漏给客户端
+- **WHEN** bridge 需要暴露 description 的解析来源、变量或失败原因
+- **THEN** 这些信息 MUST 进入日志、内部 diagnostics 或等效排障通道
+- **THEN** 公共 schema MUST NOT 重新引入 `description_quality`、`description_source`、`description_vars` 或等效公开字段
+
+#### Scenario: 说明解析 diagnostics 不得污染面向 Agent 的主字段
+- **WHEN** bridge 需要暴露文本解析来源、失败原因或变量提取结果
+- **THEN** diagnostics MUST 优先进入 mod 日志、调试文件或等效本地排障通道
+- **THEN** 公共 `snapshot` 与 `actions` 字段 MUST NOT 因此新增仅供诊断使用的说明结构
+
+#### Scenario: 默认日志不得因成功路径而刷屏
+- **WHEN** bridge 在 live runtime 中持续解析大量正常说明文本
+- **THEN** mod MAY 提供显式 debug 开关输出逐条成功解析日志
+- **THEN** 默认日志 MUST 优先覆盖失败、降级或异常路径，而不是无条件打印所有成功记录
+
+#### Scenario: 仍含模板占位符时导出 template_fallback 诊断
+- **WHEN** 某张卡牌或 power 的说明文本在 mod 端仍无法完全解析，最终 `description` 仍保留模板占位符
+- **THEN** 对应对象 MUST 导出 `description_quality="template_fallback"` 或等效稳定值
+- **THEN** 对应对象 MUST 导出 `description_source` 与可诊断的 `description_vars`
+- **THEN** 外部 client MUST 能仅通过这些服务端字段识别当前文本不可完全信任，而不需要自行扫描模板语法
+
+#### Scenario: 解析失败时快照仍可稳定返回
+- **WHEN** 某个 runtime 对象的文本字段无法通过本地化、动态变量或约定字段解析
+- **THEN** bridge MUST 仍然返回可序列化的 `snapshot` 或 `actions` 响应
+- **THEN** diagnostics MUST 指出该字段使用了 fallback、partial 或 unresolved 语义
+- **THEN** 面向 agent 的主字段仍 MUST 保持稳定可读，不得退化为对象类名或不可序列化值
+
+
+
+
 
 ### Requirement: 卡牌奖励选择界面必须作为 reward phase 导出并可连续决策
 当奖励链路进入“选牌二级界面”（卡牌奖励选择）时，bridge MUST 将当前窗口导出为 `snapshot.phase="reward"`，并导出可选卡牌的用户向文本到 `snapshot.rewards`，同时生成对应的 `choose_reward` legal actions，使外部 agent 可以在同一 reward 链路中继续选择具体卡牌或完成该奖励步骤。
@@ -138,7 +239,7 @@ bridge MUST 在 reward 收尾、提交前进动作、进入地图三个阶段导
 - **THEN** `actions` MUST 导出 `choose_map_node` legal actions
 
 ### Requirement: bridge 必须稳定导出 reward 到 map 的 run-flow 推进
-系统 MUST 在 reward 链路结束后、地图出现前、地图选路后进入下一房间前，以及重新进入 `combat` 前，持续导出与真实窗口一致的 `snapshot` 与 metadata。bridge MUST 为 runner 提供稳定的 phase / window diagnostics，使其能够区分“仍在 reward”“地图已就绪”“房间过渡中”和“下一场战斗已进入”。
+系统 MUST 在 reward 链路结束后、地图出现前、地图选路后进入下一房间前，以及重新进入 `combat` 前，持续导出与真实窗口一致的 `snapshot` 与 metadata。bridge MUST 为 runner 提供稳定的 phase / window diagnostics，使其能够区分“仍在 reward”“仍在 event”“地图已就绪”“房间过渡中”和“下一场战斗已进入”。
 
 #### Scenario: reward 完成后进入 map 窗口
 - **WHEN** 玩家完成当前奖励链路，界面从 `reward` 推进到 `map`
@@ -146,10 +247,16 @@ bridge MUST 在 reward 收尾、提交前进动作、进入地图三个阶段导
 - **THEN** metadata MUST 明确标记地图窗口已就绪，而不是继续保留 reward 语义
 - **THEN** bridge MUST NOT 继续导出过期的 reward diagnostics 作为当前主窗口
 
+#### Scenario: event 完成后进入 map 或后续窗口
+- **WHEN** 玩家完成当前 event 链路，界面离开事件窗口并进入地图、战斗、奖励或其他稳定 run 内窗口
+- **THEN** bridge MUST 推进 `snapshot.phase` 到新的真实窗口语义
+- **THEN** metadata MUST 不再保留过期的 `event_choice` 或 `event_continue` 主窗口标记
+- **THEN** 新的 `decision_id` 与 `state_version` MUST 反映新的 live 决策上下文
+
 #### Scenario: map 选路后进入房间过渡
 - **WHEN** 外部已经提交 `choose_map_node`，但下一房间或下一场战斗尚未完全载入
 - **THEN** bridge MUST 导出可轮询的过渡态 `snapshot`
-- **THEN** metadata MUST 标记这是地图选路后的过渡窗口，而不是把它误判回 reward 或稳定 map ready
+- **THEN** metadata MUST 标记这是地图选路后的过渡窗口，而不是把它误判回 reward、event 或稳定 map ready
 
 #### Scenario: 下一房间进入 combat 决策窗口
 - **WHEN** 地图选路后的房间加载完成并重新出现战斗决策
@@ -243,6 +350,12 @@ bridge MUST 在 reward 收尾、提交前进动作、进入地图三个阶段导
 - **THEN** bridge MUST 继续尝试从这些来源解析 glossary `hint`
 - **THEN** 只有在这些真实来源都不可用时，bridge 才可以进入 fallback
 
+#### Scenario: relic glossary 的重复或脏 hint 在导出前被过滤
+- **WHEN** 某个 relic glossary 项与 relic 主 `description` 语义重复，或其 `hint` 为空、含模板残留、仅有低质量 fallback
+- **THEN** bridge MUST 在对外 `snapshot.player.relics[].glossary` 中过滤该条目
+- **THEN** 调用方 MUST 不会在 relic glossary 中读到重复主说明或空 hint 条目
+
+
 ### Requirement: live runtime glossary fallback 必须显式告警且不得伪装成真实来源
 当 glossary `hint` 无法从游戏 runtime 或 localization 获得时，bridge MAY 导出空 hint 或最小 fallback，但 MUST 在日志或 diagnostics 中显式告警，并且 MUST NOT 把 fallback 结果标记成 `description_text`、`runtime_hover_tip` 或其他看似真实的来源。
 
@@ -256,6 +369,12 @@ bridge MUST 在 reward 收尾、提交前进动作、进入地图三个阶段导
 - **THEN** glossary `source` MUST 标识为 `fallback_builtin`、`missing_hint` 或等效可区分来源
 - **THEN** 调用方 MUST 能据此区分“真实游戏说明”和“bridge 临时兜底”
 
+#### Scenario: relic glossary 的低质量 fallback 只保留在日志中
+- **WHEN** 某个 relic glossary 项只能得到 `missing_hint`、空 hint 或未渲染模板 fallback
+- **THEN** bridge MUST 在日志或 diagnostics 中记录该条目的过滤原因
+- **THEN** `snapshot.player.relics[].glossary` MUST NOT 继续返回该低质量 glossary 项
+
+
 ### Requirement: live runtime bridge 必须将手牌描述绑定到当前卡牌实例的动态值
 系统 MUST 在真实 STS2 进程内，优先基于当前卡牌实例与当前 description context 解析卡牌说明，而不是长期依赖模板文本或静态定义。对于同名重复手牌，bridge MUST 以实例级语义读取数值并生成 description，确保导出的文本与该 `card_id` 所代表的当前卡牌一致。对于 pile cards，bridge MUST 将对应 pile context 传入最终描述入口；对于 preview，bridge MUST 在可用时使用升级预览或等效 preview context，而不是直接复用 hand description。若 runtime bridge 无法从当前实例或上下文中稳定读取最终文本，bridge MUST 安全回退，但 MUST NOT 把失败卡牌扩散为整个 live snapshot 的构建失败。
 
@@ -268,6 +387,18 @@ bridge MUST 在 reward 收尾、提交前进动作、进入地图三个阶段导
 - **WHEN** 同一张卡牌同时以 pile card、hand card 或 `card_preview` 的形式被导出
 - **THEN** bridge MUST 根据各自 context 生成 description
 - **THEN** bridge MUST NOT 无条件把 hand description 直接复制到 pile 或 preview
+
+#### Scenario: 同名重复手牌也按实例级动态值读取
+- **WHEN** 玩家手牌中同时存在多张同名卡牌，且其中部分实例因战斗效果产生不同的当前数值
+- **THEN** bridge MUST 按实例读取每张卡牌的动态值
+- **THEN** 每张卡牌导出的描述与变量值 MUST 与其自身 `card_id` 对应，而不是混用模板或共享静态值
+
+#### Scenario: live runtime 找不到动态值时保持 fail-safe
+- **WHEN** runtime bridge 无法从当前卡牌实例上稳定读取某个动态值
+- **THEN** bridge MUST 回退到模板导出路径
+- **THEN** bridge MUST 在 diagnostics 或等效辅助字段中指出该值未成功解析
+- **THEN** bridge MUST NOT 因单张卡牌的动态值读取失败而使整个 live snapshot 构建失败
+
 
 ### Requirement: 战斗窗口必须区分稳定玩家回合、敌方回合与额外选择窗口
 当 `snapshot.phase="combat"` 时，bridge MUST 区分至少三类对外语义：稳定可决策的 `player_turn`、不可提交普通玩家动作的 `enemy_turn` / `combat_transition`，以及战斗内额外选牌窗口。对于非稳定玩家回合窗口，bridge MUST 不导出普通 `play_card` 与 `end_turn` 作为 legal actions。若 runtime 观察到 card selection overlay、player hand selection state 或等效选择界面信号，bridge MUST 优先导出额外选择窗口语义，而不是默认回退成普通 `player_turn`。
@@ -396,3 +527,28 @@ bridge MUST 从 live runtime 导出当前玩家药水栏上限，并以 `potion_
 - **THEN** 返回 metadata MUST 包含失败发生的阶段与候选 handler 诊断
 - **THEN** mod MUST NOT 因单次药水执行失败而导致整个 bridge 不可用
 
+### Requirement: live runtime enemy 文本必须清理富文本与低价值重复标签
+当 bridge 从 live runtime 导出 enemy 当前行动信息时，`intent`、`intent_raw`、`move_name` 与 `move_description` MUST 经过统一的文本规范化，去除 `[font_size]`、纯展示性乘号格式、富文本残留或等效 UI markup。若 `move_name` 只是当前意图的重复展示而非独立招式名，bridge MUST 抑制该字段，而不是把 UI 标签原样暴露给客户端。
+
+#### Scenario: 数值多段攻击的富文本 intent 被规范化
+- **WHEN** runtime 对某个敌人的当前意图返回 `2[font_size=18]×3[/font_size]` 或等效富文本标签
+- **THEN** 对外导出的 enemy 文本字段 MUST NOT 保留该富文本 markup
+- **THEN** bridge MUST 继续导出结构化 `intent_type`、`intent_damage`、`intent_hits` 与可读 `move_description`
+
+#### Scenario: move_name 只是意图展示标签时被抑制
+- **WHEN** runtime 的 `move_name` 与 `intent` 仅在排版、数字格式或展示标签上不同，而没有额外机制语义
+- **THEN** bridge MUST 将 `move_name` 置空或等效抑制
+- **THEN** bridge MUST NOT 把该重复标签继续作为独立 enemy richer field 暴露
+
+### Requirement: live runtime enemy keywords 必须过滤内部 id 与重复 token
+当 bridge 为 enemy 导出 `keywords`、`traits` 与 `move_glossary` 时，MUST 过滤 power id、canonical id、类型名或等效内部 token，并去掉与 powers、intent 或 move 文本完全重复的低价值项。若过滤后没有稳定的高价值关键字，bridge MAY 返回空数组，但 MUST 保持整个 enemy 对象成功导出。
+
+#### Scenario: keyword 提取结果包含 power id 时被过滤
+- **WHEN** 某个敌人的 keyword 候选中包含 `POWER.SLIPPERY_POWER` 或等效内部对象标识
+- **THEN** 最终 `snapshot.enemies[].keywords` MUST NOT 包含该内部 id
+- **THEN** bridge MUST 优先保留真正描述机制的术语或 glossary 锚点
+
+#### Scenario: enemy keyword 过滤后仍保持 fail-safe
+- **WHEN** 某个敌人的 keyword 候选大多属于内部 token、重复 move 术语或低价值噪音
+- **THEN** bridge MUST 仍返回可序列化的 enemy 对象
+- **THEN** `keywords` MAY 降级为空数组，但 MUST NOT 因过滤逻辑使整个 combat snapshot 失败

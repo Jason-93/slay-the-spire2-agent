@@ -11,6 +11,11 @@ TBD - created by archiving change sts2-agent. Update Purpose after archive.
 - **THEN** bridge 返回该最新决策窗口的单个结构化快照，并包含足以选择合法动作的基础状态与已支持 richer state 字段
 - **THEN** agent 即使遇到部分 richer 字段缺失，也仍能基于保底字段继续读取与决策
 
+#### Scenario: 在玩家回合中请求战斗快照
+- **WHEN** agent 在一场进行中的战斗里、玩家可行动阶段请求当前决策快照
+- **THEN** bridge 返回该最新决策窗口的单个结构化快照，并包含足以选择合法动作的可见状态
+
+
 ### Requirement: Bridge 必须为知识层扩展保留稳定锚点
 系统 MUST 在卡牌、敌人或等效对象上保留可供上层知识系统消费的稳定锚点，例如 `canonical_*_id` 或等效标识，并与 live action 所需的实例标识分离。bridge MAY 在第一阶段对暂时无法解析的锚点返回空值，但协议 MUST 允许这些字段稳定存在。
 
@@ -92,6 +97,17 @@ TBD - created by archiving change sts2-agent. Update Purpose after archive.
 - **THEN** 快照 MUST 仍返回单个可序列化的 `description`
 - **THEN** 公共响应 MUST NOT 因此重新暴露 `description_quality`、`description_source` 或等效调试字段
 
+#### Scenario: 快照中的卡牌描述已完成真实数值解析
+- **WHEN** bridge 已从 live runtime 拿到当前卡牌实例的真实动态数值
+- **THEN** 快照中的 `description_rendered` MUST 为不含模板占位符的最终文本
+- **THEN** `description_vars` MUST 能反映对应动态字段的实际值
+
+#### Scenario: 快照中的卡牌描述仍处于模板回退
+- **WHEN** bridge 只能拿到模板文本，或 `description_rendered` 仍包含模板占位符
+- **THEN** 快照 MUST 继续返回兼容字段，避免中断 autoplay
+- **THEN** 快照 MUST 同时暴露足以识别回退状态的质量或来源信息
+
+
 ### Requirement: Bridge 不得把模板文本伪装成高质量策略输入
 系统 MUST 确保上层通过 snapshot 或 action metadata 读取到的卡牌说明不会在一个位置使用游戏最终描述、另一个位置却继续暴露未解释 DSL 或过时模板。对于同一张 live 卡牌实例，`snapshot.player.hand[]` 与 `actions[].metadata.card_preview` MUST 共享一致的 canonical description 语义；对于 pile cards，bridge MUST 使用与其 pile 语义相匹配的 description，而不是简单复用无上下文模板。若某张卡牌只能回退到较低质量文本，bridge MUST 在所有对外位置保持一致降级，并通过日志或内部 diagnostics 明确指出 fallback，而不是让某处看似“已完成渲染”、某处仍是模板残留。
 
@@ -104,6 +120,12 @@ TBD - created by archiving change sts2-agent. Update Purpose after archive.
 - **WHEN** bridge 导出 `draw_pile_cards`、`discard_pile_cards` 或 `exhaust_pile_cards`
 - **THEN** 每张 pile card 的 `description` MUST 反映其所在 pile 的 runtime description context 或等效语义
 - **THEN** bridge MUST NOT 把仅适用于 hand 或 preview 的 description 机械复制到所有 pile cards
+
+#### Scenario: action metadata 中的 card_preview 与 snapshot 质量保持一致
+- **WHEN** 同一张 live 手牌同时出现在 `snapshot.player.hand` 与 `actions[].metadata.card_preview`
+- **THEN** 两处关于 `description_rendered`、`description_vars` 和回退状态的语义 MUST 保持一致
+- **THEN** bridge MUST NOT 在一个位置标记为已解析、另一个位置却仍是模板回退且无解释
+
 
 ### Requirement: Bridge 必须导出结构化药水状态与药水栏容量
 系统 MUST 在 `snapshot.player` 中导出面向决策的结构化药水状态，而不是仅提供药水名称列表。`player.potions` MUST 表示当前持有药水的结构化列表；每个条目至少 MUST 包含 `name`，并在可用时补充 `description`、`canonical_potion_id`、`glossary` 或等效稳定字段。`player` 同时 MUST 导出 `potion_capacity` 或等效稳定容量字段，用于表示当前药水栏上限。
@@ -141,6 +163,13 @@ TBD - created by archiving change sts2-agent. Update Purpose after archive.
 - **THEN** 对应 `player.relics[]` 条目 MUST 仍以结构化对象返回
 - **THEN** 该条目的 `description` MUST 使用空值、缺省值或等效稳定空语义
 
+#### Scenario: relic glossary 不得重复主说明语义
+- **WHEN** bridge 为某个 relic 成功导出 `glossary`
+- **THEN** `player.relics[].glossary` MUST 只包含对主 `description` 有额外补充价值的 glossary 项
+- **THEN** bridge MUST NOT 再把 relic 自身 title/hint 以重复 glossary 项暴露给客户端
+- **THEN** bridge MUST NOT 导出 `hint=null`、`source=missing_hint` 或等效低价值 glossary 条目
+
+
 ### Requirement: relic 说明对象必须遵守精简 canonical schema
 系统 MUST 将 relic 说明对象与 cards、powers、potions 一样收敛为面向决策的精简 schema。若 relic 存在说明文本，对外协议 MUST 以 canonical `description` 为主；`description_quality`、`description_source`、`description_vars` 或其他仅用于排障的内部字段 MUST NOT 暴露给客户端。
 
@@ -175,3 +204,15 @@ TBD - created by archiving change sts2-agent. Update Purpose after archive.
 - **THEN** 对应 glossary 条目 MUST NOT 出现在最终 `snapshot.enemies[].powers[].glossary` 中
 - **THEN** bridge MUST 继续返回可用的 enemy power 对象，而不是因 glossary 清理让整个 enemy 对象失效
 
+### Requirement: Bridge 导出的药水 glossary 必须避免重复本体说明与模板残留
+系统 MUST 将药水对象中的 `description` 作为药水本体的 canonical 说明文本；`glossary` MUST 仅保留对术语理解有补充价值的高质量条目。对于与药水自身名称或自身说明重复的 identity glossary、空 hint、`missing_hint`、模板占位残留或等效低价值条目，bridge MUST NOT 继续对外暴露。
+
+#### Scenario: 药水自身说明不得以 glossary identity 条目重复出现
+- **WHEN** `snapshot.player.potions[]` 中某瓶药水已经具备 canonical `description`
+- **THEN** 该药水的 `glossary` MUST NOT 再暴露仅重复药水名称或整段药水说明的 identity 条目
+- **THEN** 调用方 MUST 能把 `description` 视为药水本体说明的唯一主入口
+
+#### Scenario: 低质量 potion glossary 条目不得进入对外快照
+- **WHEN** bridge 为某瓶药水解析 glossary 时遇到空 `hint`、`source="missing_hint"`、`{StrengthPower}` 一类模板占位，或等效未完成渲染文本
+- **THEN** 对应 glossary 条目 MUST NOT 出现在最终 `snapshot.player.potions[].glossary` 中
+- **THEN** bridge MUST 继续返回可用的药水对象，而不是因 glossary 清理而使整个快照失败

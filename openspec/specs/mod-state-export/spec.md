@@ -144,3 +144,10 @@ TBD - created by archiving change sts2-mod-state-bridge. Update Purpose after ar
 - **WHEN** mod 已成功解析真实动态数值，并能生成不含模板占位符的用户向描述
 - **THEN** `description_rendered` MUST 返回该最终文本
 - **THEN** diagnostics 或等效字段 MUST 能表明该描述来自 live value resolution，而不是模板回退
+
+### Requirement: Mod 必须导出统一的决策窗口状态快照
+系统 MUST 在 Slay the Spire 2 运行过程中识别当前决策窗口，并导出统一结构的状态快照，至少覆盖 `combat`、`reward`、`map`、`terminal` 四类窗口，并包含 `session_id`、`decision_id`、`state_version`、`phase` 等元数据。
+
+#### Scenario: 玩家处于战斗回合时请求状态
+- **WHEN** 外部调用方在玩家可行动的战斗回合请求当前快照
+- **THEN** mod 返回一份 `combat` 类型的结构化状态快照，包含玩家、敌人、牌区和窗口元数据

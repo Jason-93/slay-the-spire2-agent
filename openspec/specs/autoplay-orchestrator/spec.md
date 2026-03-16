@@ -15,6 +15,22 @@ TBD - created by archiving change sts2-agent. Update Purpose after archive.
 - **THEN** orchestrator MUST 先等待、重观测或进入恢复路径
 - **THEN** orchestrator MUST NOT 直接对该窗口盲目提交 `/apply`
 
+#### Scenario: policy 只在稳定窗口内被调用
+- **WHEN** autoplay 已为一个可控会话启动，且 bridge 报告当前存在合法决策窗口
+- **THEN** orchestrator MUST 先验证 `phase`、`window_kind`、`current_side`、`round_number`、`selection_kind` 与 legal actions 已达到稳定条件
+- **THEN** 只有稳定后，orchestrator 才能为该窗口调用 policy 并选择一个合法动作
+
+#### Scenario: 决策前发现窗口仍在漂移
+- **WHEN** orchestrator 在 live runtime 中发现 `phase`、`window_kind`、`current_side`、`round_number`、`selection_kind` 或 legal actions 仍处于变化中
+- **THEN** orchestrator MUST 继续等待、重观测或进入恢复路径
+- **THEN** orchestrator MUST NOT 在该时刻调用 policy 生成动作
+
+#### Scenario: 提交前发现旧决策已不属于当前稳定窗口
+- **WHEN** orchestrator 在模型已返回动作后再次观测到当前稳定窗口已变化
+- **THEN** orchestrator MUST 作废旧决策并重新进入稳定窗口判定 / 重新决策流程
+- **THEN** orchestrator MUST NOT 直接把旧动作提交到新的 live 窗口
+
+
 ### Requirement: Orchestrator 支持可插拔 policy 实现
 系统 MUST 提供统一的 policy 接口，该接口接收当前 observation 与合法动作集合，并返回一个被选择的合法动作，或者返回显式 halt 结果。
 
@@ -68,3 +84,12 @@ TBD - created by archiving change sts2-agent. Update Purpose after archive.
 - **THEN** orchestrator MUST 停止继续请求模型或提交动作
 - **THEN** 结果 MUST 记录 `recovery_budget_exhausted` 或等效 stop reason
 
+#### Scenario: stale_action 触发同窗口恢复
+- **WHEN** bridge 返回 `stale_action`，但当前 battle 仍处于可继续的 `combat`，且最新 observation 仍属于同一稳定窗口
+- **THEN** orchestrator MUST 重新抓取最新 `snapshot/actions`
+- **THEN** orchestrator MAY 对具备强锚点的动作执行受限 rebase，或重新决策后继续尝试
+
+#### Scenario: `end_turn` 不得跨回合 rebase
+- **WHEN** 某次旧决策选择了 `end_turn`，但提交前发现 `round_number`、`window_kind`、`current_side`、`selection_kind` 或 legal actions 已切到新的稳定玩家窗口
+- **THEN** orchestrator MUST 将该旧 `end_turn` 视为失效动作
+- **THEN** orchestrator MUST 重新决策，而不是把它 rebase 到新窗口

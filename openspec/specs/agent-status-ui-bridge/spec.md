@@ -44,6 +44,12 @@
 - **THEN** 玩家 MUST 能通过滚动历史区域查看最近若干条决策的摘要与思路
 - **THEN** overlay MUST 不因历史增加而直接把早期思路全部丢失
 
+#### Scenario: 理由过长时执行稳定截断
+- **WHEN** `reason` 或等效文本超过 overlay 可接受长度
+- **THEN** mod MUST 对展示文本执行稳定截断、换行或等效摘要策略
+- **THEN** overlay MUST 保持可读且不得严重遮挡主要战斗 UI
+
+
 ### Requirement: agent 状态 overlay 必须处理 stale、会话隔离与阶段更新
 系统 MUST 将 `/agent-status` 视为“最新状态快照 + 最近历史”协议，并对 stale、跨会话和生命周期切换做显式处理。若状态在约定时间内未刷新，overlay MUST 显示 `stale`、`idle` 或等效语义，而不是无限保留旧状态；若 `session_id` 切换，系统 MUST 以新会话覆盖旧状态并清空旧历史，避免跨局串状态。对于同一条决策的 `planned`、`submitted`、`accepted`、`rejected` 等生命周期推进，overlay MUST 合并为同一历史条目，而不是将每个阶段都当作独立高价值决策重复刷屏。
 
@@ -62,3 +68,12 @@
 - **THEN** overlay MUST 将这些更新合并到同一条历史决策上
 - **THEN** 玩家 MUST 能看到该条决策的最新状态，而不是被重复状态刷屏淹没
 
+#### Scenario: 新 session 覆盖旧 session
+- **WHEN** mod 收到一个 `session_id` 与当前缓存不同的有效 agent 状态
+- **THEN** mod MUST 用新 session 的状态覆盖旧状态
+- **THEN** overlay MUST 不再显示旧局残留的 `turn`、`step`、`reason` 或动作信息
+
+#### Scenario: runner 更新动作生命周期时 overlay 同步推进
+- **WHEN** 同一 `session_id` 下，runner 依次推送 `planned`、`submitted`、`accepted`、`rejected` 或等效阶段状态
+- **THEN** overlay MUST 以最新阶段覆盖旧阶段
+- **THEN** 玩家 MUST 能在游戏内观察到本次动作的生命周期推进
