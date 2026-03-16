@@ -330,6 +330,64 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
         self.assertEqual(summary["event_option"]["description"], "选择一张攻击牌**附魔**：锋利2。")
         self.assertEqual(summary["event_option"]["glossary"][0]["display_text"], "锋利")
 
+    def test_snapshot_summary_includes_shop_metadata(self) -> None:
+        snapshot = build_snapshot()
+        snapshot.phase = "shop"
+        snapshot.metadata = {
+            "window_kind": "shop_main",
+            "shop_offer_count": 2,
+            "shop_leave_available": True,
+            "shop_offers": [
+                {
+                    "offer_id": "card:shop-card-0",
+                    "kind": "card",
+                    "name": "铁浪",
+                    "price": 54,
+                    "purchasable": True,
+                    "description": "造成5点**伤害**并获得5点**格挡**。",
+                },
+                {
+                    "offer_id": "service:purge_card",
+                    "kind": "service",
+                    "name": "移除卡牌",
+                    "price": 75,
+                    "purchasable": False,
+                    "unavailable_reason": "not_affordable",
+                },
+            ],
+        }
+
+        summary = self.policy._summarize_snapshot(snapshot)
+
+        self.assertEqual(summary["metadata"]["window_kind"], "shop_main")
+        self.assertEqual(summary["metadata"]["shop_offer_count"], 2)
+        self.assertTrue(summary["metadata"]["shop_leave_available"])
+        self.assertEqual(summary["metadata"]["shop_offers"][0]["name"], "铁浪")
+
+    def test_action_summary_includes_shop_offer_metadata(self) -> None:
+        action = LegalAction(
+            action_id="act-shop-1",
+            type="buy_shop_card",
+            label="Buy 铁浪 (54g)",
+            params={"offer_id": "card:shop-card-0", "price": 54},
+            target_constraints=[],
+            metadata={
+                "shop_offer": {
+                    "offer_id": "card:shop-card-0",
+                    "kind": "card",
+                    "name": "铁浪",
+                    "price": 54,
+                    "purchasable": True,
+                    "description": "造成5点**伤害**并获得5点**格挡**。",
+                }
+            },
+        )
+
+        summary = self.policy._summarize_action(action)
+
+        self.assertEqual(summary["shop_offer"]["kind"], "card")
+        self.assertEqual(summary["shop_offer"]["price"], 54)
+
     def test_policy_allows_halt_true(self) -> None:
         response_payload = {
             "choices": [

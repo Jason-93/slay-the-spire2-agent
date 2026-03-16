@@ -20,6 +20,7 @@ TRANSITION_WINDOW_KINDS = {
     "reward_transition",
     "map_transition",
     "event_transition",
+    "shop_transition",
     "menu_transition",
 }
 
@@ -34,6 +35,7 @@ class OrchestratorConfig:
     reward_mode: str = "halt"  # halt|skip|skip-only|safe-default|llm
     map_mode: str = "halt"  # halt|safe-default|llm
     event_mode: str = "halt"  # halt|safe-default|llm
+    shop_mode: str = "halt"  # halt|safe-default|llm
     state_sync_retries: int = 3
     stale_action_retries: int = 2
     max_turns_per_battle: int | None = None
@@ -202,7 +204,7 @@ class AutoplayOrchestrator:
                     pending_end_turn_transition = None
                     waiting_since = None
             phase = self._normalize_phase(getattr(snapshot, "phase", ""))
-            if previous_phase in {"reward", "map", "event"} and phase == "combat" and not snapshot.terminal:
+            if previous_phase in {"reward", "map", "event", "shop"} and phase == "combat" and not snapshot.terminal:
                 self._next_combat_entered = True
                 transition_wait_since = None
             player_turn = self._is_player_turn(snapshot)
@@ -387,6 +389,32 @@ class AutoplayOrchestrator:
 
             if phase == "event":
                 outcome = self._handle_event_phase(
+                    recorder=recorder,
+                    snapshot=snapshot,
+                    legal_actions=legal_actions,
+                    step_index=step_index,
+                    current_turn_index=current_turn_index,
+                    current_turn_actions=current_turn_actions,
+                    total_actions=total_actions,
+                    turns_completed=turns_completed,
+                    trace_path=trace_path,
+                    session_id=session.session_id,
+                    transition_wait_since=transition_wait_since,
+                )
+                step_index = outcome["step_index"]
+                transition_wait_since = outcome.get("transition_wait_since", transition_wait_since)
+                current_turn_actions = outcome["current_turn_actions"]
+                total_actions = outcome["total_actions"]
+                stale_action_attempts = outcome["stale_action_attempts"]
+                consecutive_failures = outcome["consecutive_failures"]
+                pending_end_turn_transition = outcome["pending_end_turn_transition"]
+                if outcome["summary"] is not None:
+                    return outcome["summary"]
+                previous_phase = phase
+                continue
+
+            if phase == "shop":
+                outcome = self._handle_shop_phase(
                     recorder=recorder,
                     snapshot=snapshot,
                     legal_actions=legal_actions,
@@ -660,6 +688,12 @@ class AutoplayOrchestrator:
             return value
         return "halt"
 
+    def _normalized_shop_mode(self) -> str:
+        value = str(getattr(self.config, "shop_mode", "") or "").strip().lower()
+        if value in {"halt", "safe-default", "llm"}:
+            return value
+        return "halt"
+
     @staticmethod
     def _normalize_phase(value: object) -> str:
         text = str(value or "").strip().lower()
@@ -704,12 +738,18 @@ class AutoplayOrchestrator:
                     return "event_choice"
                 return "event_continue"
             return "transition_wait"
+        if phase == "shop":
+            if window_kind == "shop_transition":
+                return "transition_wait"
+            if legal_actions:
+                return "shop"
+            return "transition_wait"
         if phase == "combat":
             if window_kind == "combat_card_selection":
                 return "combat_card_selection"
             if window_kind == "combat_transition" or bool(metadata.get("reward_pending")):
                 return "transition_wait"
-            if previous_phase in {"reward", "map", "event"} and self._next_combat_entered:
+            if previous_phase in {"reward", "map", "event", "shop"} and self._next_combat_entered:
                 return "combat_resume"
             if player_turn:
                 return "combat"
@@ -729,6 +769,7 @@ class AutoplayOrchestrator:
             "map",
             "event_choice",
             "event_continue",
+            "shop",
             "transition_wait",
             "unknown_window",
         }
@@ -1364,6 +1405,309 @@ class AutoplayOrchestrator:
 
         total_actions += 1
         self._map_actions_taken += 1
+        self._publish_agent_status(
+            snapshot=snapshot,
+            policy_output=policy_output,
+            status=str(result.status),
+            step_index=step_index,
+            current_turn_index=current_turn_index,
+            action_label=selected_action.label,
+        )
+        self._record(
+            recorder=recorder,
+            snapshot=snapshot,
+            legal_actions=legal_actions,
+            policy_output=policy_output,
+            bridge_result=to_dict(result),
+            interrupted=False,
+            step_index=step_index,
+            current_turn_index=current_turn_index,
+            actions_this_turn=current_turn_actions,
+            total_actions=total_actions,
+            waiting_for_player_turn=False,
+            is_final_step=False,
+            stop_reason="",
+            battle_stop_reason="",
+            step_kind=phase_kind,
+            phase_kind=phase_kind,
+        )
+        return self._step_result(
+            step_index=step_index,
+            current_turn_actions=current_turn_actions,
+            total_actions=total_actions,
+            stale_action_attempts=0,
+            consecutive_failures=0,
+            pending_end_turn_transition=None,
+            transition_wait_since=None,
+            summary=None,
+        )
+
+    def _handle_shop_phase(
+        self,
+        *,
+        recorder: JsonlTraceRecorder,
+        snapshot,
+        legal_actions,
+        step_index: int,
+        current_turn_index: int,
+        current_turn_actions: int,
+        total_actions: int,
+        turns_completed: int,
+        trace_path: Path,
+        session_id: str,
+        transition_wait_since: float | None,
+    ) -> dict[str, object]:
+        step_index += 1
+        shop_mode = self._normalized_shop_mode()
+        phase_kind = "shop"
+
+        if shop_mode == "halt":
+            policy_output = PolicyDecision(action_id=None, reason="shop phase reached; shop_mode=halt", halt=True)
+            self._record(
+                recorder=recorder,
+                snapshot=snapshot,
+                legal_actions=legal_actions,
+                policy_output=policy_output,
+                bridge_result={"status": "interrupted", "reason": "shop_phase_reached"},
+                interrupted=True,
+                step_index=step_index,
+                current_turn_index=current_turn_index,
+                actions_this_turn=current_turn_actions,
+                total_actions=total_actions,
+                waiting_for_player_turn=False,
+                is_final_step=True,
+                stop_reason="shop_phase_reached",
+                battle_stop_reason="shop_phase_reached",
+                step_kind=phase_kind,
+                phase_kind=phase_kind,
+            )
+            return self._step_result(
+                step_index=step_index,
+                current_turn_actions=current_turn_actions,
+                total_actions=total_actions,
+                stale_action_attempts=0,
+                consecutive_failures=0,
+                pending_end_turn_transition=None,
+                transition_wait_since=transition_wait_since,
+                summary=self._finish(
+                    session_id=session_id,
+                    trace_path=trace_path,
+                    reason="shop_phase_reached",
+                    completed=total_actions > 0,
+                    interrupted=total_actions == 0,
+                    turn_completed=turns_completed > 0,
+                    battle_completed=True,
+                    actions_this_turn=current_turn_actions,
+                    turns_completed=turns_completed,
+                    total_actions=total_actions,
+                    current_turn_index=current_turn_index,
+                ),
+            )
+
+        if not legal_actions:
+            outcome = self._handle_transition_wait(
+                recorder=recorder,
+                snapshot=snapshot,
+                legal_actions=legal_actions,
+                step_index=step_index - 1,
+                current_turn_index=current_turn_index,
+                current_turn_actions=current_turn_actions,
+                total_actions=total_actions,
+                turns_completed=turns_completed,
+                trace_path=trace_path,
+                waiting_since=transition_wait_since,
+                stop_reason="transition_timeout",
+                wait_reason="shop_transition_wait",
+                step_kind="transition_wait",
+                phase_kind="transition_wait",
+            )
+            return self._step_result(
+                step_index=outcome["step_index"],
+                current_turn_actions=current_turn_actions,
+                total_actions=total_actions,
+                stale_action_attempts=0,
+                consecutive_failures=0 if outcome["summary"] is None else 1,
+                pending_end_turn_transition=None,
+                transition_wait_since=outcome["waiting_since"],
+                summary=outcome["summary"],
+            )
+
+        selected_action = self._select_shop_action(snapshot, legal_actions, shop_mode)
+        if selected_action is not None and shop_mode != "llm":
+            policy_output = PolicyDecision(
+                action_id=selected_action.action_id,
+                reason=f"shop_mode={shop_mode}: select {selected_action.type}",
+                metadata={"shop_mode": shop_mode, "step_kind": phase_kind},
+            )
+        else:
+            self._publish_agent_status(
+                snapshot=snapshot,
+                policy_output=self._thinking_policy_output(),
+                status="thinking",
+                step_index=step_index,
+                current_turn_index=current_turn_index,
+            )
+            policy_output = self._decide(snapshot, legal_actions)
+            if policy_output.halt or not policy_output.action_id:
+                self._record(
+                    recorder=recorder,
+                    snapshot=snapshot,
+                    legal_actions=legal_actions,
+                    policy_output=policy_output,
+                    bridge_result={"status": "interrupted", "reason": "policy_halt"},
+                    interrupted=True,
+                    step_index=step_index,
+                    current_turn_index=current_turn_index,
+                    actions_this_turn=current_turn_actions,
+                    total_actions=total_actions,
+                    waiting_for_player_turn=False,
+                    is_final_step=True,
+                    stop_reason="policy_halt",
+                    battle_stop_reason="policy_halt",
+                    step_kind=phase_kind,
+                    phase_kind=phase_kind,
+                )
+                return self._step_result(
+                    step_index=step_index,
+                    current_turn_actions=current_turn_actions,
+                    total_actions=total_actions,
+                    stale_action_attempts=0,
+                    consecutive_failures=0,
+                    pending_end_turn_transition=None,
+                    transition_wait_since=transition_wait_since,
+                    summary=self._finish(
+                        session_id=session_id,
+                        trace_path=trace_path,
+                        reason="policy_halt",
+                        completed=False,
+                        interrupted=True,
+                        actions_this_turn=current_turn_actions,
+                        turns_completed=turns_completed,
+                        total_actions=total_actions,
+                        current_turn_index=current_turn_index,
+                    ),
+                )
+
+            legal_actions_by_id = {action.action_id: action for action in legal_actions}
+            if policy_output.action_id not in legal_actions_by_id:
+                return self._finalize_failure(
+                    exc=InvalidPayloadError("policy returned an action outside the legal action set"),
+                    recorder=recorder,
+                    snapshot=snapshot,
+                    legal_actions=legal_actions,
+                    step_index=step_index,
+                    current_turn_index=current_turn_index,
+                    current_turn_actions=current_turn_actions,
+                    turns_completed=turns_completed,
+                    total_actions=total_actions,
+                    stale_action_attempts=0,
+                    consecutive_failures=1,
+                    trace_path=trace_path,
+                    session_id=session_id,
+                    step_kind=phase_kind,
+                    phase_kind=phase_kind,
+                )
+            selected_action = legal_actions_by_id[policy_output.action_id]
+
+        self._publish_agent_status(
+            snapshot=snapshot,
+            policy_output=policy_output,
+            status="planned",
+            step_index=step_index,
+            current_turn_index=current_turn_index,
+            action_label=selected_action.label,
+        )
+
+        if self.config.dry_run:
+            self._record(
+                recorder=recorder,
+                snapshot=snapshot,
+                legal_actions=legal_actions,
+                policy_output=policy_output,
+                bridge_result={
+                    "status": "dry_run",
+                    "planned_action_id": policy_output.action_id,
+                    "message": "dry run enabled; bridge submission skipped",
+                },
+                interrupted=False,
+                step_index=step_index,
+                current_turn_index=current_turn_index,
+                actions_this_turn=current_turn_actions,
+                total_actions=total_actions,
+                waiting_for_player_turn=False,
+                is_final_step=True,
+                stop_reason="dry_run",
+                battle_stop_reason="dry_run",
+                step_kind=phase_kind,
+                phase_kind=phase_kind,
+            )
+            return self._step_result(
+                step_index=step_index,
+                current_turn_actions=current_turn_actions,
+                total_actions=total_actions,
+                stale_action_attempts=0,
+                consecutive_failures=0,
+                pending_end_turn_transition=None,
+                transition_wait_since=transition_wait_since,
+                summary=self._finish(
+                    session_id=session_id,
+                    trace_path=trace_path,
+                    reason="dry_run",
+                    completed=False,
+                    interrupted=True,
+                    actions_this_turn=current_turn_actions,
+                    turns_completed=turns_completed,
+                    total_actions=total_actions,
+                    current_turn_index=current_turn_index,
+                ),
+            )
+
+        try:
+            self._publish_agent_status(
+                snapshot=snapshot,
+                policy_output=policy_output,
+                status="submitted",
+                step_index=step_index,
+                current_turn_index=current_turn_index,
+                action_label=selected_action.label,
+            )
+            result = self.bridge.submit_action(
+                ActionSubmission(
+                    session_id=snapshot.session_id,
+                    decision_id=snapshot.decision_id,
+                    state_version=snapshot.state_version,
+                    action_id=selected_action.action_id,
+                    args=self._build_action_args(selected_action, policy_output),
+                )
+            )
+        except (InvalidPayloadError, InterruptedSessionError, BridgeError) as exc:
+            self._publish_agent_status(
+                snapshot=snapshot,
+                policy_output=policy_output,
+                status="rejected",
+                step_index=step_index,
+                current_turn_index=current_turn_index,
+                action_label=selected_action.label,
+            )
+            return self._finalize_failure(
+                exc=exc,
+                recorder=recorder,
+                snapshot=snapshot,
+                legal_actions=legal_actions,
+                step_index=step_index,
+                current_turn_index=current_turn_index,
+                current_turn_actions=current_turn_actions,
+                turns_completed=turns_completed,
+                total_actions=total_actions,
+                stale_action_attempts=0,
+                consecutive_failures=1,
+                trace_path=trace_path,
+                session_id=session_id,
+                step_kind=phase_kind,
+                phase_kind=phase_kind,
+            )
+
+        total_actions += 1
         self._publish_agent_status(
             snapshot=snapshot,
             policy_output=policy_output,
@@ -4057,6 +4401,8 @@ class AutoplayOrchestrator:
             return ""
         if phase == "event" and self._normalized_event_mode() != "halt":
             return ""
+        if phase == "shop" and self._normalized_shop_mode() != "halt":
+            return ""
         if phase != "combat":
             return "battle_completed"
         enemies = getattr(snapshot, "enemies", []) or []
@@ -4124,6 +4470,15 @@ class AutoplayOrchestrator:
         if choice_actions:
             return choice_actions[0]
         return continue_action
+
+    @staticmethod
+    def _select_shop_action(snapshot, legal_actions, shop_mode: str):
+        if shop_mode != "safe-default":
+            return None
+        leave_action = next((action for action in legal_actions if action.type == "leave_shop"), None)
+        if leave_action is not None:
+            return leave_action
+        return None
 
     @staticmethod
     def _map_action_rank(action) -> tuple[int, int, int, str]:

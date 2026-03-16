@@ -49,6 +49,7 @@ internal static class InGameRuntimeCoordinator
                 new RewardWindowExtractor(),
                 new MapWindowExtractor(),
                 new EventWindowExtractor(),
+                new ShopWindowExtractor(),
                 new MenuWindowExtractor(),
                 new TerminalWindowExtractor(),
             }.ToDictionary(extractor => extractor.Phase, StringComparer.OrdinalIgnoreCase);
@@ -349,6 +350,16 @@ internal static class InGameRuntimeCoordinator
         if ((string.Equals(actionType, "choose_event_option", StringComparison.OrdinalIgnoreCase) ||
              string.Equals(actionType, "continue_event", StringComparison.OrdinalIgnoreCase)) &&
             !string.Equals(currentWindow.Snapshot.Phase, DecisionPhase.Event, StringComparison.OrdinalIgnoreCase))
+        {
+            return "selection_window_changed";
+        }
+
+        if ((string.Equals(actionType, "buy_shop_card", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(actionType, "buy_shop_relic", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(actionType, "buy_shop_potion", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(actionType, "purge_shop_card", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(actionType, "leave_shop", StringComparison.OrdinalIgnoreCase)) &&
+            !string.Equals(currentWindow.Snapshot.Phase, DecisionPhase.Shop, StringComparison.OrdinalIgnoreCase))
         {
             return "selection_window_changed";
         }

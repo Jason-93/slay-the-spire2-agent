@@ -23,6 +23,7 @@ class LiveAutoplayConfig:
     reward_mode: str = "halt"  # halt|skip|skip-only|safe-default|llm
     map_mode: str = "halt"  # halt|safe-default|llm
     event_mode: str = "halt"  # halt|safe-default|llm
+    shop_mode: str = "halt"  # halt|safe-default|llm
     max_turns_per_battle: int | None = None
     max_total_actions: int | None = None
     max_consecutive_failures: int = 6
@@ -74,6 +75,7 @@ def run_live_autoplay(config: LiveAutoplayConfig) -> RunSummary:
             reward_mode=config.reward_mode,
             map_mode=config.map_mode,
             event_mode=config.event_mode,
+            shop_mode=config.shop_mode,
             max_turns_per_battle=config.max_turns_per_battle,
             max_total_actions=config.max_total_actions,
             max_consecutive_failures=config.max_consecutive_failures,

@@ -433,6 +433,30 @@ public sealed class EventWindowExtractor : WindowExtractorBase
     }
 }
 
+public sealed class ShopWindowExtractor : WindowExtractorBase
+{
+    public override string Phase => DecisionPhase.Shop;
+
+    protected override IReadOnlyDictionary<string, object?> BuildMetadata(RuntimeWindowContext context)
+    {
+        var metadata = new Dictionary<string, object?>(context.Metadata)
+        {
+            ["supports_targeting"] = false,
+        };
+        if (!metadata.ContainsKey("window_kind"))
+        {
+            metadata["window_kind"] = "shop_main";
+        }
+        if (!metadata.ContainsKey("shop_offer_count") &&
+            metadata.TryGetValue("shop_offers", out var offers) &&
+            offers is System.Collections.ICollection collection)
+        {
+            metadata["shop_offer_count"] = collection.Count;
+        }
+        return metadata;
+    }
+}
+
 public sealed class MenuWindowExtractor : WindowExtractorBase
 {
     public override string Phase => DecisionPhase.Menu;

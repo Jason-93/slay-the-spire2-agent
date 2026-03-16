@@ -12,12 +12,14 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
     private readonly Dictionary<string, RuntimeWindowContext> _windows;
     private readonly Dictionary<string, RuntimeWindowContext> _rewardWindows;
     private readonly Dictionary<string, RuntimeWindowContext> _eventWindows;
+    private readonly Dictionary<string, RuntimeWindowContext> _shopWindows;
     private readonly Dictionary<string, RuntimeWindowContext> _menuWindows;
     private readonly Dictionary<string, IWindowExtractor> _extractors;
     private string _currentPhase = DecisionPhase.Combat;
     private int _rewardStage;
     private int _eventStage;
     private int _menuStage;
+    private string _shopVariant = "shop_main";
 
     public FixtureGameStateProvider(BridgeOptions options)
     {
@@ -29,12 +31,14 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
             new RewardWindowExtractor(),
             new MapWindowExtractor(),
             new EventWindowExtractor(),
+            new ShopWindowExtractor(),
             new MenuWindowExtractor(),
             new TerminalWindowExtractor(),
         }.ToDictionary(extractor => extractor.Phase, StringComparer.OrdinalIgnoreCase);
         _windows = CreateWindows();
         _rewardWindows = CreateRewardWindows();
         _eventWindows = CreateEventWindows();
+        _shopWindows = CreateShopWindows();
         _menuWindows = CreateMenuWindows();
     }
 
@@ -131,7 +135,33 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                 _currentPhase = DecisionPhase.Map;
                 break;
             case "choose_map_node":
+                if (action.Params.TryGetValue("node", out var rawNode) &&
+                    rawNode is string node &&
+                    node.Contains("shop", StringComparison.OrdinalIgnoreCase))
+                {
+                    _shopVariant = "shop_main";
+                    _currentPhase = DecisionPhase.Shop;
+                    break;
+                }
+
                 _currentPhase = DecisionPhase.Combat;
+                break;
+            case "buy_shop_card":
+            case "buy_shop_relic":
+                _shopVariant = "shop_low_gold";
+                _currentPhase = DecisionPhase.Shop;
+                break;
+            case "buy_shop_potion":
+                _shopVariant = "shop_potion_full";
+                _currentPhase = DecisionPhase.Shop;
+                break;
+            case "purge_shop_card":
+                _shopVariant = "shop_service_unavailable";
+                _currentPhase = DecisionPhase.Shop;
+                break;
+            case "leave_shop":
+                _shopVariant = "shop_main";
+                _currentPhase = DecisionPhase.Map;
                 break;
             default:
                 return Reject(request, "unsupported_action", $"Fixture provider cannot execute action type '{action.Type}'.");
@@ -168,11 +198,13 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                     1 => _eventWindows["event_card_selection"],
                     _ => _eventWindows["event_continue"],
                 },
+            var value when string.Equals(value, DecisionPhase.Shop, StringComparison.OrdinalIgnoreCase)
+                => _shopWindows[_shopVariant],
             var value when string.Equals(value, DecisionPhase.Menu, StringComparison.OrdinalIgnoreCase)
                 => _menuStage == 0 ? _menuWindows["main_menu"] : _menuWindows["new_run_setup"],
             _ => _windows[phase],
         };
-        return _extractors[phase].Export(context, _sessionState);
+        return _extractors[context.Phase].Export(context, _sessionState);
     }
 
     private static LegalAction? ResolveAction(IEnumerable<LegalAction> actions, ActionRequest request)
@@ -223,12 +255,19 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
             return requestedPhase;
         }
 
+        if (_shopWindows.ContainsKey(requestedPhase))
+        {
+            _shopVariant = requestedPhase;
+            return DecisionPhase.Shop;
+        }
+
         return requestedPhase.ToLowerInvariant() switch
         {
             "combat" => DecisionPhase.Combat,
             "reward" => DecisionPhase.Reward,
             "map" => DecisionPhase.Map,
             "event" => DecisionPhase.Event,
+            "shop" => DecisionPhase.Shop,
             "menu" => DecisionPhase.Menu,
             "terminal" => DecisionPhase.Terminal,
             _ => _currentPhase,
@@ -703,6 +742,325 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                         CurrentNodeType: "monster",
                         ReachableNodes: new[] { "monster_left", "elite_center", "question_right" },
                         Source: "fixture"))),
+        };
+    }
+
+    private static Dictionary<string, RuntimeWindowContext> CreateShopWindows()
+    {
+        var cardOffer = CreateFixtureCard(
+            "shop-card-0",
+            "iron_wave",
+            "Iron Wave",
+            1,
+            "Deal 5 **damage**. Gain 5 **Block**.",
+            targetType: "AnyEnemy",
+            cardType: "Attack",
+            rarity: "Common",
+            keywords: new[] { "damage", "block" });
+        var relicOffer = CreateFixtureRelic(
+            "Bronze Scales",
+            "At the start of each combat, gain 3 **Thorns**.",
+            "bronze_scales");
+        var potionOffer = CreateFixturePotion(
+            "Speed Potion",
+            "Gain 5 **Dexterity**. At the end of this turn, lose 5 **Dexterity**.",
+            "speed_potion",
+            "dexterity");
+
+        var shopOffers = new object[]
+        {
+            new Dictionary<string, object?>
+            {
+                ["offer_id"] = "card:shop-card-0",
+                ["kind"] = "card",
+                ["name"] = cardOffer.Name,
+                ["price"] = 54,
+                ["purchasable"] = true,
+                ["unavailable_reason"] = null,
+                ["description"] = cardOffer.Description,
+                ["card"] = new Dictionary<string, object?>
+                {
+                    ["card_id"] = cardOffer.CardId,
+                    ["name"] = cardOffer.Name,
+                    ["canonical_card_id"] = cardOffer.CanonicalCardId,
+                    ["description"] = cardOffer.Description,
+                    ["card_type"] = cardOffer.CardType,
+                    ["rarity"] = cardOffer.Rarity,
+                    ["glossary"] = cardOffer.Glossary,
+                    ["keywords"] = cardOffer.Keywords,
+                },
+                ["glossary"] = cardOffer.Glossary,
+            },
+            new Dictionary<string, object?>
+            {
+                ["offer_id"] = "relic:bronze_scales",
+                ["kind"] = "relic",
+                ["name"] = relicOffer.Name,
+                ["price"] = 150,
+                ["purchasable"] = true,
+                ["unavailable_reason"] = null,
+                ["description"] = relicOffer.Description,
+                ["relic"] = new Dictionary<string, object?>
+                {
+                    ["name"] = relicOffer.Name,
+                    ["canonical_relic_id"] = relicOffer.CanonicalRelicId,
+                    ["description"] = relicOffer.Description,
+                    ["glossary"] = relicOffer.Glossary,
+                },
+                ["glossary"] = relicOffer.Glossary,
+            },
+            new Dictionary<string, object?>
+            {
+                ["offer_id"] = "potion:speed_potion",
+                ["kind"] = "potion",
+                ["name"] = potionOffer.Name,
+                ["price"] = 68,
+                ["purchasable"] = true,
+                ["unavailable_reason"] = null,
+                ["description"] = potionOffer.Description,
+                ["potion"] = BuildPotionPreview(potionOffer),
+                ["glossary"] = potionOffer.Glossary,
+            },
+            new Dictionary<string, object?>
+            {
+                ["offer_id"] = "service:purge",
+                ["kind"] = "service",
+                ["name"] = "Card Removal",
+                ["price"] = 75,
+                ["purchasable"] = true,
+                ["unavailable_reason"] = null,
+                ["description"] = "Remove a card from your deck.",
+                ["service_kind"] = "purge_card",
+            },
+        };
+
+        RuntimeWindowContext BuildShopWindow(
+            string key,
+            int gold,
+            int potionCapacity,
+            IReadOnlyList<RuntimePotionState> potions,
+            object[] offers,
+            RuntimeActionDefinition[] actions,
+            bool purgeAvailable = true)
+        {
+            return new RuntimeWindowContext(
+                DecisionPhase.Shop,
+                new RuntimePlayerState(
+                    Hp: 61,
+                    MaxHp: 80,
+                    Block: 0,
+                    Energy: 0,
+                    Gold: gold,
+                    Hand: Array.Empty<RuntimeCard>(),
+                    DrawPile: 15,
+                    DiscardPile: 0,
+                    ExhaustPile: 0,
+                    Relics: new[]
+                    {
+                        CreateFixtureRelic("Burning Blood", "At the end of combat, heal 6 HP.", "burning_blood"),
+                    },
+                    Potions: potions,
+                    PotionCapacity: potionCapacity,
+                    Powers: Array.Empty<RuntimePowerState>()),
+                Array.Empty<RuntimeEnemyState>(),
+                Array.Empty<string>(),
+                Array.Empty<string>(),
+                Terminal: false,
+                Metadata: new Dictionary<string, object?>
+                {
+                    ["room_type"] = "shop",
+                    ["window_kind"] = "shop_main",
+                    ["shop_detection_source"] = $"fixture.{key}",
+                    ["shop_leave_available"] = true,
+                    ["shop_purge_available"] = purgeAvailable,
+                    ["shop_offers"] = offers,
+                    ["shop_offer_count"] = offers.Length,
+                },
+                Actions: actions,
+                RunState: new RuntimeRunState(
+                    Act: 1,
+                    Floor: 6,
+                    CurrentRoomType: "MerchantRoom",
+                    CurrentLocationType: "Act1",
+                    CurrentActIndex: 0,
+                    AscensionLevel: 0,
+                    Map: new RuntimeRunMapState(
+                        CurrentCoord: "2,5",
+                        CurrentNodeType: "shop",
+                        ReachableNodes: new[] { "monster_next@2,6" },
+                        Source: "fixture")));
+        }
+
+        var mainActions = new[]
+        {
+            new RuntimeActionDefinition(
+                "buy_shop_card",
+                "Buy Iron Wave (54g)",
+                new Dictionary<string, object?>
+                {
+                    ["offer_id"] = "card:shop-card-0",
+                    ["offer_index"] = 0,
+                    ["name"] = cardOffer.Name,
+                    ["price"] = 54,
+                    ["canonical_card_id"] = cardOffer.CanonicalCardId,
+                },
+                Metadata: new Dictionary<string, object?>
+                {
+                    ["shop_offer"] = shopOffers[0],
+                    ["card_preview"] = new Dictionary<string, object?>
+                    {
+                        ["card_id"] = cardOffer.CardId,
+                        ["name"] = cardOffer.Name,
+                        ["canonical_card_id"] = cardOffer.CanonicalCardId,
+                        ["description"] = cardOffer.Description,
+                        ["glossary"] = cardOffer.Glossary,
+                    },
+                }),
+            new RuntimeActionDefinition(
+                "buy_shop_relic",
+                "Buy Bronze Scales (150g)",
+                new Dictionary<string, object?>
+                {
+                    ["offer_id"] = "relic:bronze_scales",
+                    ["offer_index"] = 1,
+                    ["name"] = relicOffer.Name,
+                    ["price"] = 150,
+                    ["canonical_relic_id"] = relicOffer.CanonicalRelicId,
+                },
+                Metadata: new Dictionary<string, object?>
+                {
+                    ["shop_offer"] = shopOffers[1],
+                }),
+            new RuntimeActionDefinition(
+                "buy_shop_potion",
+                "Buy Speed Potion (68g)",
+                new Dictionary<string, object?>
+                {
+                    ["offer_id"] = "potion:speed_potion",
+                    ["offer_index"] = 2,
+                    ["name"] = potionOffer.Name,
+                    ["price"] = 68,
+                    ["canonical_potion_id"] = potionOffer.CanonicalPotionId,
+                },
+                Metadata: new Dictionary<string, object?>
+                {
+                    ["shop_offer"] = shopOffers[2],
+                    ["potion_preview"] = BuildPotionPreview(potionOffer),
+                }),
+            new RuntimeActionDefinition(
+                "purge_shop_card",
+                "Buy Card Removal (75g)",
+                new Dictionary<string, object?>
+                {
+                    ["offer_id"] = "service:purge",
+                    ["offer_index"] = 3,
+                    ["name"] = "Card Removal",
+                    ["price"] = 75,
+                },
+                Metadata: new Dictionary<string, object?>
+                {
+                    ["shop_offer"] = shopOffers[3],
+                }),
+            new RuntimeActionDefinition(
+                "leave_shop",
+                "Leave Shop",
+                new Dictionary<string, object?>
+                {
+                    ["button_label"] = "Leave Shop",
+                }),
+        };
+
+        return new Dictionary<string, RuntimeWindowContext>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["shop_main"] = BuildShopWindow(
+                "shop_main",
+                gold: 135,
+                potionCapacity: 3,
+                potions: new[]
+                {
+                    CreateFixturePotion("Gambler's Brew", "Discard any number of cards, then draw that many.", "gamblers_brew"),
+                },
+                offers: shopOffers,
+                actions: mainActions),
+            ["shop_low_gold"] = BuildShopWindow(
+                "shop_low_gold",
+                gold: 12,
+                potionCapacity: 3,
+                potions: new[]
+                {
+                    CreateFixturePotion("Gambler's Brew", "Discard any number of cards, then draw that many.", "gamblers_brew"),
+                },
+                offers: new object[]
+                {
+                    new Dictionary<string, object?>(shopOffers[0] as Dictionary<string, object?> ?? throw new InvalidOperationException())
+                    {
+                        ["purchasable"] = false,
+                        ["unavailable_reason"] = "not_affordable",
+                    },
+                    new Dictionary<string, object?>(shopOffers[1] as Dictionary<string, object?> ?? throw new InvalidOperationException())
+                    {
+                        ["purchasable"] = false,
+                        ["unavailable_reason"] = "not_affordable",
+                    },
+                    new Dictionary<string, object?>(shopOffers[2] as Dictionary<string, object?> ?? throw new InvalidOperationException())
+                    {
+                        ["purchasable"] = false,
+                        ["unavailable_reason"] = "not_affordable",
+                    },
+                    shopOffers[3],
+                },
+                actions: new[]
+                {
+                    new RuntimeActionDefinition("leave_shop", "Leave Shop", new Dictionary<string, object?> { ["button_label"] = "Leave Shop" }),
+                }),
+            ["shop_potion_full"] = BuildShopWindow(
+                "shop_potion_full",
+                gold: 81,
+                potionCapacity: 2,
+                potions: new[]
+                {
+                    CreateFixturePotion("Strength Potion", "Gain 2 **Strength** this turn.", "strength_potion", "strength"),
+                    CreateFixturePotion("Dexterity Potion", "Gain 2 **Dexterity** this turn.", "dexterity_potion", "dexterity"),
+                },
+                offers: new object[]
+                {
+                    shopOffers[0],
+                    shopOffers[1],
+                    new Dictionary<string, object?>(shopOffers[2] as Dictionary<string, object?> ?? throw new InvalidOperationException())
+                    {
+                        ["purchasable"] = false,
+                        ["unavailable_reason"] = "potion_slots_full",
+                    },
+                    shopOffers[3],
+                },
+                actions: new[]
+                {
+                    new RuntimeActionDefinition("leave_shop", "Leave Shop", new Dictionary<string, object?> { ["button_label"] = "Leave Shop" }),
+                }),
+            ["shop_service_unavailable"] = BuildShopWindow(
+                "shop_service_unavailable",
+                gold: 6,
+                potionCapacity: 3,
+                potions: new[]
+                {
+                    CreateFixturePotion("Gambler's Brew", "Discard any number of cards, then draw that many.", "gamblers_brew"),
+                },
+                offers: new object[]
+                {
+                    shopOffers[0],
+                    shopOffers[1],
+                    shopOffers[2],
+                    new Dictionary<string, object?>(shopOffers[3] as Dictionary<string, object?> ?? throw new InvalidOperationException())
+                    {
+                        ["purchasable"] = false,
+                        ["unavailable_reason"] = "service_unavailable",
+                    },
+                },
+                actions: new[]
+                {
+                    new RuntimeActionDefinition("leave_shop", "Leave Shop", new Dictionary<string, object?> { ["button_label"] = "Leave Shop" }),
+                },
+                purgeAvailable: false),
         };
     }
 

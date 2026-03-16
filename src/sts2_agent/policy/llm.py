@@ -114,6 +114,8 @@ class ChatCompletionsPolicy:
             "若没有足够信息判断路线，请优先选择更保守的普通战斗节点。"
             "当 snapshot.phase=event 时，你需要结合事件标题、正文和 event_options，在 choose_event_option 或 continue_event 中做选择；"
             "若 window_kind=event_continue，优先只考虑 continue_event。"
+            "当 snapshot.phase=shop 时，你需要结合玩家金币、shop_offers 与 legal_actions，在购买或 leave_shop 间做选择；"
+            "若信息不足以支撑消费决策，优先 leave_shop 或 halt=true，而不是盲买。"
             "你必须严格遵守 payload.game_rules 中列出的基础通用规则，尤其不要混淆'回合结束时'与'战斗结束时'。"
         )
         user_payload = {
@@ -294,6 +296,9 @@ class ChatCompletionsPolicy:
         event_option = action.metadata.get("event_option")
         if isinstance(event_option, dict):
             payload["event_option"] = to_dict(event_option)
+        shop_offer = action.metadata.get("shop_offer")
+        if isinstance(shop_offer, dict):
+            payload["shop_offer"] = to_dict(shop_offer)
         return payload
 
     @staticmethod
@@ -371,6 +376,9 @@ class ChatCompletionsPolicy:
                     "event_options",
                     "event_continue_available",
                     "event_continue_label",
+                    "shop_offers",
+                    "shop_offer_count",
+                    "shop_leave_available",
                 )
                 if key in snapshot.metadata
             }

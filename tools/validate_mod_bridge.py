@@ -72,6 +72,85 @@ def post_json(base_url: str, path: str, payload: dict) -> tuple[int, dict]:
         return ex.code, json.loads(ex.read().decode("utf-8"))
 
 
+def validate_shop_flow() -> None:
+    port = pick_free_port()
+    base_url = f"http://127.0.0.1:{port}"
+    command = [
+        "dotnet",
+        str(resolve_host_dll()),
+        "--port",
+        str(port),
+        "--game-version",
+        "prototype",
+        "--read-only",
+        "false",
+    ]
+    process = subprocess.Popen(command, cwd=ROOT)
+    try:
+        wait_for_server(base_url)
+        shop_snapshot = fetch(base_url, "/snapshot?phase=shop")
+        shop_actions = fetch(base_url, "/actions?phase=shop")
+        assert shop_snapshot["phase"] == "shop"
+        assert shop_snapshot["metadata"]["window_kind"] == "shop_main"
+        assert isinstance(shop_snapshot["metadata"]["shop_offers"], list)
+        assert shop_snapshot["metadata"]["shop_offer_count"] == len(shop_snapshot["metadata"]["shop_offers"])
+        assert any(action["type"] == "leave_shop" for action in shop_actions)
+        assert any(action["type"] == "buy_shop_card" for action in shop_actions)
+
+        buy_shop_card = next(action for action in shop_actions if action["type"] == "buy_shop_card")
+        status_code, apply_response = post_json(
+            base_url,
+            "/apply",
+            {
+                "decision_id": shop_snapshot["decision_id"],
+                "action_id": buy_shop_card["action_id"],
+                "params": {},
+            },
+        )
+        assert status_code == 200
+        assert apply_response["status"] == "accepted"
+
+        shop_low_gold_snapshot = fetch(base_url, "/snapshot")
+        assert shop_low_gold_snapshot["phase"] == "shop"
+        assert any(offer["unavailable_reason"] == "not_affordable" for offer in shop_low_gold_snapshot["metadata"]["shop_offers"])
+
+        shop_low_gold_actions = fetch(base_url, "/actions")
+        leave_low_gold_shop = next(action for action in shop_low_gold_actions if action["type"] == "leave_shop")
+        status_code, leave_response = post_json(
+            base_url,
+            "/apply",
+            {
+                "decision_id": shop_low_gold_snapshot["decision_id"],
+                "action_id": leave_low_gold_shop["action_id"],
+                "params": {},
+            },
+        )
+        assert status_code == 200
+        assert leave_response["status"] == "accepted"
+
+        post_shop_map_snapshot = fetch(base_url, "/snapshot")
+        assert post_shop_map_snapshot["phase"] == "map"
+
+        status_code, stale_shop_response = post_json(
+            base_url,
+            "/apply",
+            {
+                "decision_id": shop_snapshot["decision_id"],
+                "action_id": leave_low_gold_shop["action_id"],
+                "params": {},
+            },
+        )
+        assert status_code == 409
+        assert stale_shop_response["error_code"] == "stale_decision"
+    finally:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+
+
 def main() -> int:
     port = pick_free_port()
     base_url = f"http://127.0.0.1:{port}"
@@ -90,7 +169,7 @@ def main() -> int:
         wait_for_server(base_url)
         health = fetch(base_url, "/health")
         assert health["protocol_version"] == "0.1.0"
-        for phase in ("combat", "reward", "map", "event", "terminal"):
+        for phase in ("combat", "reward", "map", "event", "shop", "terminal"):
             snapshot = fetch(base_url, f"/snapshot?phase={phase}")
             actions = fetch(base_url, f"/actions?phase={phase}")
             assert snapshot["phase"] == phase
@@ -282,6 +361,7 @@ def main() -> int:
         assert status_code == 409
         assert stale_response["status"] == "rejected"
         assert stale_response["error_code"] == "stale_decision"
+        validate_shop_flow()
         print("mod bridge validation passed")
         return 0
     finally:

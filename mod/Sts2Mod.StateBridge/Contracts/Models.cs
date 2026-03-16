@@ -18,6 +18,7 @@ public static class DecisionPhase
     public const string Reward = "reward";
     public const string Map = "map";
     public const string Event = "event";
+    public const string Shop = "shop";
     public const string Menu = "menu";
     public const string Terminal = "terminal";
 }

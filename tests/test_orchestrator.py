@@ -967,8 +967,8 @@ class OrchestratorTests(unittest.TestCase):
             records = [json.loads(line) for line in Path(summary.trace_path).read_text(encoding="utf-8").splitlines()]
             self.assertEqual(records[-1]["step_kind"], "transition_wait")
 
-    def test_battle_mode_stops_on_unknown_window_after_fuse(self) -> None:
-        bridge = SequencedCombatBridge([make_window(phase="shop", actions=[], metadata={"window_kind": "shop"})])
+    def test_battle_mode_stops_on_shop_phase_when_shop_mode_halt(self) -> None:
+        bridge = SequencedCombatBridge([make_window(phase="shop", actions=[{"type": "leave_shop", "label": "Leave Shop"}], metadata={"window_kind": "shop_main"})])
         with tempfile.TemporaryDirectory() as tmpdir, patch("sts2_agent.orchestrator.time.sleep", return_value=None):
             orchestrator = AutoplayOrchestrator(
                 bridge=bridge,
@@ -976,7 +976,7 @@ class OrchestratorTests(unittest.TestCase):
                 config=OrchestratorConfig(
                     trace_dir=tmpdir,
                     stop_after_player_turn=False,
-                    unknown_window_fuse=1,
+                    shop_mode="halt",
                     max_steps=2,
                 ),
             )
@@ -984,7 +984,31 @@ class OrchestratorTests(unittest.TestCase):
 
             self.assertFalse(summary.completed)
             self.assertTrue(summary.interrupted)
-            self.assertEqual(summary.ended_by, "unsupported_phase")
+            self.assertEqual(summary.ended_by, "shop_phase_reached")
+
+    def test_battle_mode_safe_default_leaves_shop(self) -> None:
+        bridge = SequencedCombatBridge(
+            [
+                make_window(
+                    phase="shop",
+                    actions=[{"type": "leave_shop", "label": "Leave Shop"}],
+                    metadata={"window_kind": "shop_main"},
+                    hand=[],
+                    enemies=[],
+                ),
+                make_window(phase="map", actions=[{"type": "choose_map_node", "label": "monster", "params": {"node": "monster@0,1"}}], metadata={"window_kind": "map_ready"}, hand=[], enemies=[]),
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orchestrator = AutoplayOrchestrator(
+                bridge=bridge,
+                policy=FirstLegalActionPolicy(),
+                config=OrchestratorConfig(trace_dir=tmpdir, stop_after_player_turn=False, shop_mode="safe-default", max_steps=4),
+            )
+            summary = orchestrator.run(scenario="live")
+
+            self.assertTrue(summary.completed)
+            self.assertEqual(bridge.submissions[0], "leave_shop")
 
     def test_battle_mode_completes_when_no_enemies_remain_in_combat_snapshot(self) -> None:
         bridge = SequencedCombatBridge(

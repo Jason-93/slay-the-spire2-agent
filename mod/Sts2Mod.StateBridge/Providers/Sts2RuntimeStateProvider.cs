@@ -24,6 +24,7 @@ public sealed class Sts2RuntimeStateProvider : IGameStateProvider
             new RewardWindowExtractor(),
             new MapWindowExtractor(),
             new EventWindowExtractor(),
+            new ShopWindowExtractor(),
             new MenuWindowExtractor(),
             new TerminalWindowExtractor(),
         }.ToDictionary(extractor => extractor.Phase, StringComparer.OrdinalIgnoreCase);

@@ -10,6 +10,7 @@
 - 提供 C# in-game mod，可在游戏进程内暴露本地 HTTP bridge
 - 已支持读取真实运行时状态，并提供 `/health`、`/snapshot`、`/actions`、`/apply`
 - 支持在无活动 run 的主菜单/开局流程导出 `phase="menu"`，为自动化测试提供可重复的进入 run 起点（详见 `docs/sts2-mod-agent-compatibility.md`）
+- 已支持导出 `phase="shop"`，提供结构化商店商品、真实购买动作与 `leave_shop`
 - 已提供 `.pck` 打包、安装、启动和联调脚本
 
 ## 仓库结构
@@ -93,6 +94,14 @@ python tools/validate_live_apply.py \
 ```
 
 当前已支持“不需要显式目标参数”的药水动作；如果某瓶药水必须额外指定目标，而 bridge 还不能安全推断目标，`/apply` 会返回 `target_required`。
+
+### Fixture bridge 协议验证
+
+```bash
+python tools/validate_mod_bridge.py
+```
+
+用于跑 fixture 侧协议校验，覆盖 combat、reward、map、event、shop 等窗口，以及商店购买 / 离开 / stale-action 检查。
 
 ### reward -> map -> 下一场战斗链路验证
 
@@ -202,6 +211,7 @@ python tools/run_llm_autoplay.py \
   --battle-mode \
   --reward-mode safe-default \
   --map-mode safe-default \
+  --shop-mode safe-default \
   --stop-after-next-combat \
   --max-turns-per-battle 12 \
   --max-total-actions 48 \
@@ -222,6 +232,7 @@ battle 模式下，runner 会在敌方回合和动画窗口持续轮询，直到
 - `--battle-mode`：启用整场战斗模式，等价于关闭 `stop_after_player_turn`
 - `--reward-mode`：reward 策略，可选 `halt`、`skip`、`skip-only`、`safe-default`、`llm`
 - `--map-mode`：map 策略，可选 `halt`、`safe-default`、`llm`
+- `--shop-mode`：shop 策略，可选 `halt`、`safe-default`、`llm`；其中 `safe-default` 只会保守离开商店
 - `--stop-after-next-combat`：一旦重新进入下一场战斗就停止，便于验证跨窗口链路
 - `--max-turns-per-battle`：限制整场战斗最多完成多少个玩家回合
 - `--max-total-actions`：限制整场战斗最多提交多少个动作

@@ -78,6 +78,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.environ.get("STS2_EVENT_MODE", "halt"),
         choices=("halt", "safe-default", "llm"),
     )
+    parser.add_argument(
+        "--shop-mode",
+        default=os.environ.get("STS2_SHOP_MODE", "halt"),
+        choices=("halt", "safe-default", "llm"),
+    )
     parser.set_defaults(
         battle_mode=_read_optional_bool("STS2_BATTLE_MODE", False),
         stop_after_player_turn=_read_optional_bool("STS2_STOP_AFTER_PLAYER_TURN", True),
@@ -141,6 +146,7 @@ def main(argv: list[str] | None = None) -> int:
             reward_mode=args.reward_mode,
             map_mode=args.map_mode,
             event_mode=args.event_mode,
+            shop_mode=args.shop_mode,
             stop_after_next_combat=args.stop_after_next_combat,
             dry_run=args.dry_run,
         )

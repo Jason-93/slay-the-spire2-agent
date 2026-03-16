@@ -10,6 +10,7 @@ English | [简体中文](README.zh.md)
 - A C# in-game mod that exposes a local HTTP bridge inside the game process
 - Real runtime state reading through `/health`, `/snapshot`, `/actions`, and `/apply`
 - `phase="menu"` export for the main menu / run-start flow, making automation entry reproducible when no active run exists (see `docs/sts2-mod-agent-compatibility.md`)
+- `phase="shop"` export with structured shop offers, real purchase actions, and `leave_shop`
 - `.pck` packaging, install, launch, and live-debug scripts
 
 ## Repository Layout
@@ -93,6 +94,14 @@ python tools/validate_live_apply.py \
 ```
 
 Current support covers potions that do not require an explicit target parameter. If a potion needs a live target selection that the bridge cannot safely infer, `/apply` rejects it with `target_required`.
+
+### Fixture Bridge Validation
+
+```bash
+python tools/validate_mod_bridge.py
+```
+
+Runs fixture-side protocol validation for combat, reward, map, event, and shop flows, including shop purchase / leave stale checks.
 
 ### Reward -> Map -> Next Battle Validation
 
@@ -202,6 +211,7 @@ python tools/run_llm_autoplay.py \
   --battle-mode \
   --reward-mode safe-default \
   --map-mode safe-default \
+  --shop-mode safe-default \
   --stop-after-next-combat \
   --max-turns-per-battle 12 \
   --max-total-actions 48 \
@@ -222,6 +232,7 @@ Additional common options:
 - `--battle-mode`: enable full-battle mode; equivalent to disabling `stop_after_player_turn`
 - `--reward-mode`: reward strategy, one of `halt`, `skip`, `skip-only`, `safe-default`, `llm`
 - `--map-mode`: map strategy, one of `halt`, `safe-default`, `llm`
+- `--shop-mode`: shop strategy, one of `halt`, `safe-default`, `llm`; `safe-default` only leaves shop
 - `--stop-after-next-combat`: stop as soon as the next battle is entered, useful for validating cross-window flow
 - `--max-turns-per-battle`: cap completed player turns for the full battle
 - `--max-total-actions`: cap total submitted actions for the full battle

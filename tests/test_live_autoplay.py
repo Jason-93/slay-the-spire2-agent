@@ -65,6 +65,7 @@ class LiveAutoplayTests(unittest.TestCase):
                     reward_mode="safe-default",
                     map_mode="safe-default",
                     event_mode="safe-default",
+                    shop_mode="safe-default",
                     stop_after_next_combat=True,
                     auto_end_turn_when_only_end_turn=False,
                 )
@@ -93,6 +94,7 @@ class LiveAutoplayTests(unittest.TestCase):
         self.assertEqual(captured["config"].reward_mode, "safe-default")
         self.assertEqual(captured["config"].map_mode, "safe-default")
         self.assertEqual(captured["config"].event_mode, "safe-default")
+        self.assertEqual(captured["config"].shop_mode, "safe-default")
         self.assertTrue(captured["config"].stop_after_next_combat)
         self.assertFalse(captured["config"].auto_end_turn_when_only_end_turn)
 
@@ -149,6 +151,8 @@ class LiveAutoplayTests(unittest.TestCase):
                         "safe-default",
                         "--event-mode",
                         "safe-default",
+                        "--shop-mode",
+                        "safe-default",
                         "--stop-after-next-combat",
                     ]
                 )
@@ -203,6 +207,8 @@ class LiveAutoplayTests(unittest.TestCase):
                 "safe-default",
                 "--event-mode",
                 "safe-default",
+                "--shop-mode",
+                "safe-default",
                 "--stop-after-next-combat",
                 "--no-auto-end-turn-when-only-end-turn",
                 "--no-stop-after-player-turn",
@@ -226,6 +232,7 @@ class LiveAutoplayTests(unittest.TestCase):
         self.assertEqual(args.reward_mode, "safe-default")
         self.assertEqual(args.map_mode, "safe-default")
         self.assertEqual(args.event_mode, "safe-default")
+        self.assertEqual(args.shop_mode, "safe-default")
         self.assertTrue(args.stop_after_next_combat)
         self.assertFalse(args.auto_end_turn_when_only_end_turn)
         self.assertFalse(args.stop_after_player_turn)

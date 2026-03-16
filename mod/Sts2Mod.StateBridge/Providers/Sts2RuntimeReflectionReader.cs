@@ -58,6 +58,9 @@ internal sealed class Sts2RuntimeReflectionReader
     private static readonly string[] MenuContinueLabelHints = { "continue", "resume", "继续", "继续游戏", "继续旅程" };
     private static readonly string[] RewardAdvanceLabelHints = { "advance", "continue", "proceed", "next", "forward", "前进", "继续", "下一步" };
     private static readonly string[] EventContinueLabelHints = { "continue", "proceed", "leave", "confirm", "继续", "离开", "确认", "前进", "完成" };
+    private static readonly string[] ShopLeaveLabelHints = { "leave", "continue", "proceed", "exit", "back", "离开", "继续", "前进", "返回" };
+    private static readonly string[] ShopPurchaseMethodNames = { "OnTryPurchase", "TryPurchase", "Purchase", "Buy", "OnPressed", "Press", "Click", "Activate" };
+    private static readonly string[] ShopLeaveMethodNames = { "Proceed", "Leave", "ExitRoom", "ExitShop", "Continue", "OnLeavePressed" };
     private static readonly string[] EventCardSelectionTypeHints = { "DeckEnchant", "EnchantSelect", "Enchant", "EventCardSelect", "EventCardSelection" };
     private static readonly string[] MenuNewRunLabelHints = { "new run", "new game", "start new", "开始新", "新游戏", "新旅程" };
     private static readonly string[] MenuConfirmLabelHints = { "start", "begin", "confirm", "ok", "开始", "确认", "确定" };
@@ -185,6 +188,11 @@ internal sealed class Sts2RuntimeReflectionReader
         "OnSkip",
         "CancelHandSelectionIfNecessary",
     };
+    private static readonly string[] ShopCardMemberNames = { "Card", "_card", "CardModel", "CardState", "CardData", "Model", "Data" };
+    private static readonly string[] ShopRelicMemberNames = { "Relic", "_relic", "RelicModel", "RelicState", "RelicData", "Model", "Data" };
+    private static readonly string[] ShopPotionMemberNames = { "Potion", "_potion", "PotionModel", "PotionState", "PotionData", "Model", "Data" };
+    private static readonly string[] ShopPriceMemberNames = { "Cost", "Price", "_cost", "_price", "GoldCost", "PurchasePrice", "Amount" };
+    private static readonly string[] ShopInventoryEntryCollections = { "CharacterCardEntries", "ColorlessCardEntries", "RelicEntries", "PotionEntries" };
     private static readonly string[] CombatSelectionPromptMembers =
     {
         "Title",
@@ -382,6 +390,7 @@ internal sealed class Sts2RuntimeReflectionReader
             DecisionPhase.Reward => BuildRewardWindow(root.RunNode, root.RunState),
             DecisionPhase.Map => BuildMapWindow(root.RunNode, root.RunState),
             DecisionPhase.Event => BuildEventWindow(root.RunNode, root.RunState),
+            DecisionPhase.Shop => BuildShopWindow(root.RunNode, root.RunState),
             DecisionPhase.Terminal => BuildTerminalWindow(root.RunNode, root.RunState),
             _ => BuildCombatWindow(root.RunNode, root.RunState),
         };
@@ -425,6 +434,11 @@ internal sealed class Sts2RuntimeReflectionReader
             "choose_map_node" => ExecuteChooseMapNode(request, action),
             "choose_event_option" => ExecuteChooseEventOption(root.RunNode, root.RunState, request, action),
             "continue_event" => ExecuteContinueEvent(root.RunNode, root.RunState, request, action),
+            "buy_shop_card" => ExecuteBuyShopOffer(root.RunNode, root.RunState, request, action, "card"),
+            "buy_shop_relic" => ExecuteBuyShopOffer(root.RunNode, root.RunState, request, action, "relic"),
+            "buy_shop_potion" => ExecuteBuyShopOffer(root.RunNode, root.RunState, request, action, "potion"),
+            "purge_shop_card" => ExecuteBuyShopOffer(root.RunNode, root.RunState, request, action, "service"),
+            "leave_shop" => ExecuteLeaveShop(root.RunNode, root.RunState, request, action),
             _ => new RuntimeActionResult(false, $"Action type '{action.Type}' is not supported yet.", "unsupported_action"),
         };
     }
@@ -1771,6 +1785,159 @@ internal sealed class Sts2RuntimeReflectionReader
         };
     }
 
+    private RuntimeWindowContext BuildShopWindow(object runNode, object runState)
+    {
+        var textDiagnostics = new TextDiagnosticsCollector();
+        var playerBuild = BuildPlayerState(runState, textDiagnostics);
+        var player = playerBuild.Player;
+        var metadata = CreateBaseMetadata(runNode, runState, DecisionPhase.Shop);
+        foreach (var pair in playerBuild.Diagnostics)
+        {
+            metadata[pair.Key] = pair.Value;
+        }
+
+        var runStateSnapshot = BuildRunState(runState, textDiagnostics);
+        var analysis = AnalyzeShopPhase(runNode, runState, textDiagnostics);
+        metadata["window_kind"] = "shop_main";
+        metadata["shop_detection_source"] = analysis.DetectionSource;
+        metadata["shop_phase_detected"] = analysis.TreatAsShop;
+        metadata["shop_leave_available"] = analysis.LeaveButton is not null || analysis.FallbackLeaveSupported;
+        metadata["shop_offer_count"] = analysis.Offers.Count;
+        metadata["shop_offers"] = analysis.Offers.Select(BuildShopOfferPayload).ToArray();
+        LogTextDiagnostics("shop", textDiagnostics);
+
+        var actions = new List<RuntimeActionDefinition>();
+        foreach (var offer in analysis.Offers)
+        {
+            if (!offer.Purchasable)
+            {
+                continue;
+            }
+
+            var parameters = new Dictionary<string, object?>
+            {
+                ["offer_id"] = offer.OfferId,
+                ["offer_index"] = offer.Index,
+                ["name"] = offer.Name,
+                ["price"] = offer.Price,
+            };
+            if (!string.IsNullOrWhiteSpace(offer.CanonicalId))
+            {
+                parameters[offer.Kind switch
+                {
+                    "card" => "canonical_card_id",
+                    "relic" => "canonical_relic_id",
+                    "potion" => "canonical_potion_id",
+                    _ => "canonical_id",
+                }] = offer.CanonicalId;
+            }
+
+            var label = offer.Kind switch
+            {
+                "service" => $"{offer.Name} ({offer.Price}g)",
+                _ => $"Buy {offer.Name} ({offer.Price}g)",
+            };
+            var actionType = offer.Kind switch
+            {
+                "card" => "buy_shop_card",
+                "relic" => "buy_shop_relic",
+                "potion" => "buy_shop_potion",
+                _ => "purge_shop_card",
+            };
+            actions.Add(new RuntimeActionDefinition(
+                actionType,
+                label,
+                parameters,
+                Metadata: BuildShopOfferActionMetadata(offer)));
+        }
+
+        if (analysis.LeaveButton is not null || analysis.FallbackLeaveSupported)
+        {
+            actions.Add(new RuntimeActionDefinition(
+                "leave_shop",
+                analysis.LeaveLabel,
+                new Dictionary<string, object?>
+                {
+                    ["button_label"] = analysis.LeaveLabel,
+                },
+                Metadata: new Dictionary<string, object?>
+                {
+                    ["shop_detection_source"] = analysis.DetectionSource,
+                }));
+        }
+
+        return new RuntimeWindowContext(
+            DecisionPhase.Shop,
+            player,
+            Array.Empty<RuntimeEnemyState>(),
+            Array.Empty<string>(),
+            Array.Empty<string>(),
+            Terminal: false,
+            Metadata: metadata,
+            Actions: actions,
+            RunState: runStateSnapshot);
+    }
+
+    private Dictionary<string, object?> BuildShopOfferPayload(ShopOfferAnalysis offer)
+    {
+        var payload = new Dictionary<string, object?>
+        {
+            ["offer_id"] = offer.OfferId,
+            ["kind"] = offer.Kind,
+            ["name"] = offer.Name,
+            ["price"] = offer.Price,
+            ["purchasable"] = offer.Purchasable,
+            ["unavailable_reason"] = offer.UnavailableReason,
+            ["description"] = offer.Description,
+            ["glossary"] = offer.Glossary,
+            ["canonical_id"] = offer.CanonicalId,
+            ["detection_source"] = offer.DetectionSource,
+        };
+        if (offer.Card is not null)
+        {
+            payload["card"] = BuildCardPreview(offer.Card);
+        }
+        else if (offer.Relic is not null)
+        {
+            payload["relic"] = BuildRelicPreview(offer.Relic);
+        }
+        else if (offer.Potion is not null)
+        {
+            payload["potion"] = BuildPotionPreview(offer.Potion);
+        }
+        else if (!string.IsNullOrWhiteSpace(offer.ServiceKind))
+        {
+            payload["service_kind"] = offer.ServiceKind;
+        }
+
+        return payload
+            .Where(pair => pair.Value is not null)
+            .ToDictionary(pair => pair.Key, pair => pair.Value);
+    }
+
+    private Dictionary<string, object?> BuildShopOfferActionMetadata(ShopOfferAnalysis offer)
+    {
+        var metadata = new Dictionary<string, object?>
+        {
+            ["shop_offer"] = BuildShopOfferPayload(offer),
+            ["shop_detection_source"] = offer.DetectionSource,
+        };
+        if (offer.Card is not null)
+        {
+            metadata["card_preview"] = BuildCardPreview(offer.Card);
+        }
+        else if (offer.Relic is not null)
+        {
+            metadata["relic_preview"] = BuildRelicPreview(offer.Relic);
+        }
+        else if (offer.Potion is not null)
+        {
+            metadata["potion_preview"] = BuildPotionPreview(offer.Potion);
+        }
+
+        return metadata;
+    }
+
     private RuntimeWindowContext BuildTerminalWindow(object runNode, object runState)
     {
         var textDiagnostics = new TextDiagnosticsCollector();
@@ -2521,6 +2688,763 @@ internal sealed class Sts2RuntimeReflectionReader
         return true;
     }
 
+    private ShopPhaseAnalysis AnalyzeShopPhase(object runNode, object runState, TextDiagnosticsCollector? textDiagnostics)
+    {
+        var currentRoom = GetMemberValue(runState, "CurrentRoom");
+        var currentRoomType = GetTypeName(currentRoom) ?? string.Empty;
+        var currentMapPointType = ConvertToText(GetMemberValue(runState, "CurrentMapPointType") ?? GetMemberValue(GetMemberValue(runState, "CurrentMapPoint"), "NodeType")) ?? string.Empty;
+        var looksLikeShop = currentRoomType.Contains("Merchant", StringComparison.OrdinalIgnoreCase) ||
+                            currentRoomType.Contains("Shop", StringComparison.OrdinalIgnoreCase) ||
+                            currentMapPointType.Contains("Shop", StringComparison.OrdinalIgnoreCase) ||
+                            currentMapPointType.Contains("Merchant", StringComparison.OrdinalIgnoreCase);
+        if (!looksLikeShop)
+        {
+            return new ShopPhaseAnalysis(false, Array.Empty<ShopOfferAnalysis>(), null, "????", false, "none");
+        }
+
+        var diagnostics = textDiagnostics ?? new TextDiagnosticsCollector();
+        var playerBuild = BuildPlayerState(runState, diagnostics);
+        var player = playerBuild.Player;
+        var merchantRoomNode = ResolveMerchantRoomNode(runNode);
+        var inventoryNode = GetMemberValue(merchantRoomNode, "Inventory");
+        var inventoryEntity = GetMemberValue(inventoryNode, "Inventory") ?? GetMemberValue(currentRoom, "Inventory");
+        var offerNodes = new List<object>();
+        var seenOfferIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        object? leaveButton = null;
+        var leaveLabel = "????";
+        var detectionSource = inventoryEntity is not null
+            ? "merchant_inventory"
+            : !string.IsNullOrWhiteSpace(currentRoomType)
+                ? "current_room_type"
+                : "current_map_point_type";
+
+        var offers = new List<ShopOfferAnalysis>();
+        if (inventoryEntity is not null)
+        {
+            var slotByEntry = BuildMerchantSlotIndex(inventoryNode);
+            var entryCandidates = EnumerateMerchantEntries(inventoryEntity).ToList();
+            foreach (var (entry, index) in entryCandidates.Select((entry, index) => (entry, index)))
+            {
+                slotByEntry.TryGetValue(entry, out var slotNode);
+                if (!TryBuildShopOfferFromEntry(entry, slotNode, index, player, diagnostics, out var offer))
+                {
+                    continue;
+                }
+
+                if (!seenOfferIds.Add(offer.OfferId))
+                {
+                    continue;
+                }
+
+                offers.Add(offer);
+            }
+        }
+
+        IEnumerable<object> EnumerateRoots()
+        {
+            if (merchantRoomNode is not null)
+            {
+                yield return merchantRoomNode;
+            }
+
+            if (inventoryNode is not null)
+            {
+                yield return inventoryNode;
+            }
+
+            if (currentRoom is not null)
+            {
+                yield return currentRoom;
+                foreach (var memberName in new[] { "Inventory", "MerchantInventory", "InventoryUi", "UiRoot", "Root", "Screen" })
+                {
+                    var candidate = GetMemberValue(currentRoom, memberName);
+                    if (candidate is not null)
+                    {
+                        yield return candidate;
+                    }
+                }
+            }
+
+            yield return runNode;
+            var overlayTop = GetOverlayTopScreen(runNode);
+            if (overlayTop is not null)
+            {
+                yield return overlayTop;
+            }
+        }
+
+        var seenNodes = new HashSet<object>(ReferenceEqualityComparer.Instance);
+        foreach (var root in EnumerateRoots())
+        {
+            foreach (var node in EnumerateNodeDescendants(root, maxDepth: 8).Prepend(root))
+            {
+                if (!seenNodes.Add(node))
+                {
+                    continue;
+                }
+
+                var typeName = GetTypeName(node) ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(typeName))
+                {
+                    continue;
+                }
+
+                if (!IsShopNodeVisible(node))
+                {
+                    continue;
+                }
+
+                if (typeName.Contains("MerchantCardRemoval", StringComparison.OrdinalIgnoreCase) ||
+                    typeName.Contains("MerchantCard", StringComparison.OrdinalIgnoreCase) ||
+                    typeName.Contains("MerchantRelic", StringComparison.OrdinalIgnoreCase) ||
+                    typeName.Contains("MerchantPotion", StringComparison.OrdinalIgnoreCase))
+                {
+                    offerNodes.Add(node);
+                    continue;
+                }
+
+                if (leaveButton is null && typeName.Contains("MerchantButton", StringComparison.OrdinalIgnoreCase))
+                {
+                    var label = GetMenuNodeLabel(node, diagnostics);
+                    if (!string.IsNullOrWhiteSpace(label) && IsShopLeaveLabel(label))
+                    {
+                        leaveButton = node;
+                        leaveLabel = label.Trim();
+                    }
+                }
+            }
+        }
+
+        if (leaveButton is null)
+        {
+            var backButton = GetMemberValue(inventoryNode, "_backButton")
+                ?? GetMemberValue(inventoryNode, "BackButton");
+            var proceedButton = GetMemberValue(merchantRoomNode, "ProceedButton")
+                ?? GetMemberValue(merchantRoomNode, "_proceedButton");
+            leaveButton = backButton
+                ?? proceedButton
+                ?? GetMemberValue(merchantRoomNode, "MerchantButton");
+            if (leaveButton is not null)
+            {
+                leaveLabel = "离开商店";
+            }
+        }
+
+        if (leaveButton is null)
+        {
+            var buttonSummary = string.Join(
+                " | ",
+                seenNodes
+                    .Where(node => (GetTypeName(node) ?? string.Empty).Contains("Button", StringComparison.OrdinalIgnoreCase))
+                    .Take(8)
+                    .Select(node =>
+                    {
+                        var typeName = NormalizeTypeName(node) ?? "unknown";
+                        var label = GetMenuNodeLabel(node, diagnostics) ?? "<none>";
+                        return $"{typeName}:{AbbreviateForLog(label)}";
+                    }));
+            _logger?.Info($"Shop leave button unresolved room={currentRoomType} buttons={buttonSummary}");
+        }
+
+        if (offers.Count == 0)
+        {
+            foreach (var (node, index) in offerNodes.Select((node, index) => (node, index)))
+            {
+                if (!TryBuildShopOffer(node, index, player, diagnostics, out var offer))
+                {
+                    continue;
+                }
+
+                if (!seenOfferIds.Add(offer.OfferId))
+                {
+                    continue;
+                }
+
+                offers.Add(offer);
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(leaveLabel) || leaveLabel == "????")
+        {
+            leaveLabel = "离开商店";
+        }
+
+        var fallbackLeaveSupported =
+            (merchantRoomNode is not null &&
+             (HasAnyCompatibleMethod(merchantRoomNode, new[] { "HideScreen" }, new object?[] { leaveButton }, Array.Empty<object?>()) ||
+              HasAnyCompatibleMethod(merchantRoomNode, new[] { "OpenInventory" }, Array.Empty<object?>()))) ||
+            (currentRoom is not null &&
+             HasAnyCompatibleMethod(currentRoom, ShopLeaveMethodNames, Array.Empty<object?>(), new object?[] { leaveButton }));
+        return new ShopPhaseAnalysis(true, offers, leaveButton, leaveLabel, fallbackLeaveSupported, detectionSource);
+    }
+
+    private object? ResolveMerchantRoomNode(object runNode)
+    {
+        var merchantRoomType = FindSts2Assembly()?.GetType("MegaCrit.Sts2.Core.Nodes.Rooms.NMerchantRoom");
+        var instance = merchantRoomType is null ? null : GetMemberValue(merchantRoomType, "Instance");
+        if (instance is not null)
+        {
+            return instance;
+        }
+
+        return EnumerateNodeDescendants(runNode, maxDepth: 8)
+            .FirstOrDefault(node =>
+            {
+                var typeName = GetTypeName(node) ?? string.Empty;
+                return typeName.Contains("NMerchantRoom", StringComparison.Ordinal);
+            });
+    }
+
+    private Dictionary<object, object> BuildMerchantSlotIndex(object? inventoryNode)
+    {
+        var slotByEntry = new Dictionary<object, object>(ReferenceEqualityComparer.Instance);
+        if (inventoryNode is null)
+        {
+            return slotByEntry;
+        }
+
+        IEnumerable<object> slots = Array.Empty<object>();
+        if (TryInvokeParameterlessMethod(inventoryNode, "GetAllSlots") is IEnumerable slotsResult)
+        {
+            slots = EnumerateObjects(slotsResult);
+        }
+        else
+        {
+            slots = EnumerateNodeDescendants(inventoryNode, maxDepth: 6)
+                .Where(node =>
+                {
+                    var typeName = GetTypeName(node) ?? string.Empty;
+                    return typeName.Contains("NMerchantSlot", StringComparison.Ordinal) ||
+                           typeName.Contains("NMerchantCard", StringComparison.Ordinal) ||
+                           typeName.Contains("NMerchantRelic", StringComparison.Ordinal) ||
+                           typeName.Contains("NMerchantPotion", StringComparison.Ordinal) ||
+                           typeName.Contains("NMerchantCardRemoval", StringComparison.Ordinal);
+                });
+        }
+
+        foreach (var slot in slots)
+        {
+            var entry = GetMemberValue(slot, "Entry");
+            if (entry is not null)
+            {
+                slotByEntry[entry] = slot;
+            }
+        }
+
+        return slotByEntry;
+    }
+
+    private IEnumerable<object> EnumerateMerchantEntries(object inventoryEntity)
+    {
+        foreach (var memberName in ShopInventoryEntryCollections)
+        {
+            foreach (var entry in EnumerateObjects(GetMemberValue(inventoryEntity, memberName)))
+            {
+                yield return entry;
+            }
+        }
+
+        var removalEntry = GetMemberValue(inventoryEntity, "CardRemovalEntry");
+        if (removalEntry is not null)
+        {
+            yield return removalEntry;
+        }
+    }
+
+    private bool TryBuildShopOfferFromEntry(
+        object entry,
+        object? slotNode,
+        int index,
+        RuntimePlayerState? player,
+        TextDiagnosticsCollector textDiagnostics,
+        out ShopOfferAnalysis offer)
+    {
+        var typeName = GetTypeName(entry) ?? string.Empty;
+        var detectionSource = $"merchant_entry.{NormalizeTypeName(entry) ?? "unknown"}";
+        var gold = player?.Gold ?? 0;
+        var potionCount = player?.Potions.Count ?? 0;
+        var potionCapacity = player?.PotionCapacity ?? 0;
+        var price = ResolveShopPrice(entry) ?? (slotNode is null ? null : ResolveShopPrice(slotNode)) ?? 0;
+        var stocked = GetMemberValue(entry, "IsStocked") is not bool stockedValue || stockedValue;
+        var enoughGold = GetMemberValue(entry, "EnoughGold") is not bool enoughGoldValue || enoughGoldValue;
+        var interactable = slotNode is null || IsMenuNodeInteractable(slotNode);
+
+        if (typeName.Contains("MerchantCardRemovalEntry", StringComparison.OrdinalIgnoreCase))
+        {
+            var label = NormalizeDescriptionText(ConvertDescriptionTemplateToText(GetMemberValue(slotNode, "Title"), "shop.service.title", textDiagnostics, "Title"))
+                ?? (slotNode is null ? null : GetMenuNodeLabel(slotNode, textDiagnostics))
+                ?? "卡牌移除服务";
+            var description = NormalizeDescriptionText(ConvertDescriptionTemplateToText(GetMemberValue(slotNode, "Description"), "shop.service.description", textDiagnostics, "Description"))
+                ?? "移除牌组中的一张牌。";
+            var used = GetMemberValue(entry, "Used") is bool usedValue && usedValue;
+            var purchasable = stocked && interactable && !used && enoughGold && gold >= price;
+            var unavailableReason = purchasable ? null : used ? "service_unavailable" : (gold < price || !enoughGold) ? "not_affordable" : "service_unavailable";
+            offer = new ShopOfferAnalysis(
+                OfferId: "service:purge_card",
+                Kind: "service",
+                Index: index,
+                Name: label.Trim(),
+                Price: price,
+                Purchasable: purchasable,
+                UnavailableReason: unavailableReason,
+                Description: description,
+                Glossary: Array.Empty<GlossaryAnchor>(),
+                CanonicalId: null,
+                DetectionSource: detectionSource,
+                OfferNode: entry,
+                ActivationNode: slotNode ?? entry,
+                Card: null,
+                Relic: null,
+                Potion: null,
+                ServiceKind: "purge_card");
+            return true;
+        }
+
+        if (typeName.Contains("MerchantCardEntry", StringComparison.OrdinalIgnoreCase))
+        {
+            var cardSource = GetMemberValue(GetMemberValue(entry, "CreationResult"), "Card")
+                ?? GetMemberValue(GetMemberValue(slotNode, "_cardNode"), "CardModel")
+                ?? GetMemberValue(GetMemberValue(slotNode, "_cardNode"), "Model")
+                ?? ResolveShopPayloadNode(slotNode ?? entry, ShopCardMemberNames)
+                ?? entry;
+            RuntimeCard runtimeCard;
+            try
+            {
+                runtimeCard = BuildRuntimeCard(cardSource, index, "shop.card", textDiagnostics, CardDescriptionContext.Preview);
+            }
+            catch
+            {
+                runtimeCard = BuildFallbackRuntimeCard(cardSource, index);
+            }
+
+            var purchasable = stocked && interactable && enoughGold && gold >= price;
+            var unavailableReason = purchasable ? null : (gold < price || !enoughGold) ? "not_affordable" : "not_clickable";
+            offer = new ShopOfferAnalysis(
+                OfferId: $"card:{runtimeCard.CardId}",
+                Kind: "card",
+                Index: index,
+                Name: runtimeCard.Name,
+                Price: price,
+                Purchasable: purchasable,
+                UnavailableReason: unavailableReason,
+                Description: runtimeCard.Description,
+                Glossary: runtimeCard.Glossary ?? Array.Empty<GlossaryAnchor>(),
+                CanonicalId: runtimeCard.CanonicalCardId,
+                DetectionSource: detectionSource,
+                OfferNode: entry,
+                ActivationNode: slotNode ?? entry,
+                Card: runtimeCard,
+                Relic: null,
+                Potion: null,
+                ServiceKind: null);
+            return true;
+        }
+
+        if (typeName.Contains("MerchantRelicEntry", StringComparison.OrdinalIgnoreCase))
+        {
+            var relicSource = GetMemberValue(entry, "Model")
+                ?? GetMemberValue(slotNode, "_relic")
+                ?? ResolveShopPayloadNode(slotNode ?? entry, ShopRelicMemberNames)
+                ?? entry;
+            var relic = DescribeRelic(relicSource, $"shop.relic[{index}]", textDiagnostics);
+            if (relic is null)
+            {
+                offer = default;
+                return false;
+            }
+
+            var purchasable = stocked && interactable && enoughGold && gold >= price;
+            var unavailableReason = purchasable ? null : (gold < price || !enoughGold) ? "not_affordable" : "not_clickable";
+            offer = new ShopOfferAnalysis(
+                OfferId: $"relic:{relic.CanonicalRelicId ?? NormalizeComparisonText(relic.Name) ?? index.ToString()}",
+                Kind: "relic",
+                Index: index,
+                Name: relic.Name,
+                Price: price,
+                Purchasable: purchasable,
+                UnavailableReason: unavailableReason,
+                Description: relic.Description,
+                Glossary: relic.Glossary ?? Array.Empty<GlossaryAnchor>(),
+                CanonicalId: relic.CanonicalRelicId,
+                DetectionSource: detectionSource,
+                OfferNode: entry,
+                ActivationNode: slotNode ?? entry,
+                Card: null,
+                Relic: relic,
+                Potion: null,
+                ServiceKind: null);
+            return true;
+        }
+
+        if (typeName.Contains("MerchantPotionEntry", StringComparison.OrdinalIgnoreCase))
+        {
+            var potionSource = GetMemberValue(entry, "Model")
+                ?? GetMemberValue(slotNode, "_potion")
+                ?? ResolveShopPayloadNode(slotNode ?? entry, ShopPotionMemberNames)
+                ?? entry;
+            var potion = DescribePotion(potionSource, $"shop.potion[{index}]", textDiagnostics);
+            if (potion is null)
+            {
+                offer = default;
+                return false;
+            }
+
+            var potionSlotsFull = potionCapacity > 0 && potionCount >= potionCapacity;
+            var purchasable = stocked && interactable && enoughGold && gold >= price && !potionSlotsFull;
+            var unavailableReason = purchasable ? null : potionSlotsFull ? "potion_slots_full" : (gold < price || !enoughGold) ? "not_affordable" : "not_clickable";
+            offer = new ShopOfferAnalysis(
+                OfferId: $"potion:{potion.CanonicalPotionId ?? NormalizeComparisonText(potion.Name) ?? index.ToString()}",
+                Kind: "potion",
+                Index: index,
+                Name: potion.Name,
+                Price: price,
+                Purchasable: purchasable,
+                UnavailableReason: unavailableReason,
+                Description: potion.Description,
+                Glossary: potion.Glossary ?? Array.Empty<GlossaryAnchor>(),
+                CanonicalId: potion.CanonicalPotionId,
+                DetectionSource: detectionSource,
+                OfferNode: entry,
+                ActivationNode: slotNode ?? entry,
+                Card: null,
+                Relic: null,
+                Potion: potion,
+                ServiceKind: null);
+            return true;
+        }
+
+        offer = default;
+        return false;
+    }
+
+    private bool TryBuildShopOffer(
+        object node,
+        int index,
+        RuntimePlayerState? player,
+        TextDiagnosticsCollector textDiagnostics,
+        out ShopOfferAnalysis offer)
+    {
+        var typeName = GetTypeName(node) ?? string.Empty;
+        var detectionSource = $"shop_node.{NormalizeTypeName(node) ?? "unknown"}";
+        var gold = player?.Gold ?? 0;
+        var potionCount = player?.Potions.Count ?? 0;
+        var potionCapacity = player?.PotionCapacity ?? 0;
+        var price = ResolveShopPrice(node) ?? 0;
+        var interactable = IsMenuNodeInteractable(node);
+
+        if (typeName.Contains("MerchantCardRemoval", StringComparison.OrdinalIgnoreCase))
+        {
+            var label = GetMenuNodeLabel(node, textDiagnostics) ?? "Card Removal";
+            var normalizedLabel = string.IsNullOrWhiteSpace(label) ? "Card Removal" : label.Trim();
+            var purchasable = interactable && gold >= price;
+            var unavailableReason = purchasable ? null : gold < price ? "not_affordable" : "service_unavailable";
+            offer = new ShopOfferAnalysis(
+                OfferId: "service:purge_card",
+                Kind: "service",
+                Index: index,
+                Name: normalizedLabel,
+                Price: price,
+                Purchasable: purchasable,
+                UnavailableReason: unavailableReason,
+                Description: "Remove a card from your deck.",
+                Glossary: Array.Empty<GlossaryAnchor>(),
+                CanonicalId: null,
+                DetectionSource: detectionSource,
+                OfferNode: node,
+                ActivationNode: node,
+                Card: null,
+                Relic: null,
+                Potion: null,
+                ServiceKind: "purge_card");
+            if (price <= 0)
+            {
+                _logger?.Info($"Shop offer probe type={typeName} kind=service members={DescribeObjectMembersForLog(node)}");
+            }
+            return true;
+        }
+
+        if (typeName.Contains("MerchantCard", StringComparison.OrdinalIgnoreCase))
+        {
+            var cardSource = ResolveShopPayloadNode(node, ShopCardMemberNames) ?? node;
+            RuntimeCard runtimeCard;
+            try
+            {
+                runtimeCard = BuildRuntimeCard(cardSource, index, "shop.card", textDiagnostics, CardDescriptionContext.Preview);
+            }
+            catch
+            {
+                runtimeCard = BuildFallbackRuntimeCard(cardSource, index);
+            }
+
+            var purchasable = interactable && gold >= price;
+            var unavailableReason = purchasable ? null : gold < price ? "not_affordable" : "not_clickable";
+            offer = new ShopOfferAnalysis(
+                OfferId: $"card:{runtimeCard.CardId}",
+                Kind: "card",
+                Index: index,
+                Name: runtimeCard.Name,
+                Price: price,
+                Purchasable: purchasable,
+                UnavailableReason: unavailableReason,
+                Description: runtimeCard.Description,
+                Glossary: runtimeCard.Glossary ?? Array.Empty<GlossaryAnchor>(),
+                CanonicalId: runtimeCard.CanonicalCardId,
+                DetectionSource: detectionSource,
+                OfferNode: node,
+                ActivationNode: node,
+                Card: runtimeCard,
+                Relic: null,
+                Potion: null,
+                ServiceKind: null);
+            if (price <= 0 || runtimeCard.Name.StartsWith("MerchantCardHolder", StringComparison.OrdinalIgnoreCase))
+            {
+                _logger?.Info(
+                    $"Shop offer probe type={typeName} kind=card name={runtimeCard.Name} price={price} " +
+                    $"node={DescribeObjectMembersForLog(node)} payload={DescribeObjectMembersForLog(cardSource)}");
+            }
+            return true;
+        }
+
+        if (typeName.Contains("MerchantRelic", StringComparison.OrdinalIgnoreCase))
+        {
+            var relicSource = ResolveShopPayloadNode(node, ShopRelicMemberNames) ?? node;
+            var relic = DescribeRelic(relicSource, $"shop.relic[{index}]", textDiagnostics);
+            if (relic is null)
+            {
+                offer = default;
+                return false;
+            }
+
+            var purchasable = interactable && gold >= price;
+            var unavailableReason = purchasable ? null : gold < price ? "not_affordable" : "not_clickable";
+            offer = new ShopOfferAnalysis(
+                OfferId: $"relic:{relic.CanonicalRelicId ?? NormalizeComparisonText(relic.Name) ?? index.ToString()}",
+                Kind: "relic",
+                Index: index,
+                Name: relic.Name,
+                Price: price,
+                Purchasable: purchasable,
+                UnavailableReason: unavailableReason,
+                Description: relic.Description,
+                Glossary: relic.Glossary ?? Array.Empty<GlossaryAnchor>(),
+                CanonicalId: relic.CanonicalRelicId,
+                DetectionSource: detectionSource,
+                OfferNode: node,
+                ActivationNode: node,
+                Card: null,
+                Relic: relic,
+                Potion: null,
+                ServiceKind: null);
+            if (price <= 0)
+            {
+                _logger?.Info(
+                    $"Shop offer probe type={typeName} kind=relic name={relic.Name} price={price} " +
+                    $"node={DescribeObjectMembersForLog(node)} payload={DescribeObjectMembersForLog(relicSource)}");
+            }
+            return true;
+        }
+
+        if (typeName.Contains("MerchantPotion", StringComparison.OrdinalIgnoreCase))
+        {
+            var potionSource = ResolveShopPayloadNode(node, ShopPotionMemberNames) ?? node;
+            var potion = DescribePotion(potionSource, $"shop.potion[{index}]", textDiagnostics);
+            if (potion is null)
+            {
+                offer = default;
+                return false;
+            }
+
+            var potionSlotsFull = potionCapacity > 0 && potionCount >= potionCapacity;
+            var purchasable = interactable && gold >= price && !potionSlotsFull;
+            var unavailableReason = purchasable ? null : potionSlotsFull ? "potion_slots_full" : gold < price ? "not_affordable" : "not_clickable";
+            offer = new ShopOfferAnalysis(
+                OfferId: $"potion:{potion.CanonicalPotionId ?? NormalizeComparisonText(potion.Name) ?? index.ToString()}",
+                Kind: "potion",
+                Index: index,
+                Name: potion.Name,
+                Price: price,
+                Purchasable: purchasable,
+                UnavailableReason: unavailableReason,
+                Description: potion.Description,
+                Glossary: potion.Glossary ?? Array.Empty<GlossaryAnchor>(),
+                CanonicalId: potion.CanonicalPotionId,
+                DetectionSource: detectionSource,
+                OfferNode: node,
+                ActivationNode: node,
+                Card: null,
+                Relic: null,
+                Potion: potion,
+                ServiceKind: null);
+            if (price <= 0)
+            {
+                _logger?.Info(
+                    $"Shop offer probe type={typeName} kind=potion name={potion.Name} price={price} " +
+                    $"node={DescribeObjectMembersForLog(node)} payload={DescribeObjectMembersForLog(potionSource)}");
+            }
+            return true;
+        }
+
+        offer = default;
+        return false;
+    }
+
+    private object? ResolveShopPayloadNode(object node, IEnumerable<string> memberNames)
+    {
+        foreach (var memberName in memberNames)
+        {
+            var value = GetMemberValue(node, memberName);
+            if (value is not null)
+            {
+                return value;
+            }
+        }
+
+        foreach (var memberName in new[] { "Model", "Data", "Item", "ItemModel" })
+        {
+            var container = GetMemberValue(node, memberName);
+            if (container is null)
+            {
+                continue;
+            }
+
+            foreach (var nestedName in memberNames)
+            {
+                var nested = GetMemberValue(container, nestedName);
+                if (nested is not null)
+                {
+                    return nested;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private int? ResolveShopPrice(object node)
+    {
+        foreach (var memberName in ShopPriceMemberNames)
+        {
+            var value = GetMemberValue(node, memberName);
+            var price = ConvertToInt32(value);
+            if (price is not null)
+            {
+                return price;
+            }
+        }
+
+        foreach (var memberName in new[] { "Model", "Data", "Item", "ItemModel" })
+        {
+            var nested = GetMemberValue(node, memberName);
+            if (nested is null)
+            {
+                continue;
+            }
+
+            foreach (var nestedPriceMember in ShopPriceMemberNames)
+            {
+                var price = ConvertToInt32(GetMemberValue(nested, nestedPriceMember));
+                if (price is not null)
+                {
+                    return price;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static bool IsShopNodeVisible(object node)
+    {
+        if (GetMemberValue(node, "Visible") is bool visible && !visible)
+        {
+            return false;
+        }
+
+        if (TryInvokeParameterlessMethod(node, "IsVisibleInTree") is bool visibleInTree && !visibleInTree)
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsShopLeaveLabel(string label)
+    {
+        var normalized = NormalizeLabel(label);
+        return ShopLeaveLabelHints.Any(hint => normalized.Contains(hint, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string DescribeObjectMembersForLog(object? target)
+    {
+        if (target is null)
+        {
+            return "<null>";
+        }
+
+        var flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+        var parts = new List<string>();
+        foreach (var member in target.GetType().GetMembers(flags)
+                     .Where(member => member.MemberType is MemberTypes.Field or MemberTypes.Property)
+                     .OrderBy(member => member.Name)
+                     .Take(24))
+        {
+            object? value;
+            try
+            {
+                value = GetMemberValue(target, member.Name);
+            }
+            catch
+            {
+                continue;
+            }
+
+            if (value is null)
+            {
+                continue;
+            }
+
+            string rendered;
+            if (value is string text)
+            {
+                rendered = AbbreviateForLog(text);
+            }
+            else if (value is int or long or bool or float or double or decimal)
+            {
+                rendered = value.ToString() ?? string.Empty;
+            }
+            else
+            {
+                rendered = NormalizeTypeName(value) ?? GetTypeName(value) ?? value.ToString() ?? string.Empty;
+            }
+
+            if (string.IsNullOrWhiteSpace(rendered))
+            {
+                continue;
+            }
+
+            parts.Add($"{member.Name}={rendered}");
+        }
+
+        return parts.Count == 0 ? "<no-readable-members>" : string.Join(", ", parts);
+    }
+
+    private static bool HasAnyCompatibleMethod(object target, IEnumerable<string> methodNames, params object?[][] argSets)
+    {
+        foreach (var methodName in methodNames)
+        {
+            foreach (var args in argSets)
+            {
+                if (target.GetType().GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                    .Any(method => string.Equals(method.Name, methodName, StringComparison.Ordinal) && method.GetParameters().Length == args.Length))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     private string DetectPhase(object runNode, object runState)
     {
         if (GetBoolean(runState, "IsGameOver"))
@@ -2548,6 +3472,11 @@ internal sealed class Sts2RuntimeReflectionReader
         if (AnalyzeEventPhase(runNode, runState, textDiagnostics: null).TreatAsEvent)
         {
             return DecisionPhase.Event;
+        }
+
+        if (AnalyzeShopPhase(runNode, runState, textDiagnostics: null).TreatAsShop)
+        {
+            return DecisionPhase.Shop;
         }
 
         return DecisionPhase.Combat;
@@ -7704,6 +8633,22 @@ internal sealed class Sts2RuntimeReflectionReader
             .ToDictionary(pair => pair.Key, pair => pair.Value);
     }
 
+    private static IReadOnlyDictionary<string, object?> BuildRelicPreview(RuntimeRelicState relic)
+    {
+        var preview = new Dictionary<string, object?>
+        {
+            ["name"] = relic.Name,
+            ["description"] = relic.Description,
+            ["canonical_relic_id"] = relic.CanonicalRelicId,
+            ["glossary"] = relic.Glossary,
+        };
+        return preview
+            .Where(pair => pair.Value is not null &&
+                           (!(pair.Value is string text) || !string.IsNullOrWhiteSpace(text)) &&
+                           (!(pair.Value is IReadOnlyCollection<string> values) || values.Count > 0))
+            .ToDictionary(pair => pair.Key, pair => pair.Value);
+    }
+
     private void LogTextDiagnostics(string windowKind, TextDiagnosticsCollector collector)
     {
         var metadata = collector.ToMetadata();
@@ -8078,6 +9023,31 @@ internal sealed class Sts2RuntimeReflectionReader
         int? Block,
         IReadOnlyList<string> Effects);
     private readonly record struct RewardOption(string Label, TextResolutionResult Resolution);
+    private readonly record struct ShopOfferAnalysis(
+        string OfferId,
+        string Kind,
+        int Index,
+        string Name,
+        int Price,
+        bool Purchasable,
+        string? UnavailableReason,
+        string? Description,
+        IReadOnlyList<GlossaryAnchor> Glossary,
+        string? CanonicalId,
+        string DetectionSource,
+        object? OfferNode,
+        object? ActivationNode,
+        RuntimeCard? Card,
+        RuntimeRelicState? Relic,
+        RuntimePotionState? Potion,
+        string? ServiceKind);
+    private readonly record struct ShopPhaseAnalysis(
+        bool TreatAsShop,
+        IReadOnlyList<ShopOfferAnalysis> Offers,
+        object? LeaveButton,
+        string LeaveLabel,
+        bool FallbackLeaveSupported,
+        string DetectionSource);
     private readonly record struct EventOptionAnalysis(
         int Index,
         string Label,
@@ -9631,6 +10601,234 @@ internal sealed class Sts2RuntimeReflectionReader
             ["button_label"] = buttonLabel,
             ["target_type"] = GetTypeName(buttonNode),
         });
+    }
+
+    private RuntimeActionResult ExecuteBuyShopOffer(object runNode, object runState, ActionRequest request, LegalAction action, string expectedKind)
+    {
+        var metadata = new Dictionary<string, object?>
+        {
+            ["action_type"] = action.Type,
+            ["expected_kind"] = expectedKind,
+        };
+        var analysis = AnalyzeShopPhase(runNode, runState, textDiagnostics: null);
+        if (!analysis.TreatAsShop)
+        {
+            metadata["failure_stage"] = "phase_gate";
+            return new RuntimeActionResult(false, "Shop window is not ready.", "runtime_not_ready", metadata);
+        }
+
+        var requestedOfferId = ConvertToText(GetDictionaryValue(action.Params, "offer_id"));
+        var requestedName = ConvertToText(GetDictionaryValue(action.Params, "name"));
+        var requestedPrice = GetNullableIntFromObject(GetDictionaryValue(action.Params, "price"));
+        var requestedIndex = GetNullableIntFromObject(GetDictionaryValue(action.Params, "offer_index"));
+        if (!string.IsNullOrWhiteSpace(requestedOfferId))
+        {
+            metadata["offer_id"] = requestedOfferId;
+        }
+        if (!string.IsNullOrWhiteSpace(requestedName))
+        {
+            metadata["name"] = requestedName;
+        }
+        if (requestedPrice is not null)
+        {
+            metadata["price"] = requestedPrice.Value;
+        }
+        if (requestedIndex is not null)
+        {
+            metadata["offer_index"] = requestedIndex.Value;
+        }
+
+        var offer = analysis.Offers.FirstOrDefault(candidate =>
+            (string.IsNullOrWhiteSpace(requestedOfferId) || string.Equals(candidate.OfferId, requestedOfferId, StringComparison.OrdinalIgnoreCase)) &&
+            (requestedIndex is null || candidate.Index == requestedIndex.Value));
+        if (offer == default)
+        {
+            return new RuntimeActionResult(false, "Shop offer is no longer available.", "stale_action", metadata);
+        }
+
+        if (!string.Equals(offer.Kind, expectedKind, StringComparison.OrdinalIgnoreCase))
+        {
+            metadata["resolved_kind"] = offer.Kind;
+            return new RuntimeActionResult(false, "Shop offer kind changed since the action was generated.", "stale_action", metadata);
+        }
+
+        if (!string.IsNullOrWhiteSpace(requestedName) && !string.Equals(offer.Name, requestedName, StringComparison.OrdinalIgnoreCase))
+        {
+            metadata["resolved_name"] = offer.Name;
+            return new RuntimeActionResult(false, "Shop offer name changed since the action was generated.", "stale_action", metadata);
+        }
+
+        if (requestedPrice is not null && offer.Price != requestedPrice.Value)
+        {
+            metadata["resolved_price"] = offer.Price;
+            return new RuntimeActionResult(false, "Shop offer price changed since the action was generated.", "stale_action", metadata);
+        }
+
+        if (!offer.Purchasable)
+        {
+            metadata["unavailable_reason"] = offer.UnavailableReason;
+            return new RuntimeActionResult(false, "Shop offer cannot currently be purchased.", offer.UnavailableReason ?? "stale_action", metadata);
+        }
+
+        var currentRoom = GetMemberValue(runState, "CurrentRoom");
+        var inventoryEntity = GetMemberValue(currentRoom, "Inventory")
+            ?? GetMemberValue(GetMemberValue(ResolveMerchantRoomNode(runNode), "Inventory"), "Inventory");
+        var activationNode = offer.ActivationNode ?? offer.OfferNode;
+        if (activationNode is not null)
+        {
+            if (inventoryEntity is not null &&
+                TryInvokeFirstCompatibleMethod(
+                    activationNode,
+                    new[] { "OnTryPurchase" },
+                    new[]
+                    {
+                        new object?[] { inventoryEntity },
+                        new object?[] { inventoryEntity, false },
+                        new object?[] { inventoryEntity, false, true },
+                    },
+                    out var purchaseMethod))
+            {
+                metadata["runtime_handler"] = $"shop_node.{purchaseMethod}";
+                metadata["resolved_name"] = offer.Name;
+                metadata["resolved_price"] = offer.Price;
+                metadata["next_window_expected"] = offer.Kind == "service" ? "shop_card_selection" : "shop";
+                return new RuntimeActionResult(true, offer.Kind == "service" ? "Opened shop card removal." : "Purchased shop offer.", metadata: metadata);
+            }
+
+            if (TryActivateMenuNode(activationNode, out var buttonHandler))
+            {
+                metadata["runtime_handler"] = buttonHandler;
+                metadata["resolved_name"] = offer.Name;
+                metadata["resolved_price"] = offer.Price;
+                metadata["next_window_expected"] = offer.Kind == "service" ? "shop_card_selection" : "shop";
+                return new RuntimeActionResult(true, offer.Kind == "service" ? "Opened shop card removal." : "Purchased shop offer.", metadata: metadata);
+                    }
+
+            if (TryInvokeFirstCompatibleMethod(
+                    activationNode,
+                    ShopPurchaseMethodNames,
+                    new[] { Array.Empty<object?>(), new object?[] { activationNode }, new object?[] { inventoryEntity } },
+                    out var methodName))
+            {
+                metadata["runtime_handler"] = $"shop_node.{methodName}";
+                metadata["resolved_name"] = offer.Name;
+                metadata["resolved_price"] = offer.Price;
+                metadata["next_window_expected"] = offer.Kind == "service" ? "shop_card_selection" : "shop";
+                return new RuntimeActionResult(true, offer.Kind == "service" ? "Opened shop card removal." : "Purchased shop offer.", metadata: metadata);
+            }
+        }
+
+        if (offer.OfferNode is not null &&
+            inventoryEntity is not null &&
+            TryInvokeFirstCompatibleMethod(
+                offer.OfferNode,
+                new[] { "OnTryPurchase", "OnTryPurchaseWrapper" },
+                new[]
+                {
+                    new object?[] { inventoryEntity, false },
+                    new object?[] { inventoryEntity, false, true },
+                    new object?[] { inventoryEntity, false, false },
+                },
+                out var entryMethod))
+        {
+            metadata["runtime_handler"] = $"merchant_entry.{entryMethod}";
+            metadata["resolved_name"] = offer.Name;
+            metadata["resolved_price"] = offer.Price;
+            metadata["next_window_expected"] = offer.Kind == "service" ? "shop_card_selection" : "shop";
+            return new RuntimeActionResult(true, offer.Kind == "service" ? "Opened shop card removal." : "Purchased shop offer.", metadata: metadata);
+        }
+
+        return new RuntimeActionResult(false, "Shop offer hooks are not available.", "runtime_incompatible", metadata);
+    }
+
+    private RuntimeActionResult ExecuteLeaveShop(object runNode, object runState, ActionRequest request, LegalAction action)
+    {
+        var metadata = new Dictionary<string, object?>
+        {
+            ["action_type"] = "leave_shop",
+        };
+        var analysis = AnalyzeShopPhase(runNode, runState, textDiagnostics: null);
+        if (!analysis.TreatAsShop)
+        {
+            metadata["failure_stage"] = "phase_gate";
+            return new RuntimeActionResult(false, "Shop window is not ready.", "runtime_not_ready", metadata);
+        }
+
+        var requestedLabel = ConvertToText(GetDictionaryValue(action.Params, "button_label"));
+        if (!string.IsNullOrWhiteSpace(requestedLabel))
+        {
+            metadata["button_label"] = requestedLabel;
+        }
+
+        var merchantRoomNode = ResolveMerchantRoomNode(runNode);
+        var inventoryNode = GetMemberValue(merchantRoomNode, "Inventory");
+        var proceedButton = GetMemberValue(merchantRoomNode, "ProceedButton") ?? GetMemberValue(merchantRoomNode, "_proceedButton");
+        var backButton = GetMemberValue(inventoryNode, "_backButton") ?? GetMemberValue(inventoryNode, "BackButton");
+
+        if (analysis.LeaveButton is not null)
+        {
+            if (!string.IsNullOrWhiteSpace(requestedLabel) && !string.Equals(analysis.LeaveLabel, requestedLabel, StringComparison.OrdinalIgnoreCase))
+            {
+                metadata["resolved_button_label"] = analysis.LeaveLabel;
+                return new RuntimeActionResult(false, "Shop leave label changed since the action was generated.", "stale_action", metadata);
+            }
+
+            if (ReferenceEquals(analysis.LeaveButton, backButton) &&
+                merchantRoomNode is not null &&
+                TryInvokeFirstCompatibleMethod(
+                    merchantRoomNode,
+                    new[] { "HideScreen" },
+                    new[]
+                    {
+                        new object?[] { backButton },
+                        new object?[] { null },
+                    },
+                    out var hideHandler))
+            {
+                if (proceedButton is not null && TryActivateMenuNode(proceedButton, out var proceedHandler))
+                {
+                    metadata["runtime_handler"] = $"merchant_room.{hideHandler}+{proceedHandler}";
+                    metadata["resolved_button_label"] = analysis.LeaveLabel;
+                    metadata["next_window_expected"] = "map";
+                    return new RuntimeActionResult(true, "Left shop.", metadata: metadata);
+                }
+
+                metadata["runtime_handler"] = $"merchant_room.{hideHandler}";
+                metadata["resolved_button_label"] = analysis.LeaveLabel;
+                metadata["next_window_expected"] = "shop";
+                return new RuntimeActionResult(true, "Closed shop inventory.", metadata: metadata);
+            }
+
+            if (TryActivateMenuNode(analysis.LeaveButton, out var handler))
+            {
+                metadata["runtime_handler"] = handler;
+                metadata["resolved_button_label"] = analysis.LeaveLabel;
+                metadata["next_window_expected"] = "map";
+                return new RuntimeActionResult(true, "Left shop.", metadata: metadata);
+            }
+        }
+
+        var currentRoom = GetMemberValue(runState, "CurrentRoom");
+        if (merchantRoomNode is not null &&
+            proceedButton is not null &&
+            TryActivateMenuNode(proceedButton, out var proceedOnlyHandler))
+        {
+            metadata["runtime_handler"] = proceedOnlyHandler;
+            metadata["resolved_button_label"] = analysis.LeaveLabel;
+            metadata["next_window_expected"] = "map";
+            return new RuntimeActionResult(true, "Left shop.", metadata: metadata);
+        }
+
+        if (currentRoom is not null &&
+            TryInvokeFirstCompatibleMethod(currentRoom, ShopLeaveMethodNames, new[] { Array.Empty<object?>(), new object?[] { analysis.LeaveButton } }, out var methodName))
+        {
+            metadata["runtime_handler"] = $"merchant_room.{methodName}";
+            metadata["resolved_button_label"] = analysis.LeaveLabel;
+            metadata["next_window_expected"] = "map";
+            return new RuntimeActionResult(true, "Left shop.", metadata: metadata);
+        }
+
+        return new RuntimeActionResult(false, "Shop leave hooks are not available.", "runtime_incompatible", metadata);
     }
 
     private RuntimeActionResult ExecuteChooseEventOption(object runNode, object runState, ActionRequest request, LegalAction action)
