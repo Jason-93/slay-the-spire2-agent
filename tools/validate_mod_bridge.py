@@ -90,7 +90,7 @@ def main() -> int:
         wait_for_server(base_url)
         health = fetch(base_url, "/health")
         assert health["protocol_version"] == "0.1.0"
-        for phase in ("combat", "reward", "map", "terminal"):
+        for phase in ("combat", "reward", "map", "event", "terminal"):
             snapshot = fetch(base_url, f"/snapshot?phase={phase}")
             actions = fetch(base_url, f"/actions?phase={phase}")
             assert snapshot["phase"] == phase
@@ -208,6 +208,63 @@ def main() -> int:
         assert map_snapshot["phase"] == "map"
         assert isinstance(map_snapshot["player"]["draw_pile_cards"], list)
         assert isinstance(map_snapshot["player"]["discard_pile_cards"], list)
+
+        event_snapshot = fetch(base_url, "/snapshot?phase=event")
+        assert event_snapshot["phase"] == "event"
+        assert event_snapshot["metadata"]["window_kind"] == "event_choice"
+        assert event_snapshot["metadata"]["event_title"]
+        assert event_snapshot["metadata"]["event_body"]
+        assert event_snapshot["metadata"]["event_option_count"] >= 1
+        assert isinstance(event_snapshot["metadata"]["event_options"], list)
+        event_actions = fetch(base_url, "/actions?phase=event")
+        choose_event = next(action for action in event_actions if action["type"] == "choose_event_option")
+        status_code, apply_response = post_json(
+            base_url,
+            "/apply",
+            {
+                "decision_id": event_snapshot["decision_id"],
+                "action_id": choose_event["action_id"],
+                "params": {},
+            },
+        )
+        assert status_code == 200
+        assert apply_response["status"] == "accepted"
+        event_card_snapshot = fetch(base_url, "/snapshot?phase=event")
+        assert event_card_snapshot["metadata"]["window_kind"] == "event_choice"
+        assert event_card_snapshot["metadata"]["event_subphase"] == "card_selection"
+        assert event_card_snapshot["metadata"]["event_selection_prompt"]
+        assert event_card_snapshot["metadata"]["event_option_count"] >= 1
+        assert event_card_snapshot["metadata"]["event_options"][0]["card_id"]
+        event_card_actions = fetch(base_url, "/actions?phase=event")
+        choose_event_card = next(action for action in event_card_actions if action["type"] == "choose_event_option")
+        status_code, apply_response = post_json(
+            base_url,
+            "/apply",
+            {
+                "decision_id": event_card_snapshot["decision_id"],
+                "action_id": choose_event_card["action_id"],
+                "params": {},
+            },
+        )
+        assert status_code == 200
+        assert apply_response["status"] == "accepted"
+        event_continue_snapshot = fetch(base_url, "/snapshot?phase=event")
+        assert event_continue_snapshot["metadata"]["window_kind"] == "event_continue"
+        continue_actions = fetch(base_url, "/actions?phase=event")
+        continue_event = next(action for action in continue_actions if action["type"] == "continue_event")
+        status_code, apply_response = post_json(
+            base_url,
+            "/apply",
+            {
+                "decision_id": event_continue_snapshot["decision_id"],
+                "action_id": continue_event["action_id"],
+                "params": {},
+            },
+        )
+        assert status_code == 200
+        assert apply_response["status"] == "accepted"
+        event_map_snapshot = fetch(base_url, "/snapshot?phase=map")
+        assert event_map_snapshot["phase"] == "map"
 
         status_code, stale_response = post_json(
             base_url,

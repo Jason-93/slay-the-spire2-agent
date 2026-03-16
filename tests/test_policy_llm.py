@@ -261,6 +261,32 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
         self.assertEqual(summary["metadata"]["selection_kind"], "exhaust_card")
         self.assertEqual(summary["metadata"]["selection_prompt"], "消耗1张牌")
 
+    def test_snapshot_summary_includes_event_metadata(self) -> None:
+        snapshot = build_snapshot()
+        snapshot.phase = "event"
+        snapshot.metadata = {
+            "window_kind": "event_choice",
+            "event_subphase": "card_selection",
+            "event_title": "神秘神龛",
+            "event_body": "你可以献祭生命换取金币，或者转身离开。",
+            "event_selection_prompt": "选择一张攻击牌附魔。",
+            "event_option_count": 2,
+            "event_continue_available": False,
+            "event_options": [
+                {"option_index": 0, "label": "献祭：失去6点生命，获得150金币。", "available": True},
+                {"option_index": 1, "label": "离开：什么都不做。", "available": True},
+            ],
+        }
+
+        summary = self.policy._summarize_snapshot(snapshot)
+
+        self.assertEqual(summary["metadata"]["window_kind"], "event_choice")
+        self.assertEqual(summary["metadata"]["event_subphase"], "card_selection")
+        self.assertEqual(summary["metadata"]["event_title"], "神秘神龛")
+        self.assertEqual(summary["metadata"]["event_selection_prompt"], "选择一张攻击牌附魔。")
+        self.assertEqual(summary["metadata"]["event_option_count"], 2)
+        self.assertEqual(summary["metadata"]["event_options"][0]["label"], "献祭：失去6点生命，获得150金币。")
+
     def test_policy_allows_halt_true(self) -> None:
         response_payload = {
             "choices": [

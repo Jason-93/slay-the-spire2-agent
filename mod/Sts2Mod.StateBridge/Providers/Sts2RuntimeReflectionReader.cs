@@ -57,6 +57,8 @@ internal sealed class Sts2RuntimeReflectionReader
     private const string PhaseMenu = DecisionPhase.Menu;
     private static readonly string[] MenuContinueLabelHints = { "continue", "resume", "继续", "继续游戏", "继续旅程" };
     private static readonly string[] RewardAdvanceLabelHints = { "advance", "continue", "proceed", "next", "forward", "前进", "继续", "下一步" };
+    private static readonly string[] EventContinueLabelHints = { "continue", "proceed", "leave", "confirm", "继续", "离开", "确认", "前进", "完成" };
+    private static readonly string[] EventCardSelectionTypeHints = { "DeckEnchant", "EnchantSelect", "Enchant", "EventCardSelect", "EventCardSelection" };
     private static readonly string[] MenuNewRunLabelHints = { "new run", "new game", "start new", "开始新", "新游戏", "新旅程" };
     private static readonly string[] MenuConfirmLabelHints = { "start", "begin", "confirm", "ok", "开始", "确认", "确定" };
     private static readonly string[] MenuDangerLabelHints = { "exit", "quit", "abandon", "delete", "退出", "放弃", "删除" };
@@ -134,6 +136,7 @@ internal sealed class Sts2RuntimeReflectionReader
         "SelectCard",
         "SelectHolder",
         "ChooseCard",
+        "OnCardClicked",
         "OnCardSelected",
         "OnCardChosen",
         "OnChoiceSelected",
@@ -378,6 +381,7 @@ internal sealed class Sts2RuntimeReflectionReader
         {
             DecisionPhase.Reward => BuildRewardWindow(root.RunNode, root.RunState),
             DecisionPhase.Map => BuildMapWindow(root.RunNode, root.RunState),
+            DecisionPhase.Event => BuildEventWindow(root.RunNode, root.RunState),
             DecisionPhase.Terminal => BuildTerminalWindow(root.RunNode, root.RunState),
             _ => BuildCombatWindow(root.RunNode, root.RunState),
         };
@@ -419,6 +423,8 @@ internal sealed class Sts2RuntimeReflectionReader
             "skip_reward" => ExecuteSkipReward(root.RunNode, request),
             "advance_reward" => ExecuteAdvanceReward(root.RunNode, request, action),
             "choose_map_node" => ExecuteChooseMapNode(request, action),
+            "choose_event_option" => ExecuteChooseEventOption(root.RunNode, root.RunState, request, action),
+            "continue_event" => ExecuteContinueEvent(root.RunNode, root.RunState, request, action),
             _ => new RuntimeActionResult(false, $"Action type '{action.Type}' is not supported yet.", "unsupported_action"),
         };
     }
@@ -1628,6 +1634,127 @@ internal sealed class Sts2RuntimeReflectionReader
             RunState: runStateSnapshot);
     }
 
+    private RuntimeWindowContext BuildEventWindow(object runNode, object runState)
+    {
+        var textDiagnostics = new TextDiagnosticsCollector();
+        var playerBuild = BuildPlayerState(runState, textDiagnostics);
+        var player = playerBuild.Player;
+        var metadata = CreateBaseMetadata(runNode, runState, DecisionPhase.Event);
+        foreach (var pair in playerBuild.Diagnostics)
+        {
+            metadata[pair.Key] = pair.Value;
+        }
+
+        var runStateSnapshot = BuildRunState(runState, textDiagnostics);
+        var analysis = AnalyzeEventPhase(runNode, runState, textDiagnostics);
+        metadata["window_kind"] = analysis.WindowKind;
+        metadata["event_title"] = analysis.Title;
+        metadata["event_body"] = analysis.Body;
+        metadata["event_option_count"] = analysis.Options.Count;
+        metadata["event_continue_available"] = analysis.ContinueAvailable;
+        metadata["event_detection_source"] = analysis.DetectionSource;
+        metadata["event_phase_detected"] = analysis.TreatAsEvent;
+        if (!string.IsNullOrWhiteSpace(analysis.EventSubphase))
+        {
+            metadata["event_subphase"] = analysis.EventSubphase;
+        }
+        if (!string.IsNullOrWhiteSpace(analysis.SelectionPrompt))
+        {
+            metadata["event_selection_prompt"] = analysis.SelectionPrompt;
+        }
+        metadata["event_options"] = analysis.Options
+            .Select(option => new Dictionary<string, object?>
+            {
+                ["option_index"] = option.Index,
+                ["label"] = option.Label,
+                ["available"] = option.Available,
+                ["disabled"] = !option.Available,
+                ["is_continue"] = option.IsContinue,
+                ["detection_source"] = option.DetectionSource,
+                ["card_id"] = option.StableId,
+                ["preview_text"] = option.PreviewText,
+            })
+            .ToArray();
+        if (!string.IsNullOrWhiteSpace(analysis.ContinueLabel))
+        {
+            metadata["event_continue_label"] = analysis.ContinueLabel;
+        }
+        if (!string.IsNullOrWhiteSpace(analysis.Diagnostics))
+        {
+            metadata["event_diagnostics"] = analysis.Diagnostics;
+        }
+
+        var actions = new List<RuntimeActionDefinition>();
+        foreach (var option in analysis.Options)
+        {
+            if (!option.Available)
+            {
+                continue;
+            }
+
+            if (option.IsContinue)
+            {
+                actions.Add(new RuntimeActionDefinition(
+                    "continue_event",
+                    option.Label,
+                    new Dictionary<string, object?>
+                    {
+                        ["button_label"] = option.Label,
+                        ["option_index"] = option.Index,
+                    },
+                    Metadata: new Dictionary<string, object?>
+                    {
+                        ["event_option_index"] = option.Index,
+                        ["event_detection_source"] = option.DetectionSource,
+                    }));
+                continue;
+            }
+
+            actions.Add(new RuntimeActionDefinition(
+                "choose_event_option",
+                $"选择 {option.Label}",
+                new Dictionary<string, object?>
+                {
+                    ["option_index"] = option.Index,
+                    ["option_label"] = option.Label,
+                    ["card_id"] = option.StableId,
+                },
+                Metadata: new Dictionary<string, object?>
+                {
+                    ["event_option_index"] = option.Index,
+                    ["event_detection_source"] = option.DetectionSource,
+                    ["option_preview"] = option.PreviewText,
+                }));
+        }
+
+        if (analysis.ContinueAvailable && !actions.Any(action => string.Equals(action.Type, "continue_event", StringComparison.Ordinal)))
+        {
+            actions.Add(new RuntimeActionDefinition(
+                "continue_event",
+                analysis.ContinueLabel,
+                new Dictionary<string, object?>
+                {
+                    ["button_label"] = analysis.ContinueLabel,
+                },
+                Metadata: new Dictionary<string, object?>
+                {
+                    ["event_detection_source"] = analysis.DetectionSource,
+                }));
+        }
+
+        LogTextDiagnostics("event", textDiagnostics);
+        return new RuntimeWindowContext(
+            DecisionPhase.Event,
+            player,
+            Array.Empty<RuntimeEnemyState>(),
+            Array.Empty<string>(),
+            Array.Empty<string>(),
+            Terminal: false,
+            Metadata: metadata,
+            Actions: actions,
+            RunState: runStateSnapshot);
+    }
+
     private RuntimeWindowContext BuildTerminalWindow(object runNode, object runState)
     {
         var textDiagnostics = new TextDiagnosticsCollector();
@@ -2402,6 +2529,11 @@ internal sealed class Sts2RuntimeReflectionReader
             return DecisionPhase.Reward;
         }
 
+        if (AnalyzeEventPhase(runNode, runState, textDiagnostics: null).TreatAsEvent)
+        {
+            return DecisionPhase.Event;
+        }
+
         return DecisionPhase.Combat;
     }
 
@@ -3020,6 +3152,391 @@ internal sealed class Sts2RuntimeReflectionReader
     {
         var normalized = NormalizeLabel(label);
         return RewardAdvanceLabelHints.Any(hint => normalized.Contains(hint, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private EventPhaseAnalysis AnalyzeEventPhase(object runNode, object runState, TextDiagnosticsCollector? textDiagnostics)
+    {
+        var currentRoomType = GetTypeName(GetMemberValue(runState, "CurrentRoom")) ?? string.Empty;
+        var hasEventRoomType = currentRoomType.Contains("EventRoom", StringComparison.OrdinalIgnoreCase);
+        var eventRoom = GetEventRoom(runNode, runState);
+        var eventLayout = GetEventLayout(eventRoom);
+        var eventModel = GetEventModel(eventRoom, eventLayout);
+        var cardSelection = TryBuildEventCardSelectionContext(runNode, textDiagnostics);
+        var options = cardSelection?.Options ?? ExtractEventOptions(eventRoom, eventLayout, eventModel, textDiagnostics);
+        var title = ResolveEventTitle(eventLayout, eventModel, textDiagnostics);
+        var body = ResolveEventBody(eventLayout, eventModel, textDiagnostics);
+        if (cardSelection is not null)
+        {
+            title ??= cardSelection.Value.Title;
+            body = JoinDistinctDescriptionText(cardSelection.Value.Body, body);
+        }
+        var hasLiveEnemies = BuildEnemies(runState, new TextDiagnosticsCollector()).Enemies.Any(enemy => enemy.IsAlive);
+        var hasVisibleContent = !string.IsNullOrWhiteSpace(title) || !string.IsNullOrWhiteSpace(body) || options.Count > 0;
+        var treatAsEvent = !hasLiveEnemies &&
+                           (hasEventRoomType || eventRoom is not null || cardSelection is not null) &&
+                           (hasVisibleContent || HasEventProceedHook(eventRoom));
+        var hasChoiceOption = options.Any(option => option.Available && !option.IsContinue);
+        var hasContinueOption = options.Any(option => option.Available && option.IsContinue);
+        if (!hasContinueOption && HasEventProceedHook(eventRoom) && treatAsEvent)
+        {
+            hasContinueOption = true;
+        }
+
+        var windowKind = treatAsEvent
+            ? hasChoiceOption ? "event_choice" : hasContinueOption ? "event_continue" : "event_transition"
+            : "none";
+        var continueLabel = options
+            .Where(option => option.IsContinue)
+            .Select(option => option.Label)
+            .FirstOrDefault(label => !string.IsNullOrWhiteSpace(label))
+            ?? "继续";
+        var detectionSource = cardSelection?.DetectionSource
+            ?? (eventLayout is not null && options.Count > 0
+                ? "event_layout.option_buttons"
+                : eventModel is not null && options.Count > 0
+                    ? "event_model.current_options"
+                    : eventRoom is not null
+                        ? "event_room.instance"
+                        : hasEventRoomType ? "run_state.current_room" : "none");
+        var diagnostics = !treatAsEvent
+            ? hasLiveEnemies ? "live_enemies_present" : "event_ui_not_ready"
+            : options.Count == 0 && !hasContinueOption ? "no_clickable_event_actions" : null;
+        var eventSubphase = cardSelection is not null ? "card_selection" : null;
+
+        return new EventPhaseAnalysis(
+            TreatAsEvent: treatAsEvent,
+            EventRoom: eventRoom,
+            EventLayout: eventLayout,
+            EventModel: eventModel,
+            Title: title,
+            Body: body,
+            Options: options,
+            ContinueAvailable: hasContinueOption,
+            ContinueLabel: continueLabel,
+            WindowKind: windowKind,
+            DetectionSource: detectionSource,
+            Diagnostics: diagnostics,
+            EventSubphase: eventSubphase,
+            SelectionPrompt: cardSelection?.Prompt);
+    }
+
+    private object? GetEventRoom(object runNode, object runState)
+    {
+        var currentRoomType = GetTypeName(GetMemberValue(runState, "CurrentRoom")) ?? string.Empty;
+        var eventRoom = GetMemberValue(runNode, "EventRoom")
+                        ?? GetMemberValue(GetEventRoomType(), "Instance");
+        if (eventRoom is null)
+        {
+            return null;
+        }
+
+        if (currentRoomType.Contains("EventRoom", StringComparison.OrdinalIgnoreCase))
+        {
+            return eventRoom;
+        }
+
+        return IsEventRoomVisible(eventRoom) ? eventRoom : null;
+    }
+
+    private Type? GetEventRoomType()
+    {
+        return FindSts2Assembly()?.GetType("MegaCrit.Sts2.Core.Nodes.Rooms.NEventRoom");
+    }
+
+    private static object? GetEventLayout(object? eventRoom)
+    {
+        return GetMemberValue(eventRoom, "Layout")
+               ?? GetMemberValue(eventRoom, "_layout")
+               ?? GetMemberValue(eventRoom, "CustomEventNode");
+    }
+
+    private static object? GetEventModel(object? eventRoom, object? eventLayout)
+    {
+        return GetMemberValue(eventRoom, "_event")
+               ?? GetMemberValue(eventRoom, "Event")
+               ?? GetMemberValue(eventLayout, "_event")
+               ?? GetMemberValue(eventLayout, "Event");
+    }
+
+    private EventCardSelectionContext? TryBuildEventCardSelectionContext(object runNode, TextDiagnosticsCollector? textDiagnostics)
+    {
+        var overlayTop = GetOverlayTopScreen(runNode);
+        if (overlayTop is null || !LooksLikeEventCardSelectionScreen(overlayTop, textDiagnostics))
+        {
+            return null;
+        }
+
+        var choices = FilterCardRewardSelectionChoices(ExtractCardRewardChoiceItems(overlayTop));
+        if (choices.Count == 0)
+        {
+            return null;
+        }
+
+        var options = choices
+            .Select((choice, index) => BuildEventOptionFromCardSelectionChoice(overlayTop, choice, index, textDiagnostics))
+            .ToArray();
+        var title = ResolveEventCardSelectionTitle(overlayTop, textDiagnostics);
+        var body = ResolveEventCardSelectionBody(overlayTop, textDiagnostics);
+        return new EventCardSelectionContext(
+            SelectionScreen: overlayTop,
+            Title: title,
+            Body: body,
+            Prompt: body,
+            DetectionSource: "overlay_top.event_card_selection",
+            Options: options);
+    }
+
+    private List<EventOptionAnalysis> ExtractEventOptions(
+        object? eventRoom,
+        object? eventLayout,
+        object? eventModel,
+        TextDiagnosticsCollector? textDiagnostics)
+    {
+        var optionButtons = EnumerateObjects(GetMemberValue(eventLayout, "OptionButtons")).ToList();
+        if (optionButtons.Count > 0)
+        {
+            return optionButtons
+                .Select((button, index) => BuildEventOptionFromButton(button, index, textDiagnostics))
+                .ToList();
+        }
+
+        var options = EnumerateObjects(
+                GetMemberValue(eventModel, "CurrentOptions")
+                ?? GetMemberValue(eventRoom, "_connectedOptions")
+                ?? GetMemberValue(eventRoom, "ConnectedOptions"))
+            .ToList();
+        return options
+            .Select((option, index) => BuildEventOptionFromModel(option, index, textDiagnostics))
+            .ToList();
+    }
+
+    private EventOptionAnalysis BuildEventOptionFromCardSelectionChoice(
+        object selectionScreen,
+        object choice,
+        int index,
+        TextDiagnosticsCollector? textDiagnostics)
+    {
+        var collector = textDiagnostics ?? new TextDiagnosticsCollector();
+        var card = ResolveCardRewardChoiceCard(choice) ?? choice;
+        RuntimeCard runtimeCard;
+        try
+        {
+            runtimeCard = BuildRuntimeCard(
+                card,
+                index,
+                "event_selection_choices",
+                collector,
+                CardDescriptionContext.Unknown);
+        }
+        catch (Exception ex)
+        {
+            _logger?.Warn($"Event card selection extraction degraded for event_selection_choices[{index}]: {ex.GetBaseException().Message}");
+            runtimeCard = BuildFallbackRuntimeCard(card, index);
+        }
+
+        var label = string.IsNullOrWhiteSpace(runtimeCard.Name) ? $"事件卡牌 {index + 1}" : runtimeCard.Name.Trim();
+        return new EventOptionAnalysis(
+            Index: index,
+            Label: label,
+            Available: true,
+            IsContinue: false,
+            OptionObject: choice,
+            ButtonNode: null,
+            DetectionSource: "overlay_top.event_card_selection",
+            SelectionScreen: selectionScreen,
+            SelectionValue: card,
+            StableId: runtimeCard.CardId,
+            PreviewText: runtimeCard.Description);
+    }
+
+    private EventOptionAnalysis BuildEventOptionFromButton(object button, int index, TextDiagnosticsCollector? textDiagnostics)
+    {
+        var option = GetMemberValue(button, "Option");
+        var label = DescribeEventOptionLabel(button, option, index, textDiagnostics);
+        var isLocked = GetBoolean(option, "IsLocked") || !IsMenuNodeInteractable(button);
+        var isContinue = GetBoolean(option, "IsProceed") || IsEventContinueLabel(label);
+        return new EventOptionAnalysis(
+            Index: GetNullableInt(button, "Index") ?? index,
+            Label: label,
+            Available: !isLocked,
+            IsContinue: isContinue,
+            OptionObject: option,
+            ButtonNode: button,
+            DetectionSource: "event_layout.option_buttons");
+    }
+
+    private EventOptionAnalysis BuildEventOptionFromModel(object option, int index, TextDiagnosticsCollector? textDiagnostics)
+    {
+        var label = DescribeEventOptionLabel(button: null, option, index, textDiagnostics);
+        var isLocked = GetBoolean(option, "IsLocked");
+        var isContinue = GetBoolean(option, "IsProceed") || IsEventContinueLabel(label);
+        return new EventOptionAnalysis(
+            Index: index,
+            Label: label,
+            Available: !isLocked,
+            IsContinue: isContinue,
+            OptionObject: option,
+            ButtonNode: null,
+            DetectionSource: "event_model.current_options");
+    }
+
+    private string DescribeEventOptionLabel(object? button, object? option, int index, TextDiagnosticsCollector? textDiagnostics)
+    {
+        var label = NormalizeDescriptionText(ConvertToText(
+            GetMemberValue(button, "_label") ?? GetMemberValue(button, "Label") ?? GetMemberValue(button, "Text"),
+            $"event.options[{index}].button",
+            textDiagnostics,
+            "Text",
+            "Label",
+            "BbcodeText",
+            "ParsedText",
+            "AccessibilityName"));
+        label ??= NormalizeDescriptionText(ConvertDescriptionTemplateToText(
+            GetMemberValue(option, "Description"),
+            $"event.options[{index}].description",
+            textDiagnostics,
+            "Description",
+            "Text"));
+        label ??= NormalizeDescriptionText(ConvertDescriptionTemplateToText(
+            GetMemberValue(option, "Title"),
+            $"event.options[{index}].title",
+            textDiagnostics,
+            "Title",
+            "Text"));
+        if (string.IsNullOrWhiteSpace(label) && GetBoolean(option, "IsProceed"))
+        {
+            label = "继续";
+        }
+
+        return string.IsNullOrWhiteSpace(label) ? $"事件选项 {index + 1}" : label.Trim();
+    }
+
+    private string? ResolveEventTitle(object? eventLayout, object? eventModel, TextDiagnosticsCollector? textDiagnostics)
+    {
+        return NormalizeDescriptionText(ConvertToText(
+                   GetMemberValue(eventLayout, "_title") ?? GetMemberValue(eventLayout, "Title"),
+                   "event.title",
+                   textDiagnostics,
+                   "Text",
+                   "Label",
+                   "Title"))
+               ?? NormalizeDescriptionText(ConvertDescriptionTemplateToText(
+                   GetMemberValue(eventModel, "Title"),
+                   "event.title_model",
+                   textDiagnostics,
+                   "Title",
+                   "Text"));
+    }
+
+    private string? ResolveEventBody(object? eventLayout, object? eventModel, TextDiagnosticsCollector? textDiagnostics)
+    {
+        return NormalizeDescriptionText(ConvertToText(
+                   GetMemberValue(eventLayout, "_description") ?? GetMemberValue(eventLayout, "Description"),
+                   "event.body",
+                   textDiagnostics,
+                   "Text",
+                   "ParsedText",
+                   "BbcodeText"))
+               ?? NormalizeDescriptionText(ConvertDescriptionTemplateToText(
+                   GetMemberValue(eventModel, "Description"),
+                   "event.body_model",
+                   textDiagnostics,
+                   "Description",
+                   "Text"));
+    }
+
+    private bool LooksLikeEventCardSelectionScreen(object selectionScreen, TextDiagnosticsCollector? textDiagnostics)
+    {
+        var choices = FilterCardRewardSelectionChoices(ExtractCardRewardChoiceItems(selectionScreen));
+        if (choices.Count == 0)
+        {
+            return false;
+        }
+
+        var typeName = GetTypeName(selectionScreen) ?? string.Empty;
+        if (!HasCardSelectionHook(selectionScreen, choices))
+        {
+            return false;
+        }
+
+        return EventCardSelectionTypeHints.Any(hint => typeName.Contains(hint, StringComparison.OrdinalIgnoreCase)) ||
+               GetMemberValue(selectionScreen, "_enchantment") is not null ||
+               GetMemberValue(selectionScreen, "Enchantment") is not null ||
+               GetMemberValue(selectionScreen, "_enchantmentTitle") is not null ||
+               GetMemberValue(selectionScreen, "EnchantmentTitle") is not null ||
+               !string.IsNullOrWhiteSpace(ResolveEventCardSelectionBody(selectionScreen, textDiagnostics));
+    }
+
+    private string? ResolveEventCardSelectionTitle(object selectionScreen, TextDiagnosticsCollector? textDiagnostics)
+    {
+        return NormalizeDescriptionText(ConvertToText(
+                   GetMemberValue(selectionScreen, "_enchantmentTitle")
+                   ?? GetMemberValue(selectionScreen, "EnchantmentTitle")
+                   ?? GetMemberValue(selectionScreen, "_title")
+                   ?? GetMemberValue(selectionScreen, "Title"),
+                   "event.card_selection.title",
+                   textDiagnostics,
+                   "_enchantmentTitle",
+                   "EnchantmentTitle",
+                   "_title",
+                   "Title"));
+    }
+
+    private string? ResolveEventCardSelectionBody(object selectionScreen, TextDiagnosticsCollector? textDiagnostics)
+    {
+        var info = NormalizeDescriptionText(ConvertToText(
+            GetMemberValue(selectionScreen, "_infoLabel") ?? GetMemberValue(selectionScreen, "InfoLabel"),
+            "event.card_selection.info",
+            textDiagnostics,
+            "_infoLabel",
+            "InfoLabel",
+            "Text",
+            "ParsedText",
+            "BbcodeText"));
+        var description = NormalizeDescriptionText(ConvertToText(
+            GetMemberValue(selectionScreen, "_enchantmentDescription") ?? GetMemberValue(selectionScreen, "EnchantmentDescription"),
+            "event.card_selection.description",
+            textDiagnostics,
+            "_enchantmentDescription",
+            "EnchantmentDescription",
+            "Text",
+            "ParsedText",
+            "BbcodeText"));
+        return JoinDistinctDescriptionText(info, description);
+    }
+
+    private static string? JoinDistinctDescriptionText(params string?[] parts)
+    {
+        var normalized = parts
+            .Select(NormalizeDescriptionText)
+            .Where(part => !string.IsNullOrWhiteSpace(part))
+            .Select(part => part!)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        return normalized.Length == 0 ? null : string.Join("\n", normalized);
+    }
+
+    private static bool IsEventRoomVisible(object? eventRoom)
+    {
+        return GetBoolean(eventRoom, "Visible") ||
+               GetBoolean(eventRoom, "IsVisible") ||
+               InvokeBooleanMethod(eventRoom, "IsVisibleInTree");
+    }
+
+    private static bool HasEventProceedHook(object? eventRoom)
+    {
+        if (eventRoom is null)
+        {
+            return false;
+        }
+
+        return eventRoom.GetType().GetMethod("Proceed", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance) is not null;
+    }
+
+    private static bool IsEventContinueLabel(string label)
+    {
+        var normalized = NormalizeLabel(label);
+        return EventContinueLabelHints.Any(hint => normalized.Contains(hint, StringComparison.OrdinalIgnoreCase));
     }
 
     private List<object> ExtractCardRewardChoiceItems(object cardRewardScreen)
@@ -7278,6 +7795,40 @@ internal sealed class Sts2RuntimeReflectionReader
         int? Block,
         IReadOnlyList<string> Effects);
     private readonly record struct RewardOption(string Label, TextResolutionResult Resolution);
+    private readonly record struct EventOptionAnalysis(
+        int Index,
+        string Label,
+        bool Available,
+        bool IsContinue,
+        object? OptionObject,
+        object? ButtonNode,
+        string DetectionSource,
+        object? SelectionScreen = null,
+        object? SelectionValue = null,
+        string? StableId = null,
+        string? PreviewText = null);
+    private readonly record struct EventPhaseAnalysis(
+        bool TreatAsEvent,
+        object? EventRoom,
+        object? EventLayout,
+        object? EventModel,
+        string? Title,
+        string? Body,
+        IReadOnlyList<EventOptionAnalysis> Options,
+        bool ContinueAvailable,
+        string ContinueLabel,
+        string WindowKind,
+        string DetectionSource,
+        string? Diagnostics,
+        string? EventSubphase = null,
+        string? SelectionPrompt = null);
+    private readonly record struct EventCardSelectionContext(
+        object SelectionScreen,
+        string? Title,
+        string? Body,
+        string? Prompt,
+        string DetectionSource,
+        IReadOnlyList<EventOptionAnalysis> Options);
     private readonly record struct CombatSelectionContext(
         object SelectionScreen,
         string SelectionKind,
@@ -8794,6 +9345,302 @@ internal sealed class Sts2RuntimeReflectionReader
             ["button_label"] = buttonLabel,
             ["target_type"] = GetTypeName(buttonNode),
         });
+    }
+
+    private RuntimeActionResult ExecuteChooseEventOption(object runNode, object runState, ActionRequest request, LegalAction action)
+    {
+        var metadata = new Dictionary<string, object?>
+        {
+            ["action_type"] = "choose_event_option",
+        };
+        var analysis = AnalyzeEventPhase(runNode, runState, textDiagnostics: null);
+        if (!analysis.TreatAsEvent)
+        {
+            metadata["failure_stage"] = "phase_gate";
+            return new RuntimeActionResult(false, "Event window is not ready.", "runtime_not_ready", metadata);
+        }
+
+        if (!string.Equals(analysis.WindowKind, "event_choice", StringComparison.Ordinal))
+        {
+            metadata["window_kind"] = analysis.WindowKind;
+            return new RuntimeActionResult(false, "Event choice window changed before the action executed.", "selection_window_changed", metadata);
+        }
+
+        var optionIndex = GetNullableIntFromObject(GetDictionaryValue(action.Params, "option_index"));
+        if (optionIndex is null)
+        {
+            metadata["failure_stage"] = "action_validation";
+            return new RuntimeActionResult(false, "Action does not contain an option_index.", "invalid_action", metadata);
+        }
+
+        var requestedLabel = ConvertToText(GetDictionaryValue(action.Params, "option_label"));
+        metadata["option_index"] = optionIndex.Value;
+        if (!string.IsNullOrWhiteSpace(requestedLabel))
+        {
+            metadata["option_label"] = requestedLabel;
+        }
+
+        var option = analysis.Options.FirstOrDefault(candidate => candidate.Index == optionIndex.Value);
+        if (option == default)
+        {
+            return new RuntimeActionResult(false, "Event option is no longer available.", "stale_action", metadata);
+        }
+
+        if (option.IsContinue)
+        {
+            metadata["resolved_window_kind"] = analysis.WindowKind;
+            return new RuntimeActionResult(false, "Event option turned into a continue action.", "selection_window_changed", metadata);
+        }
+
+        if (!string.IsNullOrWhiteSpace(requestedLabel) &&
+            !string.Equals(option.Label, requestedLabel, StringComparison.OrdinalIgnoreCase))
+        {
+            metadata["resolved_option_label"] = option.Label;
+            return new RuntimeActionResult(false, "Event option label changed since the action was generated.", "stale_action", metadata);
+        }
+
+        var requestedCardId = ConvertToText(GetDictionaryValue(action.Params, "card_id"));
+        if (!string.IsNullOrWhiteSpace(requestedCardId))
+        {
+            metadata["card_id"] = requestedCardId;
+        }
+
+        if (!option.Available)
+        {
+            return new RuntimeActionResult(false, "Event option is not clickable.", "not_clickable", metadata);
+        }
+
+        if (option.SelectionScreen is not null)
+        {
+            return ExecuteEventCardSelectionOption(option, requestedCardId, metadata);
+        }
+
+        if (analysis.EventRoom is not null &&
+            option.OptionObject is not null &&
+            TryInvokeFirstCompatibleMethod(
+                analysis.EventRoom,
+                new[] { "OptionButtonClicked" },
+                new[]
+                {
+                    new object?[] { option.OptionObject, option.Index },
+                    new object?[] { option.OptionObject },
+                },
+                out var handler))
+        {
+            metadata["runtime_handler"] = $"event_room.{handler}";
+            metadata["resolved_option_label"] = option.Label;
+            return new RuntimeActionResult(true, "Selected event option.", metadata: metadata);
+        }
+
+        if (option.ButtonNode is not null && TryActivateMenuNode(option.ButtonNode, out var buttonHandler))
+        {
+            metadata["runtime_handler"] = buttonHandler;
+            metadata["resolved_option_label"] = option.Label;
+            return new RuntimeActionResult(true, "Selected event option.", metadata: metadata);
+        }
+
+        if (option.OptionObject is not null &&
+            TryInvokeFirstCompatibleMethod(option.OptionObject, new[] { "Chosen" }, new[] { Array.Empty<object?>() }, out handler))
+        {
+            metadata["runtime_handler"] = $"event_option.{handler}";
+            metadata["resolved_option_label"] = option.Label;
+            return new RuntimeActionResult(true, "Selected event option.", metadata: metadata);
+        }
+
+        return new RuntimeActionResult(false, "Event option hooks are not available.", "runtime_incompatible", metadata);
+    }
+
+    private RuntimeActionResult ExecuteEventCardSelectionOption(
+        EventOptionAnalysis option,
+        string? requestedCardId,
+        Dictionary<string, object?> metadata)
+    {
+        var selectionScreen = option.SelectionScreen;
+        if (selectionScreen is null)
+        {
+            return new RuntimeActionResult(false, "Event card selection screen is no longer available.", "selection_window_changed", metadata);
+        }
+        var liveSelectionScreen = selectionScreen;
+
+        if (!string.IsNullOrWhiteSpace(option.StableId))
+        {
+            metadata["resolved_card_id"] = option.StableId;
+        }
+
+        if (!string.IsNullOrWhiteSpace(requestedCardId) &&
+            !string.Equals(option.StableId, requestedCardId, StringComparison.Ordinal))
+        {
+            return new RuntimeActionResult(false, "Event card selection target changed since the action was generated.", "stale_action", metadata);
+        }
+
+        var choice = option.OptionObject;
+        var card = option.SelectionValue ?? (choice is null ? null : ResolveCardRewardChoiceCard(choice));
+        if (card is null && choice is null)
+        {
+            return new RuntimeActionResult(false, "Event card selection target is no longer available.", "stale_action", metadata);
+        }
+
+        var handlers = new List<(object Target, string Label)>();
+        if (selectionScreen is not null)
+        {
+            handlers.Add((selectionScreen, "event_card_selection_screen"));
+        }
+
+        if (choice is not null)
+        {
+            handlers.Add((choice, "event_card_selection_choice"));
+        }
+
+        if (card is not null && !ReferenceEquals(card, choice))
+        {
+            handlers.Add((card, "event_card_selection_card"));
+        }
+
+        var argSets = new List<object?[]>
+        {
+            Array.Empty<object?>(),
+            new object?[] { choice },
+            new object?[] { card },
+            new object?[] { option.Index },
+            new object?[] { choice, option.Index },
+            new object?[] { card, option.Index },
+        };
+
+        foreach (var handler in handlers)
+        {
+            if (!TryInvokeFirstCompatibleMethod(handler.Target, CardRewardChoiceSelectMethodNames, argSets, out var methodName))
+            {
+                continue;
+            }
+
+            var completionHandler = CompleteEventCardSelectionIfNeeded(liveSelectionScreen);
+            metadata["runtime_handler"] = string.IsNullOrWhiteSpace(completionHandler)
+                ? $"{handler.Label}.{methodName}"
+                : $"{handler.Label}.{methodName}+{completionHandler}";
+            metadata["resolved_option_label"] = option.Label;
+            metadata["event_subphase"] = "card_selection";
+            return new RuntimeActionResult(true, "Selected event card option.", metadata: metadata);
+        }
+
+        return new RuntimeActionResult(false, "Event card selection hooks are not available.", "runtime_incompatible", metadata);
+    }
+
+    private string? CompleteEventCardSelectionIfNeeded(object selectionScreen)
+    {
+        TryInvokeFirstCompatibleMethod(
+            selectionScreen,
+            new[] { "CheckIfSelectionComplete", "RefreshConfirmButtonVisibility" },
+            new[] { Array.Empty<object?>() },
+            out _);
+
+        var confirmButtons = new[]
+        {
+            GetMemberValue(selectionScreen, "_confirmButton"),
+            GetMemberValue(selectionScreen, "ConfirmButton"),
+            GetMemberValue(selectionScreen, "_singlePreviewConfirmButton"),
+            GetMemberValue(selectionScreen, "SinglePreviewConfirmButton"),
+            GetMemberValue(selectionScreen, "_multiPreviewConfirmButton"),
+            GetMemberValue(selectionScreen, "MultiPreviewConfirmButton"),
+        };
+        foreach (var confirmButton in confirmButtons.Where(button => button is not null))
+        {
+            if (TryInvokeFirstCompatibleMethod(
+                    selectionScreen,
+                    new[] { "ConfirmSelection" },
+                    new[]
+                    {
+                        new object?[] { confirmButton },
+                        new object?[] { null },
+                    },
+                    out var confirmMethod))
+            {
+                return $"event_card_selection_screen.{confirmMethod}";
+            }
+
+            if (TryActivateMenuNode(confirmButton!, out var buttonHandler))
+            {
+                return buttonHandler;
+            }
+        }
+
+        return null;
+    }
+
+    private RuntimeActionResult ExecuteContinueEvent(object runNode, object runState, ActionRequest request, LegalAction action)
+    {
+        var metadata = new Dictionary<string, object?>
+        {
+            ["action_type"] = "continue_event",
+        };
+        var analysis = AnalyzeEventPhase(runNode, runState, textDiagnostics: null);
+        if (!analysis.TreatAsEvent)
+        {
+            metadata["failure_stage"] = "phase_gate";
+            return new RuntimeActionResult(false, "Event continue window is not ready.", "runtime_not_ready", metadata);
+        }
+
+        if (!analysis.ContinueAvailable)
+        {
+            metadata["window_kind"] = analysis.WindowKind;
+            return new RuntimeActionResult(false, "Event continue action is no longer available.", "stale_action", metadata);
+        }
+
+        if (string.Equals(analysis.WindowKind, "event_choice", StringComparison.Ordinal))
+        {
+            metadata["window_kind"] = analysis.WindowKind;
+            return new RuntimeActionResult(false, "Event still requires selecting an option before continuing.", "selection_window_changed", metadata);
+        }
+
+        var requestedLabel = ConvertToText(GetDictionaryValue(action.Params, "button_label"));
+        if (!string.IsNullOrWhiteSpace(requestedLabel))
+        {
+            metadata["button_label"] = requestedLabel;
+        }
+
+        var continueOption = analysis.Options.FirstOrDefault(option => option.IsContinue && option.Available);
+        if (continueOption != default)
+        {
+            if (!string.IsNullOrWhiteSpace(requestedLabel) &&
+                !string.Equals(continueOption.Label, requestedLabel, StringComparison.OrdinalIgnoreCase))
+            {
+                metadata["resolved_button_label"] = continueOption.Label;
+                return new RuntimeActionResult(false, "Event continue label changed since the action was generated.", "stale_action", metadata);
+            }
+
+            if (analysis.EventRoom is not null &&
+                continueOption.OptionObject is not null &&
+                TryInvokeFirstCompatibleMethod(
+                    analysis.EventRoom,
+                    new[] { "OptionButtonClicked" },
+                    new[]
+                    {
+                        new object?[] { continueOption.OptionObject, continueOption.Index },
+                        new object?[] { continueOption.OptionObject },
+                    },
+                    out var optionHandler))
+            {
+                metadata["runtime_handler"] = $"event_room.{optionHandler}";
+                metadata["resolved_button_label"] = continueOption.Label;
+                return new RuntimeActionResult(true, "Continued event.", metadata: metadata);
+            }
+
+            if (continueOption.ButtonNode is not null && TryActivateMenuNode(continueOption.ButtonNode, out var buttonHandler))
+            {
+                metadata["runtime_handler"] = buttonHandler;
+                metadata["resolved_button_label"] = continueOption.Label;
+                return new RuntimeActionResult(true, "Continued event.", metadata: metadata);
+            }
+        }
+
+        if (analysis.EventRoom is not null &&
+            TryInvokeFirstCompatibleMethod(analysis.EventRoom, new[] { "Proceed" }, new[] { Array.Empty<object?>() }, out var handler))
+        {
+            metadata["runtime_handler"] = $"event_room.{handler}";
+            metadata["resolved_button_label"] = analysis.ContinueLabel;
+            return new RuntimeActionResult(true, "Continued event.", metadata: metadata);
+        }
+
+        return new RuntimeActionResult(false, "Event continue hooks are not available.", "runtime_incompatible", metadata);
     }
 
     private RuntimeActionResult ExecuteChooseMapNode(ActionRequest request, LegalAction action)

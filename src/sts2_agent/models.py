@@ -9,6 +9,7 @@ class Phase(StrEnum):
     COMBAT = "combat"
     REWARD = "reward"
     MAP = "map"
+    EVENT = "event"
     MENU = "menu"
     TERMINAL = "terminal"
     UNKNOWN = "unknown"
@@ -22,6 +23,8 @@ class ActionType(StrEnum):
     CHOOSE_REWARD = "choose_reward"
     ADVANCE_REWARD = "advance_reward"
     CHOOSE_MAP_NODE = "choose_map_node"
+    CHOOSE_EVENT_OPTION = "choose_event_option"
+    CONTINUE_EVENT = "continue_event"
     USE_POTION = "use_potion"
     SKIP_REWARD = "skip_reward"
 

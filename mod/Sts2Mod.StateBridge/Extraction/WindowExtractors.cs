@@ -412,6 +412,28 @@ public sealed class MapWindowExtractor : WindowExtractorBase
     }
 }
 
+public sealed class EventWindowExtractor : WindowExtractorBase
+{
+    public override string Phase => DecisionPhase.Event;
+
+    protected override IReadOnlyDictionary<string, object?> BuildMetadata(RuntimeWindowContext context)
+    {
+        var metadata = new Dictionary<string, object?>(context.Metadata)
+        {
+            ["event_option_count"] = context.Metadata.TryGetValue("event_option_count", out var optionCount) ? optionCount : context.Actions.Count(action => action.Type == "choose_event_option"),
+            ["event_continue_available"] = context.Metadata.TryGetValue("event_continue_available", out var continueAvailable)
+                ? continueAvailable
+                : context.Actions.Any(action => action.Type == "continue_event"),
+            ["supports_targeting"] = false,
+        };
+        if (!metadata.ContainsKey("window_kind"))
+        {
+            metadata["window_kind"] = "event_transition";
+        }
+        return metadata;
+    }
+}
+
 public sealed class MenuWindowExtractor : WindowExtractorBase
 {
     public override string Phase => DecisionPhase.Menu;

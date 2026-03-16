@@ -112,6 +112,8 @@ class ChatCompletionsPolicy:
             "若不确定，优先返回 halt=true 或选择 skip_reward（并在 reason 说明原因）。"
             "当 snapshot.phase=map 时，只能在 choose_map_node 中选择一个可达节点；"
             "若没有足够信息判断路线，请优先选择更保守的普通战斗节点。"
+            "当 snapshot.phase=event 时，你需要结合事件标题、正文和 event_options，在 choose_event_option 或 continue_event 中做选择；"
+            "若 window_kind=event_continue，优先只考虑 continue_event。"
             "你必须严格遵守 payload.game_rules 中列出的基础通用规则，尤其不要混淆'回合结束时'与'战斗结束时'。"
         )
         user_payload = {
@@ -359,6 +361,14 @@ class ChatCompletionsPolicy:
                     "reward_subphase",
                     "map_ready",
                     "reward_pending",
+                    "event_title",
+                    "event_body",
+                    "event_subphase",
+                    "event_selection_prompt",
+                    "event_options",
+                    "event_option_count",
+                    "event_continue_available",
+                    "event_continue_label",
                 )
                 if key in snapshot.metadata
             }

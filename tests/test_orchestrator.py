@@ -714,6 +714,105 @@ class OrchestratorTests(unittest.TestCase):
             self.assertIn("map", {record["step_kind"] for record in records})
             self.assertEqual(records[-1]["step_kind"], "combat_resume")
 
+    def test_event_mode_halt_stops_without_writes(self) -> None:
+        bridge = SequencedCombatBridge(
+            [
+                make_window(
+                    phase="event",
+                    actions=[{"type": "choose_event_option", "label": "献祭", "params": {"option_index": 0}}],
+                    metadata={"window_kind": "event_choice", "event_title": "神秘神龛"},
+                ),
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orchestrator = AutoplayOrchestrator(
+                bridge=bridge,
+                policy=FirstLegalActionPolicy(),
+                config=OrchestratorConfig(trace_dir=tmpdir, stop_after_player_turn=False, event_mode="halt"),
+            )
+            summary = orchestrator.run(scenario="live")
+
+            self.assertFalse(summary.completed)
+            self.assertTrue(summary.interrupted)
+            self.assertEqual(summary.ended_by, "event_phase_reached")
+            self.assertEqual(bridge.submissions, [])
+
+    def test_event_mode_safe_default_can_progress_to_map(self) -> None:
+        bridge = SequencedCombatBridge(
+            [
+                make_window(
+                    phase="event",
+                    actions=[
+                        {"type": "choose_event_option", "label": "献祭", "params": {"option_index": 0}},
+                        {"type": "choose_event_option", "label": "离开", "params": {"option_index": 1}},
+                    ],
+                    metadata={
+                        "window_kind": "event_choice",
+                        "event_title": "神秘神龛",
+                        "event_option_count": 2,
+                    },
+                ),
+                make_window(
+                    phase="event",
+                    actions=[
+                        {
+                            "type": "choose_event_option",
+                            "label": "打击",
+                            "params": {"option_index": 0, "card_id": "event-card-0"},
+                        },
+                        {
+                            "type": "choose_event_option",
+                            "label": "双重打击",
+                            "params": {"option_index": 1, "card_id": "event-card-1"},
+                        },
+                    ],
+                    metadata={
+                        "window_kind": "event_choice",
+                        "event_subphase": "card_selection",
+                        "event_title": "神秘神龛",
+                        "event_selection_prompt": "选择一张攻击牌附魔。",
+                        "event_option_count": 2,
+                    },
+                ),
+                make_window(
+                    phase="event",
+                    actions=[{"type": "continue_event", "label": "继续", "params": {"button_label": "继续"}}],
+                    metadata={
+                        "window_kind": "event_continue",
+                        "event_title": "神秘神龛",
+                        "event_continue_available": True,
+                    },
+                ),
+                make_window(
+                    phase="map",
+                    actions=[{"type": "choose_map_node", "label": "Choose Monster@1,2", "params": {"node": "Monster@1,2"}}],
+                    metadata={"window_kind": "map_ready"},
+                    map_nodes=["Monster@1,2"],
+                ),
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orchestrator = AutoplayOrchestrator(
+                bridge=bridge,
+                policy=FirstLegalActionPolicy(),
+                config=OrchestratorConfig(
+                    trace_dir=tmpdir,
+                    stop_after_player_turn=False,
+                    event_mode="safe-default",
+                    map_mode="halt",
+                    max_steps=6,
+                ),
+            )
+            summary = orchestrator.run(scenario="live")
+
+            self.assertTrue(summary.completed)
+            self.assertFalse(summary.interrupted)
+            self.assertEqual(summary.ended_by, "map_phase_reached")
+            self.assertEqual(bridge.submissions, ["choose_event_option", "choose_event_option", "continue_event"])
+            records = [json.loads(line) for line in Path(summary.trace_path).read_text(encoding="utf-8").splitlines()]
+            self.assertIn("event_choice", {record["step_kind"] for record in records})
+            self.assertIn("event_continue", {record["step_kind"] for record in records})
+
     def test_battle_mode_can_advance_reward_screen_to_map(self) -> None:
         bridge = SequencedCombatBridge(
             [

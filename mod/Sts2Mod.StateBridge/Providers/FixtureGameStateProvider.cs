@@ -11,10 +11,12 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
     private readonly BridgeSessionState _sessionState;
     private readonly Dictionary<string, RuntimeWindowContext> _windows;
     private readonly Dictionary<string, RuntimeWindowContext> _rewardWindows;
+    private readonly Dictionary<string, RuntimeWindowContext> _eventWindows;
     private readonly Dictionary<string, RuntimeWindowContext> _menuWindows;
     private readonly Dictionary<string, IWindowExtractor> _extractors;
     private string _currentPhase = DecisionPhase.Combat;
     private int _rewardStage;
+    private int _eventStage;
     private int _menuStage;
 
     public FixtureGameStateProvider(BridgeOptions options)
@@ -26,11 +28,13 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
             new CombatWindowExtractor(),
             new RewardWindowExtractor(),
             new MapWindowExtractor(),
+            new EventWindowExtractor(),
             new MenuWindowExtractor(),
             new TerminalWindowExtractor(),
         }.ToDictionary(extractor => extractor.Phase, StringComparer.OrdinalIgnoreCase);
         _windows = CreateWindows();
         _rewardWindows = CreateRewardWindows();
+        _eventWindows = CreateEventWindows();
         _menuWindows = CreateMenuWindows();
     }
 
@@ -101,6 +105,14 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                 _currentPhase = DecisionPhase.Reward;
                 _rewardStage = 0;
                 break;
+            case "choose_event_option":
+                _eventStage = _eventStage == 0 ? 1 : 2;
+                _currentPhase = DecisionPhase.Event;
+                break;
+            case "continue_event":
+                _eventStage = 0;
+                _currentPhase = DecisionPhase.Map;
+                break;
             case "choose_reward":
                 if (string.Equals(_currentPhase, DecisionPhase.Reward, StringComparison.OrdinalIgnoreCase) && _rewardStage == 0)
                 {
@@ -149,6 +161,13 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
         {
             var value when string.Equals(value, DecisionPhase.Reward, StringComparison.OrdinalIgnoreCase)
                 => _rewardStage == 0 ? _rewardWindows["reward_choice"] : _rewardWindows["reward_card_selection"],
+            var value when string.Equals(value, DecisionPhase.Event, StringComparison.OrdinalIgnoreCase)
+                => _eventStage switch
+                {
+                    0 => _eventWindows["event_choice"],
+                    1 => _eventWindows["event_card_selection"],
+                    _ => _eventWindows["event_continue"],
+                },
             var value when string.Equals(value, DecisionPhase.Menu, StringComparison.OrdinalIgnoreCase)
                 => _menuStage == 0 ? _menuWindows["main_menu"] : _menuWindows["new_run_setup"],
             _ => _windows[phase],
@@ -209,6 +228,7 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
             "combat" => DecisionPhase.Combat,
             "reward" => DecisionPhase.Reward,
             "map" => DecisionPhase.Map,
+            "event" => DecisionPhase.Event,
             "menu" => DecisionPhase.Menu,
             "terminal" => DecisionPhase.Terminal,
             _ => _currentPhase,
@@ -682,6 +702,217 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                         CurrentCoord: "0,0",
                         CurrentNodeType: "monster",
                         ReachableNodes: new[] { "monster_left", "elite_center", "question_right" },
+                        Source: "fixture"))),
+        };
+    }
+
+    private static Dictionary<string, RuntimeWindowContext> CreateEventWindows()
+    {
+        var player = new RuntimePlayerState(
+            Hp: 68,
+            MaxHp: 80,
+            Block: 0,
+            Energy: 3,
+            Gold: 107,
+            Hand: Array.Empty<RuntimeCard>(),
+            DrawPile: 12,
+            DiscardPile: 2,
+            ExhaustPile: 0,
+            Relics: new[]
+            {
+                new RuntimeRelicState("Burning Blood", "At the end of combat, heal 6 HP.", "relic_burning_blood"),
+            },
+            Potions: Array.Empty<RuntimePotionState>(),
+            PotionCapacity: 2,
+            Powers: Array.Empty<RuntimePowerState>());
+
+        var eventOptions = new[]
+        {
+            new Dictionary<string, object?>
+            {
+                ["option_index"] = 0,
+                ["label"] = "献祭：失去6点生命，获得150金币。",
+                ["available"] = true,
+                ["disabled"] = false,
+                ["is_continue"] = false,
+            },
+            new Dictionary<string, object?>
+            {
+                ["option_index"] = 1,
+                ["label"] = "离开：什么都不做。",
+                ["available"] = true,
+                ["disabled"] = false,
+                ["is_continue"] = false,
+            },
+        };
+        var eventCardOptions = new[]
+        {
+            new Dictionary<string, object?>
+            {
+                ["option_index"] = 0,
+                ["label"] = "打击",
+                ["available"] = true,
+                ["disabled"] = false,
+                ["is_continue"] = false,
+                ["card_id"] = "event-card-0",
+                ["preview_text"] = "造成6点**伤害**。",
+            },
+            new Dictionary<string, object?>
+            {
+                ["option_index"] = 1,
+                ["label"] = "双重打击",
+                ["available"] = true,
+                ["disabled"] = false,
+                ["is_continue"] = false,
+                ["card_id"] = "event-card-1",
+                ["preview_text"] = "造成5点**伤害**两次。",
+            },
+        };
+
+        return new Dictionary<string, RuntimeWindowContext>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["event_choice"] = new RuntimeWindowContext(
+                DecisionPhase.Event,
+                player,
+                Array.Empty<RuntimeEnemyState>(),
+                Array.Empty<string>(),
+                Array.Empty<string>(),
+                Terminal: false,
+                Metadata: new Dictionary<string, object?>
+                {
+                    ["room_type"] = "event",
+                    ["window_kind"] = "event_choice",
+                    ["event_title"] = "神秘神龛",
+                    ["event_body"] = "你在废墟中发现一座古老神龛，似乎在呼唤你献上些许代价。",
+                    ["event_options"] = eventOptions,
+                    ["event_option_count"] = eventOptions.Length,
+                    ["event_continue_available"] = false,
+                    ["event_detection_source"] = "fixture.event_choice",
+                },
+                Actions: new[]
+                {
+                    new RuntimeActionDefinition(
+                        "choose_event_option",
+                        "选择 献祭：失去6点生命，获得150金币。",
+                        new Dictionary<string, object?>
+                        {
+                            ["option_index"] = 0,
+                            ["option_label"] = "献祭：失去6点生命，获得150金币。",
+                        }),
+                    new RuntimeActionDefinition(
+                        "choose_event_option",
+                        "选择 离开：什么都不做。",
+                        new Dictionary<string, object?>
+                        {
+                            ["option_index"] = 1,
+                            ["option_label"] = "离开：什么都不做。",
+                        }),
+                },
+                RunState: new RuntimeRunState(
+                    Act: 1,
+                    Floor: 2,
+                    CurrentRoomType: "EventRoom",
+                    CurrentLocationType: "Act1",
+                    CurrentActIndex: 0,
+                    AscensionLevel: 0,
+                    Map: new RuntimeRunMapState(
+                        CurrentCoord: "1,0",
+                        CurrentNodeType: "event",
+                        ReachableNodes: new[] { "monster_left", "event_center", "shop_right" },
+                        Source: "fixture"))),
+            ["event_continue"] = new RuntimeWindowContext(
+                DecisionPhase.Event,
+                player,
+                Array.Empty<RuntimeEnemyState>(),
+                Array.Empty<string>(),
+                Array.Empty<string>(),
+                Terminal: false,
+                Metadata: new Dictionary<string, object?>
+                {
+                    ["room_type"] = "event",
+                    ["window_kind"] = "event_continue",
+                    ["event_title"] = "神秘神龛",
+                    ["event_body"] = "神龛接受了你的决定，空气重新恢复平静。",
+                    ["event_options"] = Array.Empty<object>(),
+                    ["event_option_count"] = 0,
+                    ["event_continue_available"] = true,
+                    ["event_continue_label"] = "继续",
+                    ["event_detection_source"] = "fixture.event_continue",
+                },
+                Actions: new[]
+                {
+                    new RuntimeActionDefinition(
+                        "continue_event",
+                        "继续",
+                        new Dictionary<string, object?>
+                        {
+                            ["button_label"] = "继续",
+                        }),
+                },
+                RunState: new RuntimeRunState(
+                    Act: 1,
+                    Floor: 2,
+                    CurrentRoomType: "EventRoom",
+                    CurrentLocationType: "Act1",
+                    CurrentActIndex: 0,
+                    AscensionLevel: 0,
+                    Map: new RuntimeRunMapState(
+                        CurrentCoord: "1,0",
+                        CurrentNodeType: "event",
+                        ReachableNodes: new[] { "monster_left", "event_center", "shop_right" },
+                        Source: "fixture"))),
+            ["event_card_selection"] = new RuntimeWindowContext(
+                DecisionPhase.Event,
+                player,
+                Array.Empty<RuntimeEnemyState>(),
+                Array.Empty<string>(),
+                Array.Empty<string>(),
+                Terminal: false,
+                Metadata: new Dictionary<string, object?>
+                {
+                    ["room_type"] = "event",
+                    ["window_kind"] = "event_choice",
+                    ["event_subphase"] = "card_selection",
+                    ["event_title"] = "神秘神龛",
+                    ["event_body"] = "选择一张攻击牌附魔。附魔后，它在本场战斗中造成额外伤害。",
+                    ["event_selection_prompt"] = "选择一张攻击牌附魔。",
+                    ["event_options"] = eventCardOptions,
+                    ["event_option_count"] = eventCardOptions.Length,
+                    ["event_continue_available"] = false,
+                    ["event_detection_source"] = "fixture.event_card_selection",
+                },
+                Actions: new[]
+                {
+                    new RuntimeActionDefinition(
+                        "choose_event_option",
+                        "选择 打击",
+                        new Dictionary<string, object?>
+                        {
+                            ["option_index"] = 0,
+                            ["option_label"] = "打击",
+                            ["card_id"] = "event-card-0",
+                        }),
+                    new RuntimeActionDefinition(
+                        "choose_event_option",
+                        "选择 双重打击",
+                        new Dictionary<string, object?>
+                        {
+                            ["option_index"] = 1,
+                            ["option_label"] = "双重打击",
+                            ["card_id"] = "event-card-1",
+                        }),
+                },
+                RunState: new RuntimeRunState(
+                    Act: 1,
+                    Floor: 2,
+                    CurrentRoomType: "EventRoom",
+                    CurrentLocationType: "Act1",
+                    CurrentActIndex: 0,
+                    AscensionLevel: 0,
+                    Map: new RuntimeRunMapState(
+                        CurrentCoord: "1,0",
+                        CurrentNodeType: "event",
+                        ReachableNodes: new[] { "monster_left", "event_center", "shop_right" },
                         Source: "fixture"))),
         };
     }

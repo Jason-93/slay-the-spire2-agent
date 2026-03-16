@@ -48,6 +48,7 @@ internal static class InGameRuntimeCoordinator
                 new CombatWindowExtractor(),
                 new RewardWindowExtractor(),
                 new MapWindowExtractor(),
+                new EventWindowExtractor(),
                 new MenuWindowExtractor(),
                 new TerminalWindowExtractor(),
             }.ToDictionary(extractor => extractor.Phase, StringComparer.OrdinalIgnoreCase);
@@ -341,6 +342,13 @@ internal static class InGameRuntimeCoordinator
         if ((string.Equals(actionType, "choose_combat_card", StringComparison.OrdinalIgnoreCase) ||
              string.Equals(actionType, "cancel_combat_selection", StringComparison.OrdinalIgnoreCase)) &&
             !string.Equals(windowKind, "combat_card_selection", StringComparison.OrdinalIgnoreCase))
+        {
+            return "selection_window_changed";
+        }
+
+        if ((string.Equals(actionType, "choose_event_option", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(actionType, "continue_event", StringComparison.OrdinalIgnoreCase)) &&
+            !string.Equals(currentWindow.Snapshot.Phase, DecisionPhase.Event, StringComparison.OrdinalIgnoreCase))
         {
             return "selection_window_changed";
         }

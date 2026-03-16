@@ -192,6 +192,7 @@ def run_validation(args: argparse.Namespace) -> int:
             auto_end_turn_when_only_end_turn=args.auto_end_turn_when_only_end_turn,
             reward_mode=args.reward_mode,
             map_mode=args.map_mode,
+            event_mode=args.event_mode,
             max_turns_per_battle=args.max_turns_per_battle,
             max_total_actions=args.max_total_actions,
             max_consecutive_failures=args.max_consecutive_failures,
@@ -278,6 +279,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-tokens", type=int, default=256)
     parser.add_argument("--reward-mode", choices=("halt", "skip", "skip-only", "safe-default", "llm"), default="safe-default")
     parser.add_argument("--map-mode", choices=("halt", "safe-default", "llm"), default="safe-default")
+    parser.add_argument("--event-mode", choices=("halt", "safe-default", "llm"), default="safe-default")
     parser.add_argument("--stop-after-next-combat", action="store_true")
     parser.set_defaults(auto_end_turn_when_only_end_turn=True)
     parser.add_argument("--auto-end-turn-when-only-end-turn", dest="auto_end_turn_when_only_end_turn", action="store_true")
