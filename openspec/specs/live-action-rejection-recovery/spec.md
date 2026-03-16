@@ -1,7 +1,7 @@
 # live-action-rejection-recovery Specification
 
 ## Purpose
-TBD - created by archiving change reduce-live-action-rejections. Update Purpose after archive.
+定义 live battle 中动作拒绝分类、提交前稳定性门控与有界恢复策略，减少时序竞争态导致的 reject，并为 trace 与诊断保留明确恢复语义。
 ## Requirements
 ### Requirement: 系统必须在 live battle 中对动作拒绝执行稳定分类
 系统 MUST 在 live runtime autoplay 中对动作拒绝、窗口失配和提交前拦截执行统一分类，至少区分 `recoverable_stale`、`recoverable_timing`、`invalid_policy_decision` 与 `hard_runtime_reject` 四类。分类结果 MUST 能同时进入 trace、summary 或等效 diagnostics，而不能只保留底层异常文本。
@@ -28,4 +28,3 @@ TBD - created by archiving change reduce-live-action-rejections. Update Purpose 
 - **WHEN** 当前快照仍处于额外选牌、窗口切换或等效不稳定边缘态
 - **THEN** 系统 MUST 先重新获取 `snapshot/actions`
 - **THEN** 只有在重新观测后窗口稳定，系统 MUST 才能继续提交动作
-

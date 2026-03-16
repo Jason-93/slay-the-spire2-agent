@@ -1,7 +1,7 @@
 # card-description-rendering-glossary Specification
 
 ## Purpose
-TBD - created by archiving change card-description-rendering-glossary. Update Purpose after archive.
+定义 cards、powers 等说明对象的模板文本、渲染文本、变量槽位与 glossary 锚点协议，确保 agent 能稳定读取可解释的技能描述并为后续知识扩展预留结构。
 ## Requirements
 ### Requirement: 描述 schema 必须区分模板文本、渲染文本与变量槽位
 系统 MUST 为卡牌、powers 或等效文本对象提供分层描述字段，至少覆盖原始模板文本、当前战斗下的渲染文本与结构化变量槽位。调用方 MUST 能区分“这是模板文本”还是“这是当前已渲染的事实文本”，而不是继续依赖单个模糊 `description` 字段猜测。
@@ -18,4 +18,3 @@ TBD - created by archiving change card-description-rendering-glossary. Update Pu
 - **WHEN** snapshot 中某张卡牌或 power 的渲染文本包含“格挡”
 - **THEN** 对应对象 MUST 同时携带可稳定识别“格挡”语义的 glossary 锚点
 - **THEN** 上层策略 MUST 不需要只靠中文字符串猜测它的含义
-

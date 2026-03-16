@@ -1,7 +1,7 @@
 # mod-state-export Specification
 
 ## Purpose
-TBD - created by archiving change sts2-mod-state-bridge. Update Purpose after archive.
+定义 STS2 mod 导出的统一决策窗口状态与 richer runtime schema，覆盖 combat、reward、map 等关键 phase，确保外部 agent 能稳定读取实时游戏事实与规划上下文。
 ## Requirements
 ### Requirement: Mod 必须导出统一且可扩展的决策窗口状态快照
 系统 MUST 在 Slay the Spire 2 运行过程中识别当前决策窗口，并导出统一结构的状态快照，至少覆盖 `combat`、`reward`、`map`、`terminal` 四类窗口，并包含 `session_id`、`decision_id`、`state_version`、`phase` 等元数据。对于 `combat` 快照，mod MUST 在保持现有玩家、敌人、牌区与窗口元数据的同时，支持追加 richer state 字段，例如卡牌描述、升级态、目标类型、traits、结构化敌方 intent、玩家/敌方 powers，以及最小 `run_state` 上下文；新增字段 MUST 以追加式、可选字段方式导出，避免破坏现有消费方。

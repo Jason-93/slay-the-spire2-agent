@@ -1,7 +1,7 @@
 # mod-pck-packaging Specification
 
 ## Purpose
-TBD - created by archiving change package-sts2-mod-pck. Update Purpose after archive.
+定义 STS2 mod 的 `.pck` 打包流程、产物布局与最小验证要求，确保构建结果可直接安装到游戏 `mods/` 目录并被 mod loader 发现。
 ## Requirements
 ### Requirement: 构建流程必须产出可安装的 STS2 mod `.pck`
 系统 MUST 为 `Sts2Mod.StateBridge` 提供自动化 `.pck` 打包流程，并在一次标准构建后产出可直接复制到 STS2 `mods/` 目录的 pack 文件。
@@ -26,4 +26,3 @@ TBD - created by archiving change package-sts2-mod-pck. Update Purpose after arc
 - **WHEN** 打包流程成功结束
 - **THEN** 系统 MUST 输出生成文件路径或等效的结构化结果
 - **THEN** 文档或脚本 MUST 说明如何验证产物可用于安装到游戏目录
-

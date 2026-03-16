@@ -1,7 +1,7 @@
 # event-decision-bridge Specification
 
 ## Purpose
-TBD - created by archiving change event-decision-bridge. Update Purpose after archive.
+定义 event 房间的结构化状态导出与继续、离开、选择选项等动作桥接语义，确保 agent 能在 run 内稳定处理事件界面决策。
 ## Requirements
 ### Requirement: event 窗口必须导出结构化状态与正文语义
 当玩家进入 run 内 event 房间且界面存在可读事件内容时，bridge MUST 将当前窗口导出为 `snapshot.phase="event"`，并在稳定字段中暴露 event 的标题、正文、选项摘要与窗口诊断。bridge MUST 区分至少三类 event 子窗口：可选项窗口、继续/离开窗口、以及短暂过渡窗口。
@@ -42,4 +42,3 @@ TBD - created by archiving change event-decision-bridge. Update Purpose after ar
 - **WHEN** 某个事件选项因条件不足、动画中或运行时不可点击而不能真实执行
 - **THEN** bridge MUST NOT 将其导出为可执行的 `choose_event_option`
 - **THEN** bridge MUST 在 `snapshot.metadata` 或日志中留下对应 diagnostics
-

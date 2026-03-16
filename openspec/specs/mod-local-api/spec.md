@@ -1,7 +1,7 @@
 # mod-local-api Specification
 
 ## Purpose
-TBD - created by archiving change sts2-mod-state-bridge. Update Purpose after archive.
+定义 STS2 mod 暴露的本地 loopback HTTP API 契约，覆盖健康检查、状态快照、合法动作与异常退化语义，确保外部 agent 能安全接入游戏 bridge。
 ## Requirements
 ### Requirement: Mod 必须提供本地只读 bridge 健康检查接口
 系统 MUST 提供本机 loopback 可访问的健康检查接口，用于返回 bridge 服务是否已启动、当前 mod 版本和协议版本。
@@ -30,4 +30,3 @@ TBD - created by archiving change sts2-mod-state-bridge. Update Purpose after ar
 #### Scenario: 状态提取过程中出现异常
 - **WHEN** mod 在处理状态查询请求时遇到未预期异常
 - **THEN** bridge 返回明确错误响应并记录诊断信息，同时游戏仍可继续正常运行
-

@@ -1,7 +1,7 @@
 # game-bridge Specification
 
 ## Purpose
-TBD - created by archiving change sts2-agent. Update Purpose after archive.
+定义面向 STS2 agent 的统一 GameBridge 契约，覆盖决策快照、合法动作、生命周期控制与精简说明 schema，确保上层策略能稳定读取实时游戏状态并提交动作。
 ## Requirements
 ### Requirement: Bridge 暴露当前决策快照
 系统 MUST 暴露当前 Slay the Spire 2 决策窗口的结构化快照，至少包含会话元数据、阶段元数据、玩家可见状态、敌人可见状态、牌区摘要、遗物、药水以及终局标记。对于 combat 相关快照，bridge MUST 进一步稳定暴露 richer runtime state，包括可选的卡牌描述、升级态、目标类型、traits、结构化敌方 intent、玩家/敌方 powers 与最小 `run_state` 规划上下文；bridge MUST 保持现有基础字段语义不变，并允许 richer 字段缺失时兼容退化。

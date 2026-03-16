@@ -1,7 +1,7 @@
 # autoplay-orchestrator Specification
 
 ## Purpose
-TBD - created by archiving change sts2-agent. Update Purpose after archive.
+定义 autoplay orchestrator 在稳定窗口内循环读取状态、调用策略、提交动作、记录 trace 并恢复 live 竞争态的执行语义，确保 agent 能安全连续自动打牌。
 ## Requirements
 ### Requirement: Orchestrator 逐步执行策略驱动的自动打牌
 系统 MUST 运行一个 autoplay 循环：读取 bridge 提供的最新快照和合法动作，调用已配置 policy，提交一个被选择的动作，并持续重复直到会话结束或满足人工停止条件。在 live runtime 中，orchestrator MUST 在提交前执行稳定窗口校验，避免在已知高风险窗口下盲目调用 `/apply`。

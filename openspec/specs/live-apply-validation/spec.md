@@ -1,7 +1,7 @@
 # live-apply-validation Specification
 
 ## Purpose
-TBD - created by archiving change validate-live-apply-autoplay. Update Purpose after archive.
+定义针对真实 STS2 进程的受控 apply 验证、状态推进确认与结构化 artifacts 约束，确保 bridge 写入能力、live 动作执行与文本质量都能被稳定验收。
 ## Requirements
 ### Requirement: 系统必须提供真实游戏内的受控 apply 验证流程
 系统 MUST 提供一条面向真实 STS2 进程的 `live-apply-validation` 流程，能够读取当前 `health`、`snapshot` 与 `actions`，选择一个当前合法且可执行的动作，并在满足安全前提时发起 `POST /apply` 请求。该流程 MUST 与现有 bridge HTTP 协议保持一致，不得依赖仅在 fixture 模式存在的假数据路径。
