@@ -273,7 +273,21 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
             "event_option_count": 2,
             "event_continue_available": False,
             "event_options": [
-                {"option_index": 0, "label": "献祭：失去6点生命，获得150金币。", "available": True},
+                {
+                    "option_index": 0,
+                    "label": "读下封底\n选择一张攻击牌**附魔**：锋利2。",
+                    "description": "选择一张攻击牌**附魔**：锋利2。",
+                    "available": True,
+                    "keywords": ["sharp"],
+                    "glossary": [
+                        {
+                            "glossary_id": "sharp",
+                            "display_text": "锋利",
+                            "hint": "被附魔的攻击牌在本场战斗中造成额外伤害。",
+                            "source": "runtime_hover_tip",
+                        }
+                    ],
+                },
                 {"option_index": 1, "label": "离开：什么都不做。", "available": True},
             ],
         }
@@ -285,7 +299,38 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
         self.assertEqual(summary["metadata"]["event_title"], "神秘神龛")
         self.assertEqual(summary["metadata"]["event_selection_prompt"], "选择一张攻击牌附魔。")
         self.assertEqual(summary["metadata"]["event_option_count"], 2)
-        self.assertEqual(summary["metadata"]["event_options"][0]["label"], "献祭：失去6点生命，获得150金币。")
+        self.assertEqual(summary["metadata"]["event_options"][0]["description"], "选择一张攻击牌**附魔**：锋利2。")
+        self.assertEqual(summary["metadata"]["event_options"][0]["glossary"][0]["display_text"], "锋利")
+
+    def test_action_summary_includes_event_option_metadata(self) -> None:
+        action = LegalAction(
+            action_id="act-event-1",
+            type="choose_event_option",
+            label="选择 读下封底",
+            params={"option_index": 0},
+            target_constraints=[],
+            metadata={
+                "event_option": {
+                    "option_index": 0,
+                    "label": "读下封底\n选择一张攻击牌**附魔**：锋利2。",
+                    "description": "选择一张攻击牌**附魔**：锋利2。",
+                    "keywords": ["sharp"],
+                    "glossary": [
+                        {
+                            "glossary_id": "sharp",
+                            "display_text": "锋利",
+                            "hint": "被附魔的攻击牌在本场战斗中造成额外伤害。",
+                            "source": "runtime_hover_tip",
+                        }
+                    ],
+                }
+            },
+        )
+
+        summary = self.policy._summarize_action(action)
+
+        self.assertEqual(summary["event_option"]["description"], "选择一张攻击牌**附魔**：锋利2。")
+        self.assertEqual(summary["event_option"]["glossary"][0]["display_text"], "锋利")
 
     def test_policy_allows_halt_true(self) -> None:
         response_payload = {

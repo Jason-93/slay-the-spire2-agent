@@ -732,17 +732,23 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
             {
                 ["option_index"] = 0,
                 ["label"] = "献祭：失去6点生命，获得150金币。",
+                ["description"] = "失去6点生命，获得150金币。",
                 ["available"] = true,
                 ["disabled"] = false,
                 ["is_continue"] = false,
+                ["keywords"] = Array.Empty<string>(),
+                ["glossary"] = Array.Empty<object>(),
             },
             new Dictionary<string, object?>
             {
                 ["option_index"] = 1,
                 ["label"] = "离开：什么都不做。",
+                ["description"] = "什么都不做。",
                 ["available"] = true,
                 ["disabled"] = false,
                 ["is_continue"] = false,
+                ["keywords"] = Array.Empty<string>(),
+                ["glossary"] = Array.Empty<object>(),
             },
         };
         var eventCardOptions = new[]
@@ -750,22 +756,46 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
             new Dictionary<string, object?>
             {
                 ["option_index"] = 0,
-                ["label"] = "打击",
+                ["label"] = "读下封底\n选择一张攻击牌**附魔**：锋利2。",
+                ["description"] = "选择一张攻击牌**附魔**：锋利2。",
                 ["available"] = true,
                 ["disabled"] = false,
                 ["is_continue"] = false,
                 ["card_id"] = "event-card-0",
                 ["preview_text"] = "造成6点**伤害**。",
+                ["keywords"] = new[] { "sharp" },
+                ["glossary"] = new[]
+                {
+                    new Dictionary<string, object?>
+                    {
+                        ["glossary_id"] = "sharp",
+                        ["display_text"] = "锋利",
+                        ["hint"] = "被附魔的攻击牌在本场战斗中造成额外伤害。",
+                        ["source"] = "runtime_hover_tip",
+                    },
+                },
             },
             new Dictionary<string, object?>
             {
                 ["option_index"] = 1,
-                ["label"] = "双重打击",
+                ["label"] = "翻到目录\n选择一张攻击牌**附魔**：锋利2。",
+                ["description"] = "选择一张攻击牌**附魔**：锋利2。",
                 ["available"] = true,
                 ["disabled"] = false,
                 ["is_continue"] = false,
                 ["card_id"] = "event-card-1",
                 ["preview_text"] = "造成5点**伤害**两次。",
+                ["keywords"] = new[] { "sharp" },
+                ["glossary"] = new[]
+                {
+                    new Dictionary<string, object?>
+                    {
+                        ["glossary_id"] = "sharp",
+                        ["display_text"] = "锋利",
+                        ["hint"] = "被附魔的攻击牌在本场战斗中造成额外伤害。",
+                        ["source"] = "runtime_hover_tip",
+                    },
+                },
             },
         };
 
@@ -798,6 +828,12 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                         {
                             ["option_index"] = 0,
                             ["option_label"] = "献祭：失去6点生命，获得150金币。",
+                        },
+                        Metadata: new Dictionary<string, object?>
+                        {
+                            ["event_option_index"] = 0,
+                            ["event_detection_source"] = "fixture.event_choice",
+                            ["event_option"] = eventOptions[0],
                         }),
                     new RuntimeActionDefinition(
                         "choose_event_option",
@@ -806,6 +842,12 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                         {
                             ["option_index"] = 1,
                             ["option_label"] = "离开：什么都不做。",
+                        },
+                        Metadata: new Dictionary<string, object?>
+                        {
+                            ["event_option_index"] = 1,
+                            ["event_detection_source"] = "fixture.event_choice",
+                            ["event_option"] = eventOptions[1],
                         }),
                 },
                 RunState: new RuntimeRunState(
@@ -885,21 +927,35 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                 {
                     new RuntimeActionDefinition(
                         "choose_event_option",
-                        "选择 打击",
+                        "选择 读下封底",
                         new Dictionary<string, object?>
                         {
                             ["option_index"] = 0,
-                            ["option_label"] = "打击",
+                            ["option_label"] = "读下封底\n选择一张攻击牌**附魔**：锋利2。",
                             ["card_id"] = "event-card-0",
+                        },
+                        Metadata: new Dictionary<string, object?>
+                        {
+                            ["event_option_index"] = 0,
+                            ["event_detection_source"] = "fixture.event_card_selection",
+                            ["option_preview"] = "造成6点**伤害**。",
+                            ["event_option"] = eventCardOptions[0],
                         }),
                     new RuntimeActionDefinition(
                         "choose_event_option",
-                        "选择 双重打击",
+                        "选择 翻到目录",
                         new Dictionary<string, object?>
                         {
                             ["option_index"] = 1,
-                            ["option_label"] = "双重打击",
+                            ["option_label"] = "翻到目录\n选择一张攻击牌**附魔**：锋利2。",
                             ["card_id"] = "event-card-1",
+                        },
+                        Metadata: new Dictionary<string, object?>
+                        {
+                            ["event_option_index"] = 1,
+                            ["event_detection_source"] = "fixture.event_card_selection",
+                            ["option_preview"] = "造成5点**伤害**两次。",
+                            ["event_option"] = eventCardOptions[1],
                         }),
                 },
                 RunState: new RuntimeRunState(

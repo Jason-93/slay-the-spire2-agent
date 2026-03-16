@@ -1663,17 +1663,7 @@ internal sealed class Sts2RuntimeReflectionReader
             metadata["event_selection_prompt"] = analysis.SelectionPrompt;
         }
         metadata["event_options"] = analysis.Options
-            .Select(option => new Dictionary<string, object?>
-            {
-                ["option_index"] = option.Index,
-                ["label"] = option.Label,
-                ["available"] = option.Available,
-                ["disabled"] = !option.Available,
-                ["is_continue"] = option.IsContinue,
-                ["detection_source"] = option.DetectionSource,
-                ["card_id"] = option.StableId,
-                ["preview_text"] = option.PreviewText,
-            })
+            .Select(BuildEventOptionPayload)
             .ToArray();
         if (!string.IsNullOrWhiteSpace(analysis.ContinueLabel))
         {
@@ -1706,6 +1696,7 @@ internal sealed class Sts2RuntimeReflectionReader
                     {
                         ["event_option_index"] = option.Index,
                         ["event_detection_source"] = option.DetectionSource,
+                        ["event_option"] = BuildEventOptionPayload(option),
                     }));
                 continue;
             }
@@ -1723,7 +1714,8 @@ internal sealed class Sts2RuntimeReflectionReader
                 {
                     ["event_option_index"] = option.Index,
                     ["event_detection_source"] = option.DetectionSource,
-                    ["option_preview"] = option.PreviewText,
+                    ["option_preview"] = option.PreviewText ?? option.Description,
+                    ["event_option"] = BuildEventOptionPayload(option),
                 }));
         }
 
@@ -1753,6 +1745,24 @@ internal sealed class Sts2RuntimeReflectionReader
             Metadata: metadata,
             Actions: actions,
             RunState: runStateSnapshot);
+    }
+
+    private Dictionary<string, object?> BuildEventOptionPayload(EventOptionAnalysis option)
+    {
+        return new Dictionary<string, object?>
+        {
+            ["option_index"] = option.Index,
+            ["label"] = option.Label,
+            ["available"] = option.Available,
+            ["disabled"] = !option.Available,
+            ["is_continue"] = option.IsContinue,
+            ["detection_source"] = option.DetectionSource,
+            ["card_id"] = option.StableId,
+            ["preview_text"] = option.PreviewText ?? option.Description,
+            ["description"] = option.Description,
+            ["keywords"] = option.Keywords,
+            ["glossary"] = option.Glossary,
+        };
     }
 
     private RuntimeWindowContext BuildTerminalWindow(object runNode, object runState)
@@ -3346,13 +3356,38 @@ internal sealed class Sts2RuntimeReflectionReader
             SelectionScreen: selectionScreen,
             SelectionValue: card,
             StableId: runtimeCard.CardId,
-            PreviewText: runtimeCard.Description);
+            PreviewText: runtimeCard.Description,
+            Description: runtimeCard.Description,
+            Keywords: runtimeCard.Keywords,
+            Glossary: runtimeCard.Glossary);
     }
 
     private EventOptionAnalysis BuildEventOptionFromButton(object button, int index, TextDiagnosticsCollector? textDiagnostics)
     {
         var option = GetMemberValue(button, "Option");
         var label = DescribeEventOptionLabel(button, option, index, textDiagnostics);
+        var description = ResolveEventOptionDescription(button, option, label, index, textDiagnostics);
+        var glossary = FilterEventOptionGlossary(
+            label,
+            description,
+            $"{BuildEventOptionPath(index)}.glossary",
+            ExtractEventOptionGlossary(
+                label,
+                description,
+                BuildEventOptionPath(index),
+                button,
+                option,
+                GetMemberValue(button, "Option"),
+                GetMemberValue(option, "Description"),
+                GetMemberValue(button, "_label"),
+                GetMemberValue(button, "Label"),
+                GetMemberValue(button, "Text"),
+                GetFirstMemberValue(option, "Description", "TooltipText", "HoverTips", "HoverTip", "ExtraHoverTips")));
+        var keywords = glossary
+            .Select(anchor => anchor.GlossaryId)
+            .Where(keyword => !string.IsNullOrWhiteSpace(keyword))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
         var isLocked = GetBoolean(option, "IsLocked") || !IsMenuNodeInteractable(button);
         var isContinue = GetBoolean(option, "IsProceed") || IsEventContinueLabel(label);
         return new EventOptionAnalysis(
@@ -3362,12 +3397,35 @@ internal sealed class Sts2RuntimeReflectionReader
             IsContinue: isContinue,
             OptionObject: option,
             ButtonNode: button,
-            DetectionSource: "event_layout.option_buttons");
+            DetectionSource: "event_layout.option_buttons",
+            PreviewText: description,
+            Description: description,
+            Keywords: keywords,
+            Glossary: glossary);
     }
 
     private EventOptionAnalysis BuildEventOptionFromModel(object option, int index, TextDiagnosticsCollector? textDiagnostics)
     {
         var label = DescribeEventOptionLabel(button: null, option, index, textDiagnostics);
+        var description = ResolveEventOptionDescription(button: null, option, label, index, textDiagnostics);
+        var glossary = FilterEventOptionGlossary(
+            label,
+            description,
+            $"{BuildEventOptionPath(index)}.glossary",
+            ExtractEventOptionGlossary(
+                label,
+                description,
+                BuildEventOptionPath(index),
+                option,
+                GetMemberValue(option, "Description"),
+                GetMemberValue(option, "Title"),
+                GetMemberValue(option, "TooltipText"),
+                GetFirstMemberValue(option, "HoverTips", "HoverTip", "ExtraHoverTips")));
+        var keywords = glossary
+            .Select(anchor => anchor.GlossaryId)
+            .Where(keyword => !string.IsNullOrWhiteSpace(keyword))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
         var isLocked = GetBoolean(option, "IsLocked");
         var isContinue = GetBoolean(option, "IsProceed") || IsEventContinueLabel(label);
         return new EventOptionAnalysis(
@@ -3377,7 +3435,226 @@ internal sealed class Sts2RuntimeReflectionReader
             IsContinue: isContinue,
             OptionObject: option,
             ButtonNode: null,
-            DetectionSource: "event_model.current_options");
+            DetectionSource: "event_model.current_options",
+            PreviewText: description,
+            Description: description,
+            Keywords: keywords,
+            Glossary: glossary);
+    }
+
+    private string? ResolveEventOptionDescription(
+        object? button,
+        object? option,
+        string label,
+        int index,
+        TextDiagnosticsCollector? textDiagnostics)
+    {
+        var description = NormalizeDescriptionText(ConvertDescriptionTemplateToText(
+            GetFirstMemberValue(
+                option,
+                "Description",
+                "RulesText",
+                "TooltipText",
+                "PreviewText",
+                "Body",
+                "BodyText",
+                "Detail",
+                "Details",
+                "Text")
+            ?? GetFirstMemberValue(
+                button,
+                "Description",
+                "TooltipText",
+                "PreviewText",
+                "Body",
+                "BodyText",
+                "Detail",
+                "Details",
+                "Text"),
+            $"{BuildEventOptionPath(index)}.detail",
+            textDiagnostics,
+            "Description",
+            "RulesText",
+            "TooltipText",
+            "PreviewText",
+            "Body",
+            "BodyText",
+            "Detail",
+            "Details",
+            "Text",
+            "ParsedText",
+            "BbcodeText"));
+        if (!string.IsNullOrWhiteSpace(description) && !ContainsDescriptionPlaceholder(description))
+        {
+            return description;
+        }
+
+        var derived = DeriveEventOptionDescriptionFromLabel(label);
+        if (!string.IsNullOrWhiteSpace(derived))
+        {
+            return derived;
+        }
+
+        return description;
+    }
+
+    private static string? DeriveEventOptionDescriptionFromLabel(string? label)
+    {
+        var normalized = NormalizeDescriptionText(label);
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return null;
+        }
+
+        var lines = normalized
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (lines.Length >= 2)
+        {
+            return string.Join('\n', lines.Skip(1));
+        }
+
+        return normalized;
+    }
+
+    private IReadOnlyList<GlossaryAnchor> ExtractEventOptionGlossary(
+        string? label,
+        string? description,
+        string path,
+        params object?[] hintSources)
+    {
+        var anchors = new List<GlossaryAnchor>(
+            ExtractGlossaryAnchors(
+                canonicalId: null,
+                displayName: null,
+                texts: new[] { label, description },
+                keywords: null,
+                traits: null,
+                path,
+                hintSources));
+        var seen = new HashSet<string>(
+            anchors.Select(anchor => anchor.GlossaryId),
+            StringComparer.OrdinalIgnoreCase);
+
+        foreach (var hoverTip in EnumerateGlossaryHoverTips(hintSources))
+        {
+            var tipId = ConvertToText(GetMemberValue(hoverTip, "Id"), "Id");
+            var tipTitle = NormalizeDescriptionText(ConvertToText(
+                GetMemberValue(hoverTip, "Title")
+                ?? GetMemberValue(hoverTip, "Name")
+                ?? GetMemberValue(hoverTip, "Label"),
+                path: "event.option.hover_tip_title",
+                textDiagnostics: null,
+                preferredMembers: new[] { "Title", "Name", "Label", "Text" }));
+            var normalizedTipId = NormalizeGlossaryId(tipId);
+            if (string.IsNullOrWhiteSpace(normalizedTipId) && !string.IsNullOrWhiteSpace(tipTitle))
+            {
+                normalizedTipId = NormalizeGlossaryId(Regex.Replace(tipTitle, @"\d+$", string.Empty));
+            }
+            else if (LooksLikeSyntheticGlossaryId(normalizedTipId) && !string.IsNullOrWhiteSpace(tipTitle))
+            {
+                normalizedTipId = NormalizeGlossaryId(Regex.Replace(tipTitle, @"\d+$", string.Empty));
+            }
+
+            if (string.IsNullOrWhiteSpace(normalizedTipId) || string.IsNullOrWhiteSpace(tipTitle) || !seen.Add(normalizedTipId))
+            {
+                continue;
+            }
+
+            anchors.Add(BuildGlossaryAnchor(
+                new GlossaryCandidate(normalizedTipId, tipTitle, "runtime_hover_tip"),
+                path,
+                hintSources));
+        }
+
+        return anchors;
+    }
+
+    private IReadOnlyList<GlossaryAnchor> FilterEventOptionGlossary(
+        string label,
+        string? description,
+        string path,
+        IReadOnlyList<GlossaryAnchor> glossary)
+    {
+        if (glossary.Count == 0)
+        {
+            return glossary;
+        }
+
+        var filtered = new List<GlossaryAnchor>(glossary.Count);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var anchor in glossary)
+        {
+            var reason = ClassifyEventOptionGlossaryFilterReason(anchor);
+            if (reason is not null)
+            {
+                LogEventOptionGlossaryFilter(label, path, anchor, reason, description);
+                continue;
+            }
+
+            var dedupeKey = string.Join("|",
+                NormalizeComparisonText(anchor.GlossaryId),
+                NormalizeComparisonText(anchor.DisplayText),
+                NormalizeComparisonText(anchor.Hint));
+            if (!seen.Add(dedupeKey))
+            {
+                LogEventOptionGlossaryFilter(label, path, anchor, "duplicate_glossary", description);
+                continue;
+            }
+
+            filtered.Add(anchor);
+        }
+
+        return filtered;
+    }
+
+    private static string? ClassifyEventOptionGlossaryFilterReason(GlossaryAnchor anchor)
+    {
+        if (string.IsNullOrWhiteSpace(anchor.Hint))
+        {
+            return "empty_hint";
+        }
+
+        if (string.Equals(anchor.Source, "missing_hint", StringComparison.OrdinalIgnoreCase))
+        {
+            return "missing_hint";
+        }
+
+        if (string.Equals(anchor.Source, "fallback_builtin", StringComparison.OrdinalIgnoreCase))
+        {
+            return "fallback_builtin";
+        }
+
+        if (ContainsDescriptionPlaceholder(anchor.Hint))
+        {
+            return "template_hint";
+        }
+
+        return null;
+    }
+
+    private void LogEventOptionGlossaryFilter(string label, string path, GlossaryAnchor anchor, string reason, string? description)
+    {
+        var message =
+            $"Event option glossary filtered label=\"{AbbreviateForLog(label)}\" path={path} glossary_id={anchor.GlossaryId} " +
+            $"display_text={anchor.DisplayText} source={anchor.Source ?? "unknown"} reason={reason} " +
+            $"description=\"{AbbreviateForLog(description)}\" hint=\"{AbbreviateForLog(anchor.Hint)}\"";
+        _logger?.Warn(message);
+    }
+
+    private static string BuildEventOptionPath(int index)
+    {
+        return $"event.options[{index}]";
+    }
+
+    private static bool LooksLikeSyntheticGlossaryId(string? glossaryId)
+    {
+        if (string.IsNullOrWhiteSpace(glossaryId))
+        {
+            return false;
+        }
+
+        return glossaryId.StartsWith("locstring", StringComparison.OrdinalIgnoreCase) ||
+               glossaryId.StartsWith("description", StringComparison.OrdinalIgnoreCase);
     }
 
     private string DescribeEventOptionLabel(object? button, object? option, int index, TextDiagnosticsCollector? textDiagnostics)
@@ -7806,7 +8083,10 @@ internal sealed class Sts2RuntimeReflectionReader
         object? SelectionScreen = null,
         object? SelectionValue = null,
         string? StableId = null,
-        string? PreviewText = null);
+        string? PreviewText = null,
+        string? Description = null,
+        IReadOnlyList<string>? Keywords = null,
+        IReadOnlyList<GlossaryAnchor>? Glossary = null);
     private readonly record struct EventPhaseAnalysis(
         bool TreatAsEvent,
         object? EventRoom,

@@ -91,6 +91,20 @@ Python 侧后续接入真实 HTTP bridge 时，建议把：
 - agent 应将 `menu` 视为“可推进但非战斗”的窗口，避免尝试 `play_card`/`end_turn`。
 - 若 menu 动作不可用，bridge 会在 `snapshot.metadata` 中提供 `menu_action_suppressed` 与 diagnostics，agent 应选择等待或人工介入，而不是猜测点击。
 
+### 6. event 选项应优先复用游戏 runtime 的 glossary / hover
+
+当 `snapshot.phase = "event"` 且 `window_kind = "event_choice"` 时，`metadata.event_options[]` 现在可以追加：
+
+- `description`
+- `keywords`
+- `glossary`
+
+兼容性建议：
+
+- agent 优先读取 `description` 与 `glossary`，不要只靠 `label` 猜测词条含义。
+- mod 端应优先从游戏 runtime 的 hover / tooltip / localization 动态提取说明，而不是把事件词条硬编码到 bridge。
+- 若 runtime 当前拿不到真实 hover，允许字段为空并通过日志定位缺口；不要把手写 fallback 伪装成游戏原文。
+
 ## 推荐的 Python 适配点
 
 当前仓库还没有真实 `HttpGameBridge`。后续实现时，建议最少补齐以下逻辑：

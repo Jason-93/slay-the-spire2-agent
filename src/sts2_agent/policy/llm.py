@@ -291,6 +291,9 @@ class ChatCompletionsPolicy:
         potion_preview = action.metadata.get("potion_preview")
         if isinstance(potion_preview, dict):
             payload["potion_preview"] = to_dict(potion_preview)
+        event_option = action.metadata.get("event_option")
+        if isinstance(event_option, dict):
+            payload["event_option"] = to_dict(event_option)
         return payload
 
     @staticmethod
