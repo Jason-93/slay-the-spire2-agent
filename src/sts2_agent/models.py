@@ -269,6 +269,9 @@ class TraceEntry:
     reject_raw_code: str = ""
     gate_status: str = ""
     gate_reason: str = ""
+    gate_wait_steps: int = 0
+    gate_redecisions: int = 0
+    gate_rebases: int = 0
     phase_kind: str = ""
     step_kind: str = ""
     transition_elapsed_seconds: float = 0.0
@@ -308,6 +311,9 @@ class RunSummary:
     recoverable_rejects: int = 0
     hard_rejects: int = 0
     gate_intercepts: int = 0
+    gate_wait_steps: int = 0
+    gate_redecisions: int = 0
+    gate_rebases: int = 0
     reject_counts: dict[str, int] = field(default_factory=dict)
     reject_code_counts: dict[str, int] = field(default_factory=dict)
     last_reject: dict[str, Any] = field(default_factory=dict)

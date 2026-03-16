@@ -29,6 +29,8 @@ class LiveAutoplayConfig:
     wait_for_next_player_turn_seconds: float = 30.0
     transition_timeout_seconds: float = 15.0
     poll_interval_seconds: float = 0.5
+    stable_window_required_observations: int = 2
+    stable_window_timeout_seconds: float = 2.0
     max_non_combat_steps: int = 24
     unknown_window_fuse: int = 2
     stop_after_next_combat: bool = False
@@ -77,6 +79,8 @@ def run_live_autoplay(config: LiveAutoplayConfig) -> RunSummary:
             wait_for_next_player_turn_seconds=config.wait_for_next_player_turn_seconds,
             transition_timeout_seconds=config.transition_timeout_seconds,
             poll_interval_seconds=config.poll_interval_seconds,
+            stable_window_required_observations=config.stable_window_required_observations,
+            stable_window_timeout_seconds=config.stable_window_timeout_seconds,
             max_non_combat_steps=config.max_non_combat_steps,
             unknown_window_fuse=config.unknown_window_fuse,
             stop_after_next_combat=config.stop_after_next_combat,

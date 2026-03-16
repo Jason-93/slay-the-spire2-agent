@@ -28,7 +28,55 @@ def _read_trace_tail(trace_path: Path, limit: int = 8) -> list[dict[str, Any]]:
     return [json.loads(line) for line in tail]
 
 
-def _build_result(*, artifact_dir: Path, health: dict[str, Any], summary: dict[str, Any], trace_tail: list[dict[str, Any]]) -> dict[str, Any]:
+def _read_trace_records(trace_path: Path) -> list[dict[str, Any]]:
+    if not trace_path.exists():
+        return []
+    return [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def _find_invalid_end_turns(trace_records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    violations: list[dict[str, Any]] = []
+    for entry in trace_records:
+        bridge_result = dict(entry.get("bridge_result") or {})
+        if str(bridge_result.get("submitted_action_type") or "") != "end_turn":
+            continue
+        if str(bridge_result.get("status") or "") != "accepted":
+            continue
+        legal_actions = list(entry.get("legal_actions") or [])
+        stronger_actions = [
+            {
+                "action_id": action.get("action_id"),
+                "type": action.get("type"),
+                "label": action.get("label"),
+            }
+            for action in legal_actions
+            if action.get("type") in {"play_card", "choose_combat_card", "use_potion"}
+        ]
+        if not stronger_actions:
+            continue
+        violations.append(
+            {
+                "step_index": entry.get("step_index"),
+                "decision_id": entry.get("decision_id"),
+                "current_turn_index": entry.get("current_turn_index"),
+                "gate_status": entry.get("gate_status"),
+                "gate_reason": entry.get("gate_reason"),
+                "submitted_action_id": bridge_result.get("submitted_action_id"),
+                "submitted_action_label": bridge_result.get("submitted_action_label"),
+                "available_stronger_actions": stronger_actions,
+            }
+        )
+    return violations
+
+
+def _build_result(
+    *,
+    artifact_dir: Path,
+    health: dict[str, Any],
+    summary: dict[str, Any],
+    trace_tail: list[dict[str, Any]],
+    invalid_end_turns: list[dict[str, Any]],
+) -> dict[str, Any]:
     rejects_total = int(summary.get("rejects_total") or 0)
     total_actions = int(summary.get("total_actions") or 0)
     total_attempts = total_actions + rejects_total
@@ -57,6 +105,9 @@ def _build_result(*, artifact_dir: Path, health: dict[str, Any], summary: dict[s
         "recoverable_rejects": int(summary.get("recoverable_rejects") or 0),
         "hard_rejects": hard_rejects,
         "gate_intercepts": int(summary.get("gate_intercepts") or 0),
+        "gate_wait_steps": int(summary.get("gate_wait_steps") or 0),
+        "gate_redecisions": int(summary.get("gate_redecisions") or 0),
+        "gate_rebases": int(summary.get("gate_rebases") or 0),
         "reject_counts": dict(summary.get("reject_counts") or {}),
         "reject_code_counts": dict(summary.get("reject_code_counts") or {}),
         "reject_rate": reject_rate,
@@ -71,6 +122,8 @@ def _build_result(*, artifact_dir: Path, health: dict[str, Any], summary: dict[s
         "had_recovery": int(summary.get("recovery_attempts") or 0) > 0,
         "trace_tail_stop_reasons": [entry.get("stop_reason") for entry in trace_tail],
         "trace_tail_battle_stop_reasons": [entry.get("battle_stop_reason") for entry in trace_tail],
+        "invalid_end_turns": invalid_end_turns,
+        "invalid_end_turn_count": len(invalid_end_turns),
     }
 
 
@@ -146,6 +199,8 @@ def run_validation(args: argparse.Namespace) -> int:
             wait_for_next_player_turn_seconds=args.wait_for_next_player_turn_seconds,
             transition_timeout_seconds=args.transition_timeout_seconds,
             poll_interval_seconds=args.poll_interval_seconds,
+            stable_window_required_observations=args.stable_window_required_observations,
+            stable_window_timeout_seconds=args.stable_window_timeout_seconds,
             max_non_combat_steps=args.max_non_combat_steps,
             unknown_window_fuse=args.unknown_window_fuse,
             stop_after_next_combat=args.stop_after_next_combat,
@@ -160,13 +215,26 @@ def run_validation(args: argparse.Namespace) -> int:
     write_json(artifact_dir / "summary.json", summary_payload)
 
     trace_tail = []
+    invalid_end_turns: list[dict[str, Any]] = []
     trace_path = summary.trace_path
     if trace_path:
+        trace_records = _read_trace_records(Path(trace_path))
         trace_tail = _read_trace_tail(Path(trace_path))
         write_json(artifact_dir / "trace_tail.json", trace_tail)
+        invalid_end_turns = _find_invalid_end_turns(trace_records)
+        write_json(artifact_dir / "invalid_end_turns.json", invalid_end_turns)
 
-    result = _build_result(artifact_dir=artifact_dir, health=health, summary=summary_payload, trace_tail=trace_tail)
-    if summary.battle_completed and not summary.interrupted:
+    result = _build_result(
+        artifact_dir=artifact_dir,
+        health=health,
+        summary=summary_payload,
+        trace_tail=trace_tail,
+        invalid_end_turns=invalid_end_turns,
+    )
+    if invalid_end_turns:
+        result["verdict"] = "failed"
+        result["summary"] = "发现错误 end_turn：同一稳定窗口中仍存在更高价值动作。"
+    elif summary.battle_completed and not summary.interrupted:
         result["verdict"] = {
             "clean": "success_clean",
             "recovered": "success_recovered",
@@ -200,6 +268,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--wait-for-next-player-turn-seconds", type=float, default=30.0)
     parser.add_argument("--transition-timeout-seconds", type=float, default=15.0)
     parser.add_argument("--poll-interval-seconds", type=float, default=0.5)
+    parser.add_argument("--stable-window-required-observations", type=int, default=2)
+    parser.add_argument("--stable-window-timeout-seconds", type=float, default=2.0)
     parser.add_argument("--max-non-combat-steps", type=int, default=24)
     parser.add_argument("--unknown-window-fuse", type=int, default=2)
     parser.add_argument("--battle-context-recent-steps", type=int, default=4)

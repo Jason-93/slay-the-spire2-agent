@@ -57,6 +57,8 @@ class LiveAutoplayTests(unittest.TestCase):
                     wait_for_next_player_turn_seconds=12.5,
                     transition_timeout_seconds=8.0,
                     poll_interval_seconds=0.2,
+                    stable_window_required_observations=3,
+                    stable_window_timeout_seconds=1.5,
                     max_non_combat_steps=11,
                     unknown_window_fuse=3,
                     battle_context_recent_steps=5,
@@ -82,6 +84,8 @@ class LiveAutoplayTests(unittest.TestCase):
         self.assertEqual(captured["config"].wait_for_next_player_turn_seconds, 12.5)
         self.assertEqual(captured["config"].transition_timeout_seconds, 8.0)
         self.assertEqual(captured["config"].poll_interval_seconds, 0.2)
+        self.assertEqual(captured["config"].stable_window_required_observations, 3)
+        self.assertEqual(captured["config"].stable_window_timeout_seconds, 1.5)
         self.assertEqual(captured["config"].max_non_combat_steps, 11)
         self.assertEqual(captured["config"].unknown_window_fuse, 3)
         self.assertEqual(captured["config"].battle_context_recent_steps, 5)
@@ -177,9 +181,13 @@ class LiveAutoplayTests(unittest.TestCase):
                 "9",
                 "--transition-timeout-seconds",
                 "7",
-                "--poll-interval-seconds",
-                "0.25",
-                "--max-non-combat-steps",
+                        "--poll-interval-seconds",
+                        "0.25",
+                        "--stable-window-required-observations",
+                        "3",
+                        "--stable-window-timeout-seconds",
+                        "1.25",
+                        "--max-non-combat-steps",
                 "12",
                 "--unknown-window-fuse",
                 "3",
@@ -204,6 +212,8 @@ class LiveAutoplayTests(unittest.TestCase):
         self.assertEqual(args.wait_for_next_player_turn_seconds, 9)
         self.assertEqual(args.transition_timeout_seconds, 7)
         self.assertEqual(args.poll_interval_seconds, 0.25)
+        self.assertEqual(args.stable_window_required_observations, 3)
+        self.assertEqual(args.stable_window_timeout_seconds, 1.25)
         self.assertEqual(args.max_non_combat_steps, 12)
         self.assertEqual(args.unknown_window_fuse, 3)
         self.assertEqual(args.battle_context_recent_steps, 5)

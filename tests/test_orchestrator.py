@@ -39,6 +39,16 @@ class CapturingBattleContextPolicy:
         return PolicyDecision(action_id=action_id, reason="capture battle context", confidence="medium")
 
 
+class SnapshotCapturingPolicy:
+    def __init__(self) -> None:
+        self.decision_ids: list[str] = []
+
+    def decide(self, snapshot, legal_actions, battle_context: BattleContext | None = None):
+        self.decision_ids.append(snapshot.decision_id)
+        action_id = next((action.action_id for action in legal_actions if action.type != "end_turn"), legal_actions[0].action_id)
+        return PolicyDecision(action_id=action_id, reason="capture stabilized snapshot", confidence="medium")
+
+
 class LegacyPolicy:
     def __init__(self) -> None:
         self.calls = 0
@@ -311,7 +321,7 @@ class GateDriftBridge(SequencedCombatBridge):
 
     def get_snapshot(self, session_id: str) -> DecisionSnapshot:
         self._snapshot_reads += 1
-        if self._snapshot_reads >= 4 and self.index == 0:
+        if self._snapshot_reads >= 6 and self.index == 0:
             self.index = 1
         return super().get_snapshot(session_id)
 
@@ -327,6 +337,61 @@ class GateRebaseBridge(SequencedCombatBridge):
                 make_window(
                     actions=[{"type": "play_card", "label": "Strike", "params": {"card_id": "card-1", "target_type": "AnyEnemy"}, "target_constraints": ["1"]}],
                     metadata={"window_kind": "player_turn", "current_side": "Player", "round_number": 1},
+                ),
+                make_window(phase="reward", actions=[], metadata={}),
+            ]
+        )
+        self._snapshot_reads = 0
+
+    def get_snapshot(self, session_id: str) -> DecisionSnapshot:
+        self._snapshot_reads += 1
+        if self._snapshot_reads >= 6 and self.index == 0:
+            self.index = 1
+        return super().get_snapshot(session_id)
+
+
+class StableWindowBeforeDecideBridge(SequencedCombatBridge):
+    def __init__(self) -> None:
+        super().__init__(
+            [
+                make_window(
+                    actions=[{"type": "play_card", "label": "Strike", "params": {"card_id": "card-1"}}],
+                    metadata={"window_kind": "player_turn", "current_side": "Player", "round_number": 1},
+                ),
+                make_window(
+                    actions=[{"type": "play_card", "label": "Strike+", "params": {"card_id": "card-2"}}],
+                    hand=["card-2"],
+                    metadata={"window_kind": "player_turn", "current_side": "Player", "round_number": 1},
+                ),
+                make_window(phase="reward", actions=[], metadata={}),
+            ]
+        )
+        self._snapshot_reads = 0
+
+    def get_snapshot(self, session_id: str) -> DecisionSnapshot:
+        self._snapshot_reads += 1
+        if self._snapshot_reads >= 4 and self.index == 0:
+            self.index = 1
+        return super().get_snapshot(session_id)
+
+
+class CrossTurnEndTurnDriftBridge(SequencedCombatBridge):
+    def __init__(self) -> None:
+        super().__init__(
+            [
+                make_window(
+                    actions=[{"type": "end_turn", "label": "End Turn"}],
+                    energy=0,
+                    hand=[],
+                    metadata={"window_kind": "player_turn", "current_side": "Player", "round_number": 1},
+                ),
+                make_window(
+                    actions=[
+                        {"type": "play_card", "label": "Strike", "params": {"card_id": "card-2"}},
+                        {"type": "end_turn", "label": "End Turn"},
+                    ],
+                    hand=["card-2"],
+                    metadata={"window_kind": "player_turn", "current_side": "Player", "round_number": 2},
                 ),
                 make_window(phase="reward", actions=[], metadata={}),
             ]
@@ -1102,6 +1167,25 @@ class OrchestratorTests(unittest.TestCase):
             self.assertEqual(records[0]["reject_category"], "recoverable_stale")
             self.assertEqual(records[0]["bridge_result"]["error_code"], "pre_submit_state_drift")
 
+    def test_orchestrator_waits_for_stable_window_before_calling_policy(self) -> None:
+        bridge = StableWindowBeforeDecideBridge()
+        policy = SnapshotCapturingPolicy()
+        with tempfile.TemporaryDirectory() as tmpdir, patch("sts2_agent.orchestrator.time.sleep", return_value=None):
+            orchestrator = AutoplayOrchestrator(
+                bridge=bridge,
+                policy=policy,
+                config=OrchestratorConfig(trace_dir=tmpdir, stable_window_required_observations=2),
+            )
+            summary = orchestrator.run(scenario="live")
+
+            self.assertTrue(summary.completed)
+            self.assertEqual(policy.decision_ids, ["dec-1"])
+            self.assertEqual(bridge.submissions, ["play_card"])
+            self.assertGreaterEqual(summary.gate_wait_steps, 1)
+            records = [json.loads(line) for line in Path(summary.trace_path).read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(records[0]["gate_status"], "waiting_stable_window")
+            self.assertEqual(records[0]["bridge_result"]["reason"], "stable_window_wait")
+
     def test_orchestrator_rebases_equivalent_action_after_pre_submit_drift(self) -> None:
         bridge = GateRebaseBridge()
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1120,6 +1204,27 @@ class OrchestratorTests(unittest.TestCase):
             records = [json.loads(line) for line in Path(summary.trace_path).read_text(encoding="utf-8").splitlines()]
             self.assertEqual(records[0]["gate_status"], "rebased")
             self.assertEqual(records[0]["bridge_result"]["accepted_action_id"], "act-1-0-play_card")
+
+    def test_orchestrator_does_not_rebase_end_turn_across_player_rounds(self) -> None:
+        bridge = CrossTurnEndTurnDriftBridge()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orchestrator = AutoplayOrchestrator(
+                bridge=bridge,
+                policy=FirstLegalActionPolicy(),
+                config=OrchestratorConfig(trace_dir=tmpdir, stop_after_player_turn=False, max_steps=6),
+            )
+            summary = orchestrator.run(scenario="live")
+
+            self.assertTrue(summary.completed)
+            self.assertTrue(summary.battle_completed)
+            self.assertEqual(bridge.submissions, ["play_card"])
+            self.assertGreaterEqual(summary.gate_redecisions, 1)
+            records = [json.loads(line) for line in Path(summary.trace_path).read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(records[0]["gate_status"], "intercepted")
+            self.assertEqual(records[0]["bridge_result"]["error_code"], "pre_submit_state_drift")
+            self.assertFalse(records[0]["bridge_result"]["gate_context"]["same_stable_window"])
+            accepted_steps = [record for record in records if record["bridge_result"].get("submitted_action_type") == "play_card"]
+            self.assertEqual(len(accepted_steps), 1)
 
     def test_orchestrator_retries_stale_action_with_fresh_state(self) -> None:
         bridge = RetryableStaleBridge()

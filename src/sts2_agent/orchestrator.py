@@ -41,6 +41,8 @@ class OrchestratorConfig:
     wait_for_next_player_turn_seconds: float = 30.0
     transition_timeout_seconds: float = 15.0
     poll_interval_seconds: float = 0.5
+    stable_window_required_observations: int = 2
+    stable_window_timeout_seconds: float = 2.0
     max_non_combat_steps: int = 24
     unknown_window_fuse: int = 2
     stop_after_next_combat: bool = False
@@ -70,6 +72,9 @@ class AutoplayOrchestrator:
         self._recoverable_rejects = 0
         self._hard_rejects = 0
         self._gate_intercepts = 0
+        self._gate_wait_steps = 0
+        self._gate_redecisions = 0
+        self._gate_rebases = 0
         self._reject_counts: dict[str, int] = {}
         self._reject_code_counts: dict[str, int] = {}
         self._last_reject: dict[str, Any] = {}
@@ -94,6 +99,9 @@ class AutoplayOrchestrator:
         self._recoverable_rejects = 0
         self._hard_rejects = 0
         self._gate_intercepts = 0
+        self._gate_wait_steps = 0
+        self._gate_redecisions = 0
+        self._gate_rebases = 0
         self._reject_counts = {}
         self._reject_code_counts = {}
         self._last_reject = {}
@@ -1792,7 +1800,7 @@ class AutoplayOrchestrator:
                     current_turn_index=current_turn_index,
                     action_label=auto_end_turn.label,
                 )
-                gate = self._pre_submit_gate(snapshot=snapshot, selected_action=auto_end_turn)
+                gate = self._pre_submit_gate(snapshot=snapshot, legal_actions=legal_actions, selected_action=auto_end_turn)
                 if not gate["allowed"]:
                     raw_code = str(gate["raw_code"])
                     category = str(gate["category"])
@@ -1823,6 +1831,8 @@ class AutoplayOrchestrator:
                         consecutive_failures=consecutive_failures,
                     )
                     retrying = retrying and not budget_stop_reason
+                    if retrying:
+                        self._gate_redecisions += 1
                     self._publish_agent_status(
                         snapshot=snapshot,
                         policy_output=policy_output,
@@ -1887,6 +1897,8 @@ class AutoplayOrchestrator:
                 auto_end_turn = gate["selected_action"]
                 gate_status = str(gate.get("gate_status") or "passed")
                 gate_reason = str(gate.get("gate_reason") or "")
+                if gate_status == "rebased":
+                    self._gate_rebases += 1
                 result = self.bridge.submit_action(
                     ActionSubmission(
                         session_id=snapshot.session_id,
@@ -1896,6 +1908,10 @@ class AutoplayOrchestrator:
                         args=self._build_action_args(auto_end_turn),
                     )
                 )
+                result_payload = to_dict(result)
+                result_payload["submitted_action_id"] = auto_end_turn.action_id
+                result_payload["submitted_action_type"] = auto_end_turn.type
+                result_payload["submitted_action_label"] = auto_end_turn.label
                 total_actions += 1
                 current_turn_actions += 1
                 stale_action_attempts = 0
@@ -1914,7 +1930,7 @@ class AutoplayOrchestrator:
                     snapshot=snapshot,
                     legal_actions=legal_actions,
                     policy_output=policy_output,
-                    bridge_result=to_dict(result),
+                    bridge_result=result_payload,
                     interrupted=False,
                     step_index=step_index,
                     current_turn_index=current_turn_index,
@@ -2113,6 +2129,57 @@ class AutoplayOrchestrator:
         battle_context: BattleContext | None = None,
     ) -> dict[str, object]:
         try:
+            stabilized = self._stabilize_player_window(
+                recorder=recorder,
+                snapshot=snapshot,
+                legal_actions=legal_actions,
+                step_index=step_index,
+                current_turn_index=current_turn_index,
+                current_turn_actions=current_turn_actions,
+                total_actions=total_actions,
+                turns_completed=turns_completed,
+                trace_path=trace_path,
+                session_id=session_id,
+            )
+            step_index = int(stabilized["step_index"])
+            if stabilized["summary"] is not None:
+                return self._step_result(
+                    step_index=step_index,
+                    current_turn_actions=current_turn_actions,
+                    total_actions=total_actions,
+                    stale_action_attempts=stale_action_attempts,
+                    consecutive_failures=consecutive_failures,
+                    pending_end_turn_transition=None,
+                    summary=stabilized["summary"],
+                )
+            if not stabilized["ready"]:
+                return self._step_result(
+                    step_index=step_index,
+                    current_turn_actions=current_turn_actions,
+                    total_actions=total_actions,
+                    stale_action_attempts=stale_action_attempts,
+                    consecutive_failures=consecutive_failures,
+                    pending_end_turn_transition=None,
+                    summary=None,
+                )
+            snapshot = stabilized["snapshot"]
+            legal_actions = stabilized["legal_actions"]
+            if battle_context is not None:
+                stable_phase_kind = self._phase_kind(
+                    snapshot,
+                    legal_actions,
+                    player_turn=self._is_player_turn(snapshot),
+                    pending_end_turn_transition=None,
+                    previous_phase=None,
+                )
+                battle_context = self._build_battle_context(
+                    snapshot=snapshot,
+                    current_turn_index=current_turn_index,
+                    actions_this_turn=current_turn_actions,
+                    total_actions=total_actions,
+                    waiting_for_player_turn=False,
+                    phase_kind=stable_phase_kind,
+                )
             step_index += 1
             self._publish_agent_status(
                 snapshot=snapshot,
@@ -2280,6 +2347,7 @@ class AutoplayOrchestrator:
 
             gate = self._pre_submit_gate(
                 snapshot=snapshot,
+                legal_actions=legal_actions,
                 selected_action=selected_action,
             )
             if not gate["allowed"]:
@@ -2312,6 +2380,8 @@ class AutoplayOrchestrator:
                     consecutive_failures=consecutive_failures,
                 )
                 retrying = retrying and not budget_stop_reason
+                if retrying:
+                    self._gate_redecisions += 1
                 self._publish_agent_status(
                     snapshot=snapshot,
                     policy_output=policy_output,
@@ -2385,6 +2455,8 @@ class AutoplayOrchestrator:
             selected_action = gate["selected_action"]
             gate_status = str(gate.get("gate_status") or "passed")
             gate_reason = str(gate.get("gate_reason") or "")
+            if gate_status == "rebased":
+                self._gate_rebases += 1
             self._publish_agent_status(
                 snapshot=snapshot,
                 policy_output=policy_output,
@@ -2402,6 +2474,10 @@ class AutoplayOrchestrator:
                     args=self._build_action_args(selected_action, policy_output),
                 )
             )
+            result_payload = to_dict(result)
+            result_payload["submitted_action_id"] = selected_action.action_id
+            result_payload["submitted_action_type"] = selected_action.type
+            result_payload["submitted_action_label"] = selected_action.label
             total_actions += 1
             current_turn_actions += 1
             stale_action_attempts = 0
@@ -2420,7 +2496,7 @@ class AutoplayOrchestrator:
                 snapshot=snapshot,
                 legal_actions=legal_actions,
                 policy_output=policy_output,
-                bridge_result=to_dict(result),
+                bridge_result=result_payload,
                 interrupted=False,
                 step_index=step_index,
                 current_turn_index=current_turn_index,
@@ -2944,6 +3020,9 @@ class AutoplayOrchestrator:
             for key in (
                 "window_kind",
                 "current_side",
+                "round_number",
+                "round",
+                "turn_index",
                 "selection_kind",
                 "selection_prompt",
                 "selection_choice_count",
@@ -3007,6 +3086,8 @@ class AutoplayOrchestrator:
             ),
             "reject_category": bridge_result.get("reject_category") if isinstance(bridge_result, dict) else None,
             "gate_status": bridge_result.get("gate_status") if isinstance(bridge_result, dict) else None,
+            "gate_reason": bridge_result.get("gate_reason") if isinstance(bridge_result, dict) else None,
+            "submitted_action_type": bridge_result.get("submitted_action_type") if isinstance(bridge_result, dict) else None,
         }
         self._battle_history.append(entry)
         max_history = max(1, self.config.battle_context_recent_steps * 2)
@@ -3099,24 +3180,198 @@ class AutoplayOrchestrator:
             reject_context["context"] = dict(context)
         self._last_reject = reject_context
 
+    def _stabilize_player_window(
+        self,
+        *,
+        recorder: JsonlTraceRecorder,
+        snapshot,
+        legal_actions,
+        step_index: int,
+        current_turn_index: int,
+        current_turn_actions: int,
+        total_actions: int,
+        turns_completed: int,
+        trace_path: Path,
+        session_id: str,
+    ) -> dict[str, Any]:
+        required = max(1, int(self.config.stable_window_required_observations))
+        if required <= 1:
+            return {
+                "ready": True,
+                "snapshot": snapshot,
+                "legal_actions": legal_actions,
+                "step_index": step_index,
+                "summary": None,
+            }
+
+        candidate_snapshot = snapshot
+        candidate_legal_actions = list(legal_actions)
+        candidate_signature = self._stable_window_signature(candidate_snapshot, candidate_legal_actions)
+        stable_observations = 1
+        waiting_since: float | None = None
+
+        while stable_observations < required:
+            latest_snapshot, latest_legal_actions = self._read_consistent_state(session_id)
+            latest_legal_actions = self._effective_legal_actions(latest_snapshot, latest_legal_actions)
+            latest_phase = self._normalize_phase(getattr(latest_snapshot, "phase", ""))
+            latest_player_turn = self._is_player_turn(latest_snapshot)
+            if latest_phase != "combat" or not latest_player_turn:
+                self._gate_wait_steps += 1
+                step_index += 1
+                self._record(
+                    recorder=recorder,
+                    snapshot=latest_snapshot,
+                    legal_actions=latest_legal_actions,
+                    policy_output=PolicyDecision(action_id=None, reason="waiting for stable combat window", halt=True),
+                    bridge_result={
+                        "status": "waiting",
+                        "reason": "stable_window_drift",
+                        "message": "combat window changed before policy call",
+                    },
+                    interrupted=False,
+                    step_index=step_index,
+                    current_turn_index=current_turn_index,
+                    actions_this_turn=current_turn_actions,
+                    total_actions=total_actions,
+                    waiting_for_player_turn=not latest_player_turn,
+                    is_final_step=False,
+                    stop_reason="",
+                    battle_stop_reason="",
+                    step_kind="stable_window_wait",
+                    gate_status="waiting_stable_window",
+                    gate_reason="window_drift",
+                )
+                return {
+                    "ready": False,
+                    "snapshot": latest_snapshot,
+                    "legal_actions": latest_legal_actions,
+                    "step_index": step_index,
+                    "summary": None,
+                }
+
+            latest_signature = self._stable_window_signature(latest_snapshot, latest_legal_actions)
+            if latest_signature == candidate_signature:
+                stable_observations += 1
+                candidate_snapshot = latest_snapshot
+                candidate_legal_actions = latest_legal_actions
+                continue
+
+            if waiting_since is None:
+                waiting_since = time.monotonic()
+                self._note_recovery_attempt("stable_window_wait")
+            elapsed = time.monotonic() - waiting_since
+            self._gate_wait_steps += 1
+            step_index += 1
+            timed_out = elapsed > self.config.stable_window_timeout_seconds
+            self._record(
+                recorder=recorder,
+                snapshot=latest_snapshot,
+                legal_actions=latest_legal_actions,
+                policy_output=PolicyDecision(action_id=None, reason="waiting for stable combat window", halt=True),
+                bridge_result={
+                    "status": "waiting",
+                    "reason": "stable_window_wait",
+                    "elapsed_seconds": elapsed,
+                    "required_observations": required,
+                },
+                interrupted=timed_out,
+                step_index=step_index,
+                current_turn_index=current_turn_index,
+                actions_this_turn=current_turn_actions,
+                total_actions=total_actions,
+                waiting_for_player_turn=False,
+                is_final_step=timed_out,
+                stop_reason="stable_window_timeout" if timed_out else "",
+                battle_stop_reason="stable_window_timeout" if timed_out else "",
+                step_kind="stable_window_wait",
+                phase_kind="combat",
+                gate_status="waiting_stable_window",
+                gate_reason="window_drift",
+            )
+            if timed_out:
+                return {
+                    "ready": False,
+                    "snapshot": latest_snapshot,
+                    "legal_actions": latest_legal_actions,
+                    "step_index": step_index,
+                    "summary": self._finish(
+                        session_id=session_id,
+                        trace_path=trace_path,
+                        reason="stable_window_timeout",
+                        completed=False,
+                        interrupted=True,
+                        turn_completed=turns_completed > 0,
+                        actions_this_turn=current_turn_actions,
+                        turns_completed=turns_completed,
+                        total_actions=total_actions,
+                        current_turn_index=current_turn_index,
+                    ),
+                }
+
+            candidate_snapshot = latest_snapshot
+            candidate_legal_actions = latest_legal_actions
+            candidate_signature = latest_signature
+            stable_observations = 1
+            time.sleep(self.config.poll_interval_seconds)
+
+        return {
+            "ready": True,
+            "snapshot": candidate_snapshot,
+            "legal_actions": candidate_legal_actions,
+            "step_index": step_index,
+            "summary": None,
+        }
+
+    @classmethod
+    def _stable_window_signature(cls, snapshot, legal_actions) -> tuple[Any, ...]:
+        metadata = getattr(snapshot, "metadata", {}) or {}
+        round_marker = ""
+        for key in ("round_number", "round", "turn_index", "turn_number"):
+            value = metadata.get(key)
+            if value is not None and str(value) != "":
+                round_marker = str(value)
+                break
+        action_signature = tuple(sorted((cls._action_semantic_signature(action) for action in legal_actions), key=repr))
+        return (
+            cls._normalize_phase(getattr(snapshot, "phase", "")),
+            str(metadata.get("window_kind") or "").strip().lower(),
+            str(metadata.get("current_side") or metadata.get("turn_owner") or "").strip().lower(),
+            round_marker,
+            str(metadata.get("selection_kind") or "").strip().lower(),
+            action_signature,
+        )
+
+    @staticmethod
+    def _can_rebase_action_within_window(action_type: str) -> bool:
+        return action_type in {"play_card", "choose_combat_card", "cancel_combat_selection"}
+
     def _pre_submit_gate(
         self,
         *,
         snapshot,
+        legal_actions,
         selected_action,
     ) -> dict[str, Any]:
         latest_snapshot, latest_legal_actions = self._read_consistent_state(snapshot.session_id)
         latest_legal_actions = self._effective_legal_actions(latest_snapshot, latest_legal_actions)
         latest_by_id = {action.action_id: action for action in latest_legal_actions}
         latest_metadata = getattr(latest_snapshot, "metadata", {}) or {}
+        original_metadata = getattr(snapshot, "metadata", {}) or {}
+        original_signature = self._stable_window_signature(snapshot, legal_actions)
+        latest_signature = self._stable_window_signature(latest_snapshot, latest_legal_actions)
+        same_stable_window = original_signature == latest_signature
         gate_context = {
             "observed_phase": getattr(latest_snapshot, "phase", ""),
             "observed_decision_id": getattr(latest_snapshot, "decision_id", ""),
             "observed_state_version": getattr(latest_snapshot, "state_version", 0),
+            "original_window_kind": str(original_metadata.get("window_kind") or ""),
             "observed_window_kind": str(latest_metadata.get("window_kind") or ""),
+            "original_current_side": str(original_metadata.get("current_side") or original_metadata.get("turn_owner") or ""),
             "observed_current_side": str(latest_metadata.get("current_side") or latest_metadata.get("turn_owner") or ""),
             "observed_transition_kind": str(latest_metadata.get("transition_kind") or ""),
+            "original_selection_kind": str(original_metadata.get("selection_kind") or ""),
             "observed_selection_kind": str(latest_metadata.get("selection_kind") or ""),
+            "same_stable_window": same_stable_window,
         }
         state_drifted = (
             latest_snapshot.decision_id != snapshot.decision_id
@@ -3169,8 +3424,17 @@ class AutoplayOrchestrator:
                 "context": gate_context,
             }
 
+        if not same_stable_window:
+            return {
+                "allowed": False,
+                "category": "recoverable_stale",
+                "raw_code": "pre_submit_state_drift",
+                "message": "combat action gated because the stable decision window changed before submit",
+                "context": gate_context,
+            }
+
         refreshed_action = latest_by_id.get(selected_action.action_id)
-        if refreshed_action is None:
+        if refreshed_action is None and self._can_rebase_action_within_window(str(selected_action.type or "")):
             refreshed_action = self._match_equivalent_action(selected_action, latest_legal_actions)
 
         if state_drifted and refreshed_action is None:
@@ -3335,6 +3599,9 @@ class AutoplayOrchestrator:
                 reject_raw_code=reject_raw_code,
                 gate_status=gate_status,
                 gate_reason=gate_reason,
+                gate_wait_steps=self._gate_wait_steps,
+                gate_redecisions=self._gate_redecisions,
+                gate_rebases=self._gate_rebases,
                 phase_kind=effective_phase_kind,
                 step_kind=effective_step_kind,
                 transition_elapsed_seconds=transition_elapsed_seconds,
@@ -3401,6 +3668,9 @@ class AutoplayOrchestrator:
             recoverable_rejects=self._recoverable_rejects,
             hard_rejects=self._hard_rejects,
             gate_intercepts=self._gate_intercepts,
+            gate_wait_steps=self._gate_wait_steps,
+            gate_redecisions=self._gate_redecisions,
+            gate_rebases=self._gate_rebases,
             reject_counts=dict(self._reject_counts),
             reject_code_counts=dict(self._reject_code_counts),
             last_reject=dict(self._last_reject),

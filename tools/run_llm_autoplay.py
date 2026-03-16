@@ -42,6 +42,16 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=float(os.environ.get("STS2_POLL_INTERVAL_SECONDS", "0.5")),
     )
+    parser.add_argument(
+        "--stable-window-required-observations",
+        type=int,
+        default=int(os.environ.get("STS2_STABLE_WINDOW_REQUIRED_OBSERVATIONS", "2")),
+    )
+    parser.add_argument(
+        "--stable-window-timeout-seconds",
+        type=float,
+        default=float(os.environ.get("STS2_STABLE_WINDOW_TIMEOUT_SECONDS", "2.0")),
+    )
     parser.add_argument("--max-non-combat-steps", type=int, default=int(os.environ.get("STS2_MAX_NON_COMBAT_STEPS", "24")))
     parser.add_argument("--unknown-window-fuse", type=int, default=int(os.environ.get("STS2_UNKNOWN_WINDOW_FUSE", "2")))
     parser.add_argument(
@@ -115,6 +125,8 @@ def main(argv: list[str] | None = None) -> int:
             wait_for_next_player_turn_seconds=args.wait_for_next_player_turn_seconds,
             transition_timeout_seconds=args.transition_timeout_seconds,
             poll_interval_seconds=args.poll_interval_seconds,
+            stable_window_required_observations=args.stable_window_required_observations,
+            stable_window_timeout_seconds=args.stable_window_timeout_seconds,
             max_non_combat_steps=args.max_non_combat_steps,
             unknown_window_fuse=args.unknown_window_fuse,
             battle_context_recent_steps=args.battle_context_recent_steps,
