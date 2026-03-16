@@ -475,6 +475,16 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
         self.assertEqual(user_message["battle_context"]["last_recovery_reason"], "stale_action")
         self.assertNotIn("action_id", user_message["battle_context"]["recent_steps"][0])
 
+    def test_build_messages_includes_generic_game_rules(self) -> None:
+        payload = self.policy._build_messages(build_snapshot(), build_actions())
+
+        user_message = json.loads(payload[1]["content"])
+        rules = user_message["game_rules"]
+        self.assertGreaterEqual(len(rules), 5)
+        self.assertTrue(any("战斗结束时" in rule for rule in rules))
+        self.assertTrue(any("end_turn" in rule for rule in rules))
+        self.assertIn("payload.game_rules", payload[0]["content"])
+
     def test_summarize_snapshot_hides_duplicate_move_name(self) -> None:
         snapshot = build_snapshot()
         snapshot.enemies[0].intent = "策略"

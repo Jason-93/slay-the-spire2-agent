@@ -33,6 +33,16 @@ class ChatCompletionsConfig:
 
 
 class ChatCompletionsPolicy:
+    GENERIC_RULES: tuple[str, ...] = (
+        "只能依据当前 snapshot、legal_actions、battle_context 决策；若某效果不在这些信息里，不要脑补。",
+        "必须逐字区分时机词：'回合结束时' 只在当前回合结束触发，'战斗结束时' 只在战斗胜利/结束后触发，二者不能混淆。",
+        "结束回合会放弃当前剩余能量与继续出牌机会；除非确实没有更有价值的合法动作，否则不要轻易选择 end_turn。",
+        "格挡用于抵挡即将到来的伤害；若敌人意图攻击，而你还能通过格挡、减伤、击杀或其他合法动作明显降低伤害，应认真比较这些动作，不要忽略。",
+        "若某张牌、药水、遗物、能力提供了 description 或 glossary，优先按这些文本的字面效果理解，不要把别的卡牌/遗物规则套过来。",
+        "若描述写的是战斗结束回血、回合结束得格挡、抽牌后触发等，必须严格按描述时机判断，不能提前或延后生效。",
+        "当 legal_actions 中仍有可打出的牌、可用药水或额外选牌动作时，只有在你明确判断这些动作价值都不足时，才考虑 end_turn。",
+    )
+
     def __init__(self, config: ChatCompletionsConfig | None = None) -> None:
         self.config = config or ChatCompletionsConfig()
 
@@ -102,8 +112,10 @@ class ChatCompletionsPolicy:
             "若不确定，优先返回 halt=true 或选择 skip_reward（并在 reason 说明原因）。"
             "当 snapshot.phase=map 时，只能在 choose_map_node 中选择一个可达节点；"
             "若没有足够信息判断路线，请优先选择更保守的普通战斗节点。"
+            "你必须严格遵守 payload.game_rules 中列出的基础通用规则，尤其不要混淆'回合结束时'与'战斗结束时'。"
         )
         user_payload = {
+            "game_rules": list(self.GENERIC_RULES),
             "snapshot": self._summarize_snapshot(snapshot),
             "legal_actions": [self._summarize_action(action) for action in legal_actions],
             "output_schema": {
