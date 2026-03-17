@@ -364,29 +364,34 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
         self.assertTrue(summary["metadata"]["shop_leave_available"])
         self.assertEqual(summary["metadata"]["shop_offers"][0]["name"], "铁浪")
 
-    def test_action_summary_includes_shop_offer_metadata(self) -> None:
+    def test_action_summary_includes_lightweight_shop_context(self) -> None:
         action = LegalAction(
             action_id="act-shop-1",
             type="buy_shop_card",
             label="Buy 铁浪 (54g)",
-            params={"offer_id": "card:shop-card-0", "price": 54},
+            params={
+                "offer_id": "card:shop-card-0",
+                "offer_index": 0,
+                "price": 54,
+                "kind": "card",
+                "canonical_id": "iron_wave",
+            },
             target_constraints=[],
             metadata={
-                "shop_offer": {
-                    "offer_id": "card:shop-card-0",
-                    "kind": "card",
-                    "name": "铁浪",
-                    "price": 54,
-                    "purchasable": True,
-                    "description": "造成5点**伤害**并获得5点**格挡**。",
-                }
+                "offer_id": "card:shop-card-0",
+                "offer_index": 0,
+                "offer_kind": "card",
+                "offer_name": "铁浪",
+                "price": 54,
+                "canonical_id": "iron_wave",
             },
         )
 
         summary = self.policy._summarize_action(action)
 
-        self.assertEqual(summary["shop_offer"]["kind"], "card")
-        self.assertEqual(summary["shop_offer"]["price"], 54)
+        self.assertEqual(summary["shop_context"]["offer_kind"], "card")
+        self.assertEqual(summary["shop_context"]["price"], 54)
+        self.assertNotIn("shop_offer", summary)
 
     def test_policy_allows_halt_true(self) -> None:
         response_payload = {

@@ -94,10 +94,41 @@ def validate_shop_flow() -> None:
         assert shop_snapshot["metadata"]["window_kind"] == "shop_main"
         assert isinstance(shop_snapshot["metadata"]["shop_offers"], list)
         assert shop_snapshot["metadata"]["shop_offer_count"] == len(shop_snapshot["metadata"]["shop_offers"])
+        assert "shop_detection_source" not in shop_snapshot["metadata"]
+        first_offer = shop_snapshot["metadata"]["shop_offers"][0]
+        assert "offer_id" in first_offer
+        assert "kind" in first_offer
+        assert "price" in first_offer
+        assert "canonical_id" in first_offer
+        assert "card" not in first_offer
+        assert "relic" not in first_offer
+        assert "potion" not in first_offer
+        bronze_scales = next(
+            offer for offer in shop_snapshot["metadata"]["shop_offers"]
+            if offer.get("canonical_id") == "bronze_scales"
+        )
+        assert any(anchor["glossary_id"] == "thorns" for anchor in bronze_scales.get("glossary", []))
+        purge_service = next(
+            offer for offer in shop_snapshot["metadata"]["shop_offers"]
+            if offer.get("service_kind") == "purge_card"
+        )
+        assert "{" not in str(purge_service.get("description") or "")
         assert any(action["type"] == "leave_shop" for action in shop_actions)
         assert any(action["type"] == "buy_shop_card" for action in shop_actions)
-
         buy_shop_card = next(action for action in shop_actions if action["type"] == "buy_shop_card")
+        assert buy_shop_card["params"]["offer_id"] == first_offer["offer_id"]
+        assert buy_shop_card["params"]["kind"] == first_offer["kind"]
+        assert buy_shop_card["params"]["price"] == first_offer["price"]
+        assert "name" not in buy_shop_card["params"]
+        assert buy_shop_card["metadata"]["offer_name"] == first_offer["name"]
+        assert "shop_offer" not in buy_shop_card["metadata"]
+        assert "card_preview" not in buy_shop_card["metadata"]
+        leave_shop = next(action for action in shop_actions if action["type"] == "leave_shop")
+        assert leave_shop["label"] == "Leave Shop"
+        assert leave_shop["params"] == {"choice": "leave_shop"}
+        assert leave_shop["metadata"]["choice"] == "leave_shop"
+        assert "button_label" not in leave_shop["params"]
+
         status_code, apply_response = post_json(
             base_url,
             "/apply",

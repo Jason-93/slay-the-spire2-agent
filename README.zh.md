@@ -10,7 +10,7 @@
 - 提供 C# in-game mod，可在游戏进程内暴露本地 HTTP bridge
 - 已支持读取真实运行时状态，并提供 `/health`、`/snapshot`、`/actions`、`/apply`
 - 支持在无活动 run 的主菜单/开局流程导出 `phase="menu"`，为自动化测试提供可重复的进入 run 起点（详见 `docs/sts2-mod-agent-compatibility.md`）
-- 已支持导出 `phase="shop"`，提供结构化商店商品、真实购买动作与 `leave_shop`
+- 已支持导出 `phase="shop"`，提供 canonical `shop_offers`、轻量购买动作与规范化 `leave_shop`
 - 已提供 `.pck` 打包、安装、启动和联调脚本
 
 ## 仓库结构
@@ -102,6 +102,8 @@ python tools/validate_mod_bridge.py
 ```
 
 用于跑 fixture 侧协议校验，覆盖 combat、reward、map、event、shop 等窗口，以及商店购买 / 离开 / stale-action 检查。
+
+现在商店详情以 `snapshot.metadata.shop_offers[]` 作为唯一 canonical 商品列表；商店 legal actions 只保留 `offer_id`、`offer_index`、`kind`、`price` 以及可选 `canonical_id` 等执行锚点，避免在 action metadata 中重复复制整份商品详情。
 
 ### reward -> map -> 下一场战斗链路验证
 

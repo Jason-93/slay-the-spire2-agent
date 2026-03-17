@@ -316,6 +316,7 @@ internal sealed class Sts2RuntimeReflectionReader
             ["weak"] = new("weak", "虚弱", new[] { "虚弱", "weak" }, "使攻击造成的伤害降低。"),
             ["frail"] = new("frail", "脆弱", new[] { "脆弱", "frail" }, "使从牌获得的格挡减少。"),
             ["dexterity"] = new("dexterity", "敏捷", new[] { "敏捷", "dexterity" }, "使从牌获得的格挡增加。"),
+            ["thorns"] = new("thorns", "荆棘", new[] { "荆棘", "thorns" }, "当受到攻击伤害时，对攻击者造成伤害。"),
             ["damage"] = new("damage", "伤害", new[] { "伤害", "damage" }, "会降低目标生命值。"),
             ["draw"] = new("draw", "抽牌", new[] { "抽", "draw" }, "从抽牌堆抽牌到手牌。"),
             ["energy"] = new("energy", "能量", new[] { "能量", "energy" }, "用于打出卡牌。"),
@@ -1799,8 +1800,6 @@ internal sealed class Sts2RuntimeReflectionReader
         var runStateSnapshot = BuildRunState(runState, textDiagnostics);
         var analysis = AnalyzeShopPhase(runNode, runState, textDiagnostics);
         metadata["window_kind"] = "shop_main";
-        metadata["shop_detection_source"] = analysis.DetectionSource;
-        metadata["shop_phase_detected"] = analysis.TreatAsShop;
         metadata["shop_leave_available"] = analysis.LeaveButton is not null || analysis.FallbackLeaveSupported;
         metadata["shop_offer_count"] = analysis.Offers.Count;
         metadata["shop_offers"] = analysis.Offers.Select(BuildShopOfferPayload).ToArray();
@@ -1818,18 +1817,12 @@ internal sealed class Sts2RuntimeReflectionReader
             {
                 ["offer_id"] = offer.OfferId,
                 ["offer_index"] = offer.Index,
-                ["name"] = offer.Name,
                 ["price"] = offer.Price,
+                ["kind"] = offer.Kind,
             };
             if (!string.IsNullOrWhiteSpace(offer.CanonicalId))
             {
-                parameters[offer.Kind switch
-                {
-                    "card" => "canonical_card_id",
-                    "relic" => "canonical_relic_id",
-                    "potion" => "canonical_potion_id",
-                    _ => "canonical_id",
-                }] = offer.CanonicalId;
+                parameters["canonical_id"] = offer.CanonicalId;
             }
 
             var label = offer.Kind switch
@@ -1855,14 +1848,15 @@ internal sealed class Sts2RuntimeReflectionReader
         {
             actions.Add(new RuntimeActionDefinition(
                 "leave_shop",
-                analysis.LeaveLabel,
+                "Leave Shop",
                 new Dictionary<string, object?>
                 {
-                    ["button_label"] = analysis.LeaveLabel,
+                    ["choice"] = "leave_shop",
                 },
                 Metadata: new Dictionary<string, object?>
                 {
-                    ["shop_detection_source"] = analysis.DetectionSource,
+                    ["choice"] = "leave_shop",
+                    ["display_label"] = analysis.LeaveLabel,
                 }));
         }
 
@@ -1891,19 +1885,23 @@ internal sealed class Sts2RuntimeReflectionReader
             ["description"] = offer.Description,
             ["glossary"] = offer.Glossary,
             ["canonical_id"] = offer.CanonicalId,
-            ["detection_source"] = offer.DetectionSource,
         };
         if (offer.Card is not null)
         {
-            payload["card"] = BuildCardPreview(offer.Card);
+            payload["card_id"] = offer.Card.CardId;
+            payload["card_type"] = offer.Card.CardType;
+            payload["rarity"] = offer.Card.Rarity;
+            payload["cost"] = offer.Card.Cost;
+            payload["target_type"] = offer.Card.TargetType;
+            payload["keywords"] = offer.Card.Keywords;
         }
         else if (offer.Relic is not null)
         {
-            payload["relic"] = BuildRelicPreview(offer.Relic);
+            payload["keywords"] = offer.Relic.Glossary?.Select(anchor => anchor.GlossaryId).Where(static value => !string.IsNullOrWhiteSpace(value)).ToArray();
         }
         else if (offer.Potion is not null)
         {
-            payload["potion"] = BuildPotionPreview(offer.Potion);
+            payload["keywords"] = offer.Potion.Glossary?.Select(anchor => anchor.GlossaryId).Where(static value => !string.IsNullOrWhiteSpace(value)).ToArray();
         }
         else if (!string.IsNullOrWhiteSpace(offer.ServiceKind))
         {
@@ -1919,20 +1917,19 @@ internal sealed class Sts2RuntimeReflectionReader
     {
         var metadata = new Dictionary<string, object?>
         {
-            ["shop_offer"] = BuildShopOfferPayload(offer),
-            ["shop_detection_source"] = offer.DetectionSource,
+            ["offer_id"] = offer.OfferId,
+            ["offer_index"] = offer.Index,
+            ["offer_kind"] = offer.Kind,
+            ["offer_name"] = offer.Name,
+            ["price"] = offer.Price,
         };
-        if (offer.Card is not null)
+        if (!string.IsNullOrWhiteSpace(offer.CanonicalId))
         {
-            metadata["card_preview"] = BuildCardPreview(offer.Card);
+            metadata["canonical_id"] = offer.CanonicalId;
         }
-        else if (offer.Relic is not null)
+        if (!string.IsNullOrWhiteSpace(offer.ServiceKind))
         {
-            metadata["relic_preview"] = BuildRelicPreview(offer.Relic);
-        }
-        else if (offer.Potion is not null)
-        {
-            metadata["potion_preview"] = BuildPotionPreview(offer.Potion);
+            metadata["service_kind"] = offer.ServiceKind;
         }
 
         return metadata;
@@ -2971,11 +2968,11 @@ internal sealed class Sts2RuntimeReflectionReader
 
         if (typeName.Contains("MerchantCardRemovalEntry", StringComparison.OrdinalIgnoreCase))
         {
-            var label = NormalizeDescriptionText(ConvertDescriptionTemplateToText(GetMemberValue(slotNode, "Title"), "shop.service.title", textDiagnostics, "Title"))
-                ?? (slotNode is null ? null : GetMenuNodeLabel(slotNode, textDiagnostics))
-                ?? "卡牌移除服务";
-            var description = NormalizeDescriptionText(ConvertDescriptionTemplateToText(GetMemberValue(slotNode, "Description"), "shop.service.description", textDiagnostics, "Description"))
-                ?? "移除牌组中的一张牌。";
+            var service = DescribeShopService(
+                primarySource: slotNode,
+                secondarySource: entry,
+                path: $"shop.service[{index}]",
+                textDiagnostics);
             var used = GetMemberValue(entry, "Used") is bool usedValue && usedValue;
             var purchasable = stocked && interactable && !used && enoughGold && gold >= price;
             var unavailableReason = purchasable ? null : used ? "service_unavailable" : (gold < price || !enoughGold) ? "not_affordable" : "service_unavailable";
@@ -2983,12 +2980,12 @@ internal sealed class Sts2RuntimeReflectionReader
                 OfferId: "service:purge_card",
                 Kind: "service",
                 Index: index,
-                Name: label.Trim(),
+                Name: service.Name,
                 Price: price,
                 Purchasable: purchasable,
                 UnavailableReason: unavailableReason,
-                Description: description,
-                Glossary: Array.Empty<GlossaryAnchor>(),
+                Description: service.Description,
+                Glossary: service.Glossary,
                 CanonicalId: null,
                 DetectionSource: detectionSource,
                 OfferNode: entry,
@@ -3134,20 +3131,23 @@ internal sealed class Sts2RuntimeReflectionReader
 
         if (typeName.Contains("MerchantCardRemoval", StringComparison.OrdinalIgnoreCase))
         {
-            var label = GetMenuNodeLabel(node, textDiagnostics) ?? "Card Removal";
-            var normalizedLabel = string.IsNullOrWhiteSpace(label) ? "Card Removal" : label.Trim();
+            var service = DescribeShopService(
+                primarySource: node,
+                secondarySource: null,
+                path: $"shop.service[{index}]",
+                textDiagnostics);
             var purchasable = interactable && gold >= price;
             var unavailableReason = purchasable ? null : gold < price ? "not_affordable" : "service_unavailable";
             offer = new ShopOfferAnalysis(
                 OfferId: "service:purge_card",
                 Kind: "service",
                 Index: index,
-                Name: normalizedLabel,
+                Name: service.Name,
                 Price: price,
                 Purchasable: purchasable,
                 UnavailableReason: unavailableReason,
-                Description: "Remove a card from your deck.",
-                Glossary: Array.Empty<GlossaryAnchor>(),
+                Description: service.Description,
+                Glossary: service.Glossary,
                 CanonicalId: null,
                 DetectionSource: detectionSource,
                 OfferNode: node,
@@ -3286,6 +3286,101 @@ internal sealed class Sts2RuntimeReflectionReader
 
         offer = default;
         return false;
+    }
+
+    private (string Name, string Description, IReadOnlyList<GlossaryAnchor> Glossary) DescribeShopService(
+        object? primarySource,
+        object? secondarySource,
+        string path,
+        TextDiagnosticsCollector textDiagnostics)
+    {
+        var titleValue =
+            GetFirstMemberValue(primarySource, "Title", "Label", "Name", "Text")
+            ?? GetFirstMemberValue(secondarySource, "Title", "Label", "Name", "Text");
+        var fallbackNode = primarySource ?? secondarySource;
+        var fallbackLabel = fallbackNode is null ? null : GetMenuNodeLabel(fallbackNode, textDiagnostics);
+        var name = NormalizeDescriptionText(ConvertDescriptionTemplateToText(
+                titleValue,
+                $"{path}.title",
+                textDiagnostics,
+                "Title",
+                "Label",
+                "Name",
+                "Text"))
+            ?? fallbackLabel
+            ?? "卡牌移除服务";
+
+        var descriptionValue =
+            GetFirstMemberValue(primarySource, "Description", "DynamicDescription", "StaticDescription", "RulesText", "Text", "LocString")
+            ?? GetFirstMemberValue(secondarySource, "Description", "DynamicDescription", "StaticDescription", "RulesText", "Text", "LocString");
+        var boundDescriptionValue =
+            TryBindLocStringWithDynamicVars(descriptionValue, primarySource)
+            ?? TryBindLocStringWithDynamicVars(descriptionValue, secondarySource);
+        var raw = ConvertDescriptionTemplateToText(
+            descriptionValue,
+            $"{path}.description",
+            textDiagnostics,
+            "Description",
+            "DynamicDescription",
+            "StaticDescription",
+            "RulesText",
+            "Text",
+            "LocString");
+        var rendered = NormalizeDescriptionText(ConvertDescriptionTemplateToText(
+            GetFirstMemberValue(primarySource, "RenderedDescription", "RenderedText", "DisplayDescription")
+            ?? GetFirstMemberValue(secondarySource, "RenderedDescription", "RenderedText", "DisplayDescription")
+            ?? boundDescriptionValue,
+            $"{path}.rendered",
+            textDiagnostics,
+            "RenderedDescription",
+            "RenderedText",
+            "DisplayDescription"));
+        var seedVariables = ExtractDescriptionVariablesFromLocString(descriptionValue, "loc_string")
+            .Concat(ExtractDescriptionVariablesFromLocString(boundDescriptionValue, "bound_loc_string"))
+            .ToArray();
+        var variables = DeduplicateVariables(
+            (primarySource is null
+                ? Array.Empty<DescriptionVariable>()
+                : ExtractDescriptionVariables(primarySource, raw, seedVariables))
+            .Concat(secondarySource is null || ReferenceEquals(secondarySource, primarySource)
+                ? Array.Empty<DescriptionVariable>()
+                : ExtractDescriptionVariables(secondarySource, raw, seedVariables)));
+        var renderOutcome = RenderDescription(
+            raw,
+            rendered,
+            variables);
+        var canonicalDescription = ChooseCanonicalDescription(renderOutcome.Text, raw);
+        if (ContainsDescriptionPlaceholder(canonicalDescription) && !string.IsNullOrWhiteSpace(raw))
+        {
+            var strippedTemplate = NormalizeDescriptionText(PlaceholderRegex.Replace(raw, string.Empty));
+            if (!string.IsNullOrWhiteSpace(strippedTemplate) && !ContainsDescriptionPlaceholder(strippedTemplate))
+            {
+                canonicalDescription = strippedTemplate;
+            }
+        }
+        canonicalDescription ??= "移除牌组中的一张牌。";
+        var glossary = ExtractGlossaryAnchors(
+            canonicalId: null,
+            displayName: name,
+            texts: new[] { canonicalDescription, raw, name },
+            keywords: null,
+            traits: null,
+            path: $"{path}.glossary",
+            primarySource,
+            secondarySource);
+
+        LogDescriptionDiagnostics(
+            kind: "shop_service",
+            identifier: "purge_card",
+            path: path,
+            raw: raw,
+            rendered: canonicalDescription,
+            quality: renderOutcome.Quality,
+            source: renderOutcome.Source,
+            variables: variables,
+            glossary: glossary);
+
+        return (name.Trim(), canonicalDescription, glossary);
     }
 
     private object? ResolveShopPayloadNode(object node, IEnumerable<string> memberNames)
@@ -5348,6 +5443,7 @@ internal sealed class Sts2RuntimeReflectionReader
 
         var filtered = new List<GlossaryAnchor>(glossary.Count);
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenSemantic = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var anchor in glossary)
         {
             var reason = ClassifyCardGlossaryFilterReason(anchor);
@@ -5364,6 +5460,15 @@ internal sealed class Sts2RuntimeReflectionReader
             if (!seen.Add(dedupeKey))
             {
                 LogCardGlossaryFilter(canonicalCardId ?? cardName, path, anchor, "duplicate_glossary");
+                continue;
+            }
+
+            var semanticKey = string.Join("|",
+                NormalizeComparisonText(anchor.DisplayText),
+                NormalizeComparisonText(anchor.Hint));
+            if (!string.IsNullOrWhiteSpace(semanticKey) && !seenSemantic.Add(semanticKey))
+            {
+                LogCardGlossaryFilter(canonicalCardId ?? cardName, path, anchor, "duplicate_semantic_glossary");
                 continue;
             }
 
@@ -6664,6 +6769,7 @@ internal sealed class Sts2RuntimeReflectionReader
 
         var filtered = new List<GlossaryAnchor>(glossary.Count);
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenSemantic = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var anchor in glossary)
         {
             var reason = ClassifyRelicGlossaryFilterReason(anchor, canonicalRelicId, relicName, canonicalDescription);
@@ -6680,6 +6786,15 @@ internal sealed class Sts2RuntimeReflectionReader
             if (!seen.Add(dedupeKey))
             {
                 LogRelicGlossaryFilter(canonicalRelicId ?? relicName, path, anchor, "duplicate_glossary");
+                continue;
+            }
+
+            var semanticKey = string.Join("|",
+                NormalizeComparisonText(anchor.DisplayText),
+                NormalizeComparisonText(anchor.Hint));
+            if (!string.IsNullOrWhiteSpace(semanticKey) && !seenSemantic.Add(semanticKey))
+            {
+                LogRelicGlossaryFilter(canonicalRelicId ?? relicName, path, anchor, "duplicate_semantic_glossary");
                 continue;
             }
 
@@ -7177,6 +7292,7 @@ internal sealed class Sts2RuntimeReflectionReader
 
         var filtered = new List<GlossaryAnchor>(glossary.Count);
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenSemantic = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var anchor in glossary)
         {
             var reason = ClassifyPotionGlossaryFilterReason(anchor, canonicalPotionId, potionName, canonicalDescription);
@@ -7193,6 +7309,15 @@ internal sealed class Sts2RuntimeReflectionReader
             if (!seen.Add(dedupeKey))
             {
                 LogPotionGlossaryFilter(canonicalPotionId ?? potionName, path, anchor, "duplicate_glossary");
+                continue;
+            }
+
+            var semanticKey = string.Join("|",
+                NormalizeComparisonText(anchor.DisplayText),
+                NormalizeComparisonText(anchor.Hint));
+            if (!string.IsNullOrWhiteSpace(semanticKey) && !seenSemantic.Add(semanticKey))
+            {
+                LogPotionGlossaryFilter(canonicalPotionId ?? potionName, path, anchor, "duplicate_semantic_glossary");
                 continue;
             }
 
@@ -7907,13 +8032,12 @@ internal sealed class Sts2RuntimeReflectionReader
             AddGlossaryCandidateFromId(candidates, trait, trait, "trait");
         }
 
-        foreach (var text in texts)
+        var normalizedTexts = texts
+            .Where(text => !string.IsNullOrWhiteSpace(text))
+            .Select(text => text!)
+            .ToArray();
+        foreach (var text in normalizedTexts)
         {
-            if (string.IsNullOrWhiteSpace(text))
-            {
-                continue;
-            }
-
             foreach (var spec in KnownGlossarySpecs.Values)
             {
                 if (spec.Terms.Any(term => text.Contains(term, StringComparison.OrdinalIgnoreCase)))
@@ -7921,6 +8045,40 @@ internal sealed class Sts2RuntimeReflectionReader
                     AddGlossaryCandidate(candidates, spec.GlossaryId, spec.DisplayText, "text_match");
                 }
             }
+        }
+
+        foreach (var hoverTip in EnumerateGlossaryHoverTips(hintSources))
+        {
+            var tipId = ConvertToText(GetMemberValue(hoverTip, "Id"), "Id");
+            var tipTitle = NormalizeDescriptionText(ConvertToText(
+                GetMemberValue(hoverTip, "Title")
+                ?? GetMemberValue(hoverTip, "Name")
+                ?? GetMemberValue(hoverTip, "Label"),
+                path: "glossary.hover_tip_title",
+                textDiagnostics: null,
+                preferredMembers: new[] { "Title", "Name", "Label", "Text" }));
+            var normalizedTipId = NormalizeGlossaryId(tipId);
+            if (string.IsNullOrWhiteSpace(normalizedTipId) && !string.IsNullOrWhiteSpace(tipTitle))
+            {
+                normalizedTipId = NormalizeGlossaryId(Regex.Replace(tipTitle, @"\d+$", string.Empty));
+            }
+            else if (LooksLikeSyntheticGlossaryId(normalizedTipId) && !string.IsNullOrWhiteSpace(tipTitle))
+            {
+                normalizedTipId = NormalizeGlossaryId(Regex.Replace(tipTitle, @"\d+$", string.Empty));
+            }
+
+            if (string.IsNullOrWhiteSpace(normalizedTipId) || string.IsNullOrWhiteSpace(tipTitle))
+            {
+                continue;
+            }
+
+            var matchesText = normalizedTexts.Any(text => text.Contains(tipTitle, StringComparison.OrdinalIgnoreCase));
+            if (!matchesText && !KnownGlossarySpecs.ContainsKey(normalizedTipId))
+            {
+                continue;
+            }
+
+            AddGlossaryCandidateFromId(candidates, normalizedTipId, tipTitle, "runtime_hover_tip");
         }
 
         var uniqueCandidates = candidates
@@ -7939,19 +8097,24 @@ internal sealed class Sts2RuntimeReflectionReader
 
     private static void AddGlossaryCandidateFromId(List<GlossaryCandidate> candidates, string? rawId, string? displayText, string matchSource)
     {
+        var normalizedDisplayText = NormalizeDescriptionText(displayText) ?? displayText?.Trim();
         var normalizedId = NormalizeGlossaryId(rawId);
+        if (string.IsNullOrWhiteSpace(normalizedId) && !string.IsNullOrWhiteSpace(normalizedDisplayText))
+        {
+            normalizedId = NormalizeGlossaryId(normalizedDisplayText);
+        }
         if (string.IsNullOrWhiteSpace(normalizedId))
         {
             return;
         }
 
-        if (KnownGlossarySpecs.TryGetValue(normalizedId, out var spec))
+        var spec = ResolveKnownGlossarySpec(normalizedId, normalizedDisplayText);
+        if (spec is not null)
         {
             AddGlossaryCandidate(candidates, spec.GlossaryId, spec.DisplayText, matchSource);
             return;
         }
 
-        var normalizedDisplayText = NormalizeDescriptionText(displayText) ?? displayText?.Trim();
         if (string.IsNullOrWhiteSpace(normalizedDisplayText))
         {
             return;
@@ -7968,6 +8131,35 @@ internal sealed class Sts2RuntimeReflectionReader
         }
 
         candidates.Add(new GlossaryCandidate(glossaryId, displayText, matchSource));
+    }
+
+    private static GlossarySpec? ResolveKnownGlossarySpec(string? normalizedId, string? displayText)
+    {
+        if (!string.IsNullOrWhiteSpace(normalizedId) && KnownGlossarySpecs.TryGetValue(normalizedId, out var specById))
+        {
+            return specById;
+        }
+
+        var normalizedDisplay = NormalizeComparisonText(displayText);
+        if (string.IsNullOrWhiteSpace(normalizedDisplay))
+        {
+            return null;
+        }
+
+        foreach (var spec in KnownGlossarySpecs.Values)
+        {
+            if (string.Equals(NormalizeComparisonText(spec.DisplayText), normalizedDisplay, StringComparison.OrdinalIgnoreCase))
+            {
+                return spec;
+            }
+
+            if (spec.Terms.Any(term => string.Equals(NormalizeComparisonText(term), normalizedDisplay, StringComparison.OrdinalIgnoreCase)))
+            {
+                return spec;
+            }
+        }
+
+        return null;
     }
 
     private GlossaryAnchor BuildGlossaryAnchor(GlossaryCandidate candidate, string path, IReadOnlyList<object?> hintSources)
@@ -10618,16 +10810,21 @@ internal sealed class Sts2RuntimeReflectionReader
         }
 
         var requestedOfferId = ConvertToText(GetDictionaryValue(action.Params, "offer_id"));
-        var requestedName = ConvertToText(GetDictionaryValue(action.Params, "name"));
+        var requestedCanonicalId = ConvertToText(GetDictionaryValue(action.Params, "canonical_id"));
+        var requestedKind = ConvertToText(GetDictionaryValue(action.Params, "kind"));
         var requestedPrice = GetNullableIntFromObject(GetDictionaryValue(action.Params, "price"));
         var requestedIndex = GetNullableIntFromObject(GetDictionaryValue(action.Params, "offer_index"));
         if (!string.IsNullOrWhiteSpace(requestedOfferId))
         {
             metadata["offer_id"] = requestedOfferId;
         }
-        if (!string.IsNullOrWhiteSpace(requestedName))
+        if (!string.IsNullOrWhiteSpace(requestedCanonicalId))
         {
-            metadata["name"] = requestedName;
+            metadata["canonical_id"] = requestedCanonicalId;
+        }
+        if (!string.IsNullOrWhiteSpace(requestedKind))
+        {
+            metadata["kind"] = requestedKind;
         }
         if (requestedPrice is not null)
         {
@@ -10652,10 +10849,16 @@ internal sealed class Sts2RuntimeReflectionReader
             return new RuntimeActionResult(false, "Shop offer kind changed since the action was generated.", "stale_action", metadata);
         }
 
-        if (!string.IsNullOrWhiteSpace(requestedName) && !string.Equals(offer.Name, requestedName, StringComparison.OrdinalIgnoreCase))
+        if (!string.IsNullOrWhiteSpace(requestedKind) && !string.Equals(offer.Kind, requestedKind, StringComparison.OrdinalIgnoreCase))
         {
-            metadata["resolved_name"] = offer.Name;
-            return new RuntimeActionResult(false, "Shop offer name changed since the action was generated.", "stale_action", metadata);
+            metadata["resolved_kind"] = offer.Kind;
+            return new RuntimeActionResult(false, "Shop offer kind changed since the action was generated.", "stale_action", metadata);
+        }
+
+        if (!string.IsNullOrWhiteSpace(requestedCanonicalId) && !string.Equals(offer.CanonicalId, requestedCanonicalId, StringComparison.OrdinalIgnoreCase))
+        {
+            metadata["resolved_canonical_id"] = offer.CanonicalId;
+            return new RuntimeActionResult(false, "Shop offer identity changed since the action was generated.", "stale_action", metadata);
         }
 
         if (requestedPrice is not null && offer.Price != requestedPrice.Value)
@@ -10754,10 +10957,10 @@ internal sealed class Sts2RuntimeReflectionReader
             return new RuntimeActionResult(false, "Shop window is not ready.", "runtime_not_ready", metadata);
         }
 
-        var requestedLabel = ConvertToText(GetDictionaryValue(action.Params, "button_label"));
-        if (!string.IsNullOrWhiteSpace(requestedLabel))
+        var requestedChoice = ConvertToText(GetDictionaryValue(action.Params, "choice"));
+        if (!string.IsNullOrWhiteSpace(requestedChoice))
         {
-            metadata["button_label"] = requestedLabel;
+            metadata["choice"] = requestedChoice;
         }
 
         var merchantRoomNode = ResolveMerchantRoomNode(runNode);
@@ -10767,10 +10970,10 @@ internal sealed class Sts2RuntimeReflectionReader
 
         if (analysis.LeaveButton is not null)
         {
-            if (!string.IsNullOrWhiteSpace(requestedLabel) && !string.Equals(analysis.LeaveLabel, requestedLabel, StringComparison.OrdinalIgnoreCase))
+            if (!string.IsNullOrWhiteSpace(requestedChoice) && !string.Equals(requestedChoice, "leave_shop", StringComparison.OrdinalIgnoreCase))
             {
-                metadata["resolved_button_label"] = analysis.LeaveLabel;
-                return new RuntimeActionResult(false, "Shop leave label changed since the action was generated.", "stale_action", metadata);
+                metadata["resolved_choice"] = "leave_shop";
+                return new RuntimeActionResult(false, "Shop leave action changed since the action was generated.", "stale_action", metadata);
             }
 
             if (ReferenceEquals(analysis.LeaveButton, backButton) &&

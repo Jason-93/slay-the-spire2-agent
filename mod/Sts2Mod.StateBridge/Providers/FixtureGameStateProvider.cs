@@ -760,7 +760,8 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
         var relicOffer = CreateFixtureRelic(
             "Bronze Scales",
             "At the start of each combat, gain 3 **Thorns**.",
-            "bronze_scales");
+            "bronze_scales",
+            "thorns");
         var potionOffer = CreateFixturePotion(
             "Speed Potion",
             "Gain 5 **Dexterity**. At the end of this turn, lose 5 **Dexterity**.",
@@ -778,17 +779,13 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                 ["purchasable"] = true,
                 ["unavailable_reason"] = null,
                 ["description"] = cardOffer.Description,
-                ["card"] = new Dictionary<string, object?>
-                {
-                    ["card_id"] = cardOffer.CardId,
-                    ["name"] = cardOffer.Name,
-                    ["canonical_card_id"] = cardOffer.CanonicalCardId,
-                    ["description"] = cardOffer.Description,
-                    ["card_type"] = cardOffer.CardType,
-                    ["rarity"] = cardOffer.Rarity,
-                    ["glossary"] = cardOffer.Glossary,
-                    ["keywords"] = cardOffer.Keywords,
-                },
+                ["canonical_id"] = cardOffer.CanonicalCardId,
+                ["card_id"] = cardOffer.CardId,
+                ["card_type"] = cardOffer.CardType,
+                ["rarity"] = cardOffer.Rarity,
+                ["cost"] = cardOffer.Cost,
+                ["target_type"] = cardOffer.TargetType,
+                ["keywords"] = cardOffer.Keywords,
                 ["glossary"] = cardOffer.Glossary,
             },
             new Dictionary<string, object?>
@@ -800,13 +797,8 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                 ["purchasable"] = true,
                 ["unavailable_reason"] = null,
                 ["description"] = relicOffer.Description,
-                ["relic"] = new Dictionary<string, object?>
-                {
-                    ["name"] = relicOffer.Name,
-                    ["canonical_relic_id"] = relicOffer.CanonicalRelicId,
-                    ["description"] = relicOffer.Description,
-                    ["glossary"] = relicOffer.Glossary,
-                },
+                ["canonical_id"] = relicOffer.CanonicalRelicId,
+                ["keywords"] = relicOffer.Glossary?.Select(anchor => anchor.GlossaryId).ToArray(),
                 ["glossary"] = relicOffer.Glossary,
             },
             new Dictionary<string, object?>
@@ -818,7 +810,8 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                 ["purchasable"] = true,
                 ["unavailable_reason"] = null,
                 ["description"] = potionOffer.Description,
-                ["potion"] = BuildPotionPreview(potionOffer),
+                ["canonical_id"] = potionOffer.CanonicalPotionId,
+                ["keywords"] = potionOffer.Glossary?.Select(anchor => anchor.GlossaryId).ToArray(),
                 ["glossary"] = potionOffer.Glossary,
             },
             new Dictionary<string, object?>
@@ -870,7 +863,6 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                 {
                     ["room_type"] = "shop",
                     ["window_kind"] = "shop_main",
-                    ["shop_detection_source"] = $"fixture.{key}",
                     ["shop_leave_available"] = true,
                     ["shop_purge_available"] = purgeAvailable,
                     ["shop_offers"] = offers,
@@ -900,21 +892,18 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                 {
                     ["offer_id"] = "card:shop-card-0",
                     ["offer_index"] = 0,
-                    ["name"] = cardOffer.Name,
                     ["price"] = 54,
-                    ["canonical_card_id"] = cardOffer.CanonicalCardId,
+                    ["kind"] = "card",
+                    ["canonical_id"] = cardOffer.CanonicalCardId,
                 },
                 Metadata: new Dictionary<string, object?>
                 {
-                    ["shop_offer"] = shopOffers[0],
-                    ["card_preview"] = new Dictionary<string, object?>
-                    {
-                        ["card_id"] = cardOffer.CardId,
-                        ["name"] = cardOffer.Name,
-                        ["canonical_card_id"] = cardOffer.CanonicalCardId,
-                        ["description"] = cardOffer.Description,
-                        ["glossary"] = cardOffer.Glossary,
-                    },
+                    ["offer_id"] = "card:shop-card-0",
+                    ["offer_index"] = 0,
+                    ["offer_kind"] = "card",
+                    ["offer_name"] = cardOffer.Name,
+                    ["price"] = 54,
+                    ["canonical_id"] = cardOffer.CanonicalCardId,
                 }),
             new RuntimeActionDefinition(
                 "buy_shop_relic",
@@ -923,13 +912,18 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                 {
                     ["offer_id"] = "relic:bronze_scales",
                     ["offer_index"] = 1,
-                    ["name"] = relicOffer.Name,
                     ["price"] = 150,
-                    ["canonical_relic_id"] = relicOffer.CanonicalRelicId,
+                    ["kind"] = "relic",
+                    ["canonical_id"] = relicOffer.CanonicalRelicId,
                 },
                 Metadata: new Dictionary<string, object?>
                 {
-                    ["shop_offer"] = shopOffers[1],
+                    ["offer_id"] = "relic:bronze_scales",
+                    ["offer_index"] = 1,
+                    ["offer_kind"] = "relic",
+                    ["offer_name"] = relicOffer.Name,
+                    ["price"] = 150,
+                    ["canonical_id"] = relicOffer.CanonicalRelicId,
                 }),
             new RuntimeActionDefinition(
                 "buy_shop_potion",
@@ -938,14 +932,18 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                 {
                     ["offer_id"] = "potion:speed_potion",
                     ["offer_index"] = 2,
-                    ["name"] = potionOffer.Name,
                     ["price"] = 68,
-                    ["canonical_potion_id"] = potionOffer.CanonicalPotionId,
+                    ["kind"] = "potion",
+                    ["canonical_id"] = potionOffer.CanonicalPotionId,
                 },
                 Metadata: new Dictionary<string, object?>
                 {
-                    ["shop_offer"] = shopOffers[2],
-                    ["potion_preview"] = BuildPotionPreview(potionOffer),
+                    ["offer_id"] = "potion:speed_potion",
+                    ["offer_index"] = 2,
+                    ["offer_kind"] = "potion",
+                    ["offer_name"] = potionOffer.Name,
+                    ["price"] = 68,
+                    ["canonical_id"] = potionOffer.CanonicalPotionId,
                 }),
             new RuntimeActionDefinition(
                 "purge_shop_card",
@@ -954,19 +952,29 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                 {
                     ["offer_id"] = "service:purge",
                     ["offer_index"] = 3,
-                    ["name"] = "Card Removal",
                     ["price"] = 75,
+                    ["kind"] = "service",
                 },
                 Metadata: new Dictionary<string, object?>
                 {
-                    ["shop_offer"] = shopOffers[3],
+                    ["offer_id"] = "service:purge",
+                    ["offer_index"] = 3,
+                    ["offer_kind"] = "service",
+                    ["offer_name"] = "Card Removal",
+                    ["price"] = 75,
+                    ["service_kind"] = "purge_card",
                 }),
             new RuntimeActionDefinition(
                 "leave_shop",
                 "Leave Shop",
                 new Dictionary<string, object?>
                 {
-                    ["button_label"] = "Leave Shop",
+                    ["choice"] = "leave_shop",
+                },
+                Metadata: new Dictionary<string, object?>
+                {
+                    ["choice"] = "leave_shop",
+                    ["display_label"] = "Leave Shop",
                 }),
         };
 
@@ -1011,7 +1019,7 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                 },
                 actions: new[]
                 {
-                    new RuntimeActionDefinition("leave_shop", "Leave Shop", new Dictionary<string, object?> { ["button_label"] = "Leave Shop" }),
+                    new RuntimeActionDefinition("leave_shop", "Leave Shop", new Dictionary<string, object?> { ["choice"] = "leave_shop" }, Metadata: new Dictionary<string, object?> { ["choice"] = "leave_shop", ["display_label"] = "Leave Shop" }),
                 }),
             ["shop_potion_full"] = BuildShopWindow(
                 "shop_potion_full",
@@ -1035,7 +1043,7 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                 },
                 actions: new[]
                 {
-                    new RuntimeActionDefinition("leave_shop", "Leave Shop", new Dictionary<string, object?> { ["button_label"] = "Leave Shop" }),
+                    new RuntimeActionDefinition("leave_shop", "Leave Shop", new Dictionary<string, object?> { ["choice"] = "leave_shop" }, Metadata: new Dictionary<string, object?> { ["choice"] = "leave_shop", ["display_label"] = "Leave Shop" }),
                 }),
             ["shop_service_unavailable"] = BuildShopWindow(
                 "shop_service_unavailable",
@@ -1058,7 +1066,7 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                 },
                 actions: new[]
                 {
-                    new RuntimeActionDefinition("leave_shop", "Leave Shop", new Dictionary<string, object?> { ["button_label"] = "Leave Shop" }),
+                    new RuntimeActionDefinition("leave_shop", "Leave Shop", new Dictionary<string, object?> { ["choice"] = "leave_shop" }, Metadata: new Dictionary<string, object?> { ["choice"] = "leave_shop", ["display_label"] = "Leave Shop" }),
                 },
                 purgeAvailable: false),
         };
@@ -1514,6 +1522,9 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                     break;
                 case "strength":
                     glossary.Add(new GlossaryAnchor("strength", "Strength", "Increases attack damage.", "runtime_hover_tip"));
+                    break;
+                case "thorns":
+                    glossary.Add(new GlossaryAnchor("thorns", "Thorns", "Deals damage back to attackers when hit by an attack.", "runtime_hover_tip"));
                     break;
             }
         }

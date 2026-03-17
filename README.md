@@ -10,7 +10,7 @@ English | [简体中文](README.zh.md)
 - A C# in-game mod that exposes a local HTTP bridge inside the game process
 - Real runtime state reading through `/health`, `/snapshot`, `/actions`, and `/apply`
 - `phase="menu"` export for the main menu / run-start flow, making automation entry reproducible when no active run exists (see `docs/sts2-mod-agent-compatibility.md`)
-- `phase="shop"` export with structured shop offers, real purchase actions, and `leave_shop`
+- `phase="shop"` export with canonical `shop_offers`, lightweight purchase actions, and normalized `leave_shop`
 - `.pck` packaging, install, launch, and live-debug scripts
 
 ## Repository Layout
@@ -102,6 +102,8 @@ python tools/validate_mod_bridge.py
 ```
 
 Runs fixture-side protocol validation for combat, reward, map, event, and shop flows, including shop purchase / leave stale checks.
+
+Shop snapshots now treat `snapshot.metadata.shop_offers[]` as the canonical source of item facts. Shop legal actions only carry execution anchors such as `offer_id`, `offer_index`, `kind`, `price`, and optional `canonical_id`, while display details stay in `shop_offers[]`.
 
 ### Reward -> Map -> Next Battle Validation
 

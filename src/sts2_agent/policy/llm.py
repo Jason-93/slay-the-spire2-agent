@@ -296,9 +296,13 @@ class ChatCompletionsPolicy:
         event_option = action.metadata.get("event_option")
         if isinstance(event_option, dict):
             payload["event_option"] = to_dict(event_option)
-        shop_offer = action.metadata.get("shop_offer")
-        if isinstance(shop_offer, dict):
-            payload["shop_offer"] = to_dict(shop_offer)
+        shop_metadata = {
+            key: action.metadata.get(key)
+            for key in ("offer_id", "offer_index", "offer_kind", "offer_name", "price", "canonical_id", "service_kind", "choice", "display_label")
+            if key in action.metadata
+        }
+        if shop_metadata:
+            payload["shop_context"] = to_dict(shop_metadata)
         return payload
 
     @staticmethod
