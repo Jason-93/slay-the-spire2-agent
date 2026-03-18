@@ -289,6 +289,11 @@ internal static class InGameRuntimeCoordinator
         };
         if (!result.Accepted)
         {
+            if (string.Equals(result.ErrorCode, "runtime_not_applied", StringComparison.OrdinalIgnoreCase))
+            {
+                return CreateFailedResponse(request, action.ActionId, result.ErrorCode ?? "runtime_not_applied", result.Message, responseMetadata);
+            }
+
             return CreateRejectedResponse(request, action.ActionId, result.ErrorCode ?? "action_rejected", result.Message, responseMetadata);
         }
 

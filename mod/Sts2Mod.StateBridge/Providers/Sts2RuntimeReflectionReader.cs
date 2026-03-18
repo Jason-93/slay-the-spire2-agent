@@ -47,6 +47,18 @@ internal sealed record EnemyMoveNameResolution(
     string? SuppressedCandidate = null,
     string? Source = null);
 
+internal sealed record PlayCardRuntimeSnapshot(
+    int? Energy,
+    int? PlayerHp,
+    int? PlayerBlock,
+    int HandCount,
+    string HandSignature,
+    string EnemySignature,
+    string? SelectionScreenType,
+    string? SelectionKind,
+    string? SelectionPrompt,
+    string? OverlayTopType);
+
 internal sealed class Sts2RuntimeReflectionReader
 {
     private const string Sts2AssemblyName = "sts2";
@@ -300,6 +312,11 @@ internal sealed class Sts2RuntimeReflectionReader
     {
         "smartDescription",
         "description",
+    };
+    private static readonly string[] EntityDescriptionLocStringSuffixes =
+    {
+        "description",
+        "smartDescription",
     };
     private static readonly IReadOnlyDictionary<string, string[]> DescriptionVariableMemberAliases =
         new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
@@ -6491,6 +6508,95 @@ internal sealed class Sts2RuntimeReflectionReader
         return null;
     }
 
+    private static object? GetFirstSafeDescriptionMemberValue(object? target, params string[] memberNames)
+    {
+        foreach (var memberName in memberNames)
+        {
+            var value = GetSafeDescriptionMemberValue(target, memberName);
+            if (value is not null)
+            {
+                return value;
+            }
+        }
+
+        return null;
+    }
+
+    private static object? GetSafeDescriptionMemberValue(object? target, string memberName)
+    {
+        if (target is null)
+        {
+            return null;
+        }
+
+        if (!LooksLikeRiskyDescriptionMember(memberName))
+        {
+            return GetMemberValue(target, memberName);
+        }
+
+        foreach (var candidateName in EnumerateDescriptionMemberAliases(memberName))
+        {
+            var fieldValue = GetFieldValue(target, candidateName);
+            if (fieldValue is not null)
+            {
+                return fieldValue;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool LooksLikeRiskyDescriptionMember(string memberName)
+    {
+        return memberName is "Description" or "SmartDescription" or "DynamicDescription" or "StaticDescription" or "TooltipText";
+    }
+
+    private static IEnumerable<string> EnumerateDescriptionMemberAliases(string memberName)
+    {
+        yield return memberName;
+        if (string.IsNullOrWhiteSpace(memberName))
+        {
+            yield break;
+        }
+
+        var camelCase = char.ToLowerInvariant(memberName[0]) + memberName[1..];
+        if (!string.Equals(camelCase, memberName, StringComparison.Ordinal))
+        {
+            yield return camelCase;
+        }
+
+        yield return "_" + camelCase;
+        yield return "_" + memberName;
+        yield return "m_" + camelCase;
+        yield return "m_" + memberName;
+    }
+
+    private static object? GetFieldValue(object? target, string fieldName)
+    {
+        if (target is null)
+        {
+            return null;
+        }
+
+        var type = target as Type ?? target.GetType();
+        var flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.IgnoreCase |
+                    (target is Type ? BindingFlags.Static : BindingFlags.Instance);
+        var field = type.GetField(fieldName, flags);
+        if (field is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return field.GetValue(target is Type ? null : target);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private static IReadOnlyList<string> ExtractCombinedTextList(
         IEnumerable<object?> collections,
         string path,
@@ -6669,7 +6775,7 @@ internal sealed class Sts2RuntimeReflectionReader
         }
 
         var descriptionValue =
-            GetFirstMemberValue(
+            GetFirstSafeDescriptionMemberValue(
                 source,
                 "Description",
                 "SmartDescription",
@@ -6679,7 +6785,7 @@ internal sealed class Sts2RuntimeReflectionReader
                 "Text",
                 "TooltipText",
                 "LocString")
-            ?? GetFirstMemberValue(
+            ?? GetFirstSafeDescriptionMemberValue(
                 relic,
                 "Description",
                 "SmartDescription",
@@ -6689,7 +6795,11 @@ internal sealed class Sts2RuntimeReflectionReader
                 "Text",
                 "TooltipText",
                 "LocString")
-            ?? GetMemberValue(hoverTip, "Description");
+            ?? GetSafeDescriptionMemberValue(hoverTip, "Description")
+            ?? GetMemberValue(source, "LocString")
+            ?? GetMemberValue(relic, "LocString");
+        var canonicalRelicId = ResolveRelicCanonicalId(source, relic);
+        descriptionValue ??= TryResolveRelicDescriptionLocString(canonicalRelicId);
         var boundDescriptionValue = TryBindLocStringWithDynamicVars(descriptionValue, source);
         var raw = ConvertDescriptionTemplateToText(
             descriptionValue,
@@ -6703,19 +6813,19 @@ internal sealed class Sts2RuntimeReflectionReader
             "Text",
             "TooltipText");
         var rendered = ConvertRenderedDescriptionToText(
-            GetFirstMemberValue(
+            GetFirstSafeDescriptionMemberValue(
                 source,
                 "RenderedDescription",
                 "RenderedText",
                 "DisplayDescription",
                 "DescriptionRendered")
-            ?? GetFirstMemberValue(
+            ?? GetFirstSafeDescriptionMemberValue(
                 relic,
                 "RenderedDescription",
                 "RenderedText",
                 "DisplayDescription",
                 "DescriptionRendered")
-            ?? GetMemberValue(hoverTip, "Description")
+            ?? GetSafeDescriptionMemberValue(hoverTip, "Description")
             ?? boundDescriptionValue,
             $"{path}.rendered",
             textDiagnostics,
@@ -6723,7 +6833,6 @@ internal sealed class Sts2RuntimeReflectionReader
             "RenderedText",
             "DisplayDescription",
             "DescriptionRendered");
-        var canonicalRelicId = ResolveRelicCanonicalId(source, relic);
         var vars = ExtractDescriptionVariables(
             source,
             raw,
@@ -7119,27 +7228,31 @@ internal sealed class Sts2RuntimeReflectionReader
             return null;
         }
 
-        var raw = ConvertDescriptionTemplateToText(
-            GetMemberValue(power, "Description")
+        var descriptionValue =
+            GetFirstSafeDescriptionMemberValue(power, "Description", "SmartDescription", "DynamicDescription", "StaticDescription")
             ?? GetMemberValue(power, "RulesText")
-            ?? GetMemberValue(power, "Text"),
+            ?? GetMemberValue(power, "Text");
+        var canonicalPowerId = ResolvePowerCanonicalId(power);
+        descriptionValue ??= TryResolvePowerDescriptionLocString(canonicalPowerId);
+        var raw = ConvertDescriptionTemplateToText(
+            descriptionValue,
             $"{path}.description",
             textDiagnostics,
             "Description",
+            "SmartDescription",
+            "DynamicDescription",
+            "StaticDescription",
             "RulesText",
             "Text");
         var rendered = ConvertRenderedDescriptionToText(
-            GetMemberValue(power, "RenderedDescription")
-            ?? GetMemberValue(power, "RenderedText")
-            ?? GetMemberValue(power, "DisplayDescription")
-            ?? GetMemberValue(power, "DescriptionRendered"),
+            GetFirstSafeDescriptionMemberValue(power, "RenderedDescription", "RenderedText", "DisplayDescription", "DescriptionRendered")
+            ?? descriptionValue,
             $"{path}.description_rendered",
             textDiagnostics,
             "RenderedDescription",
             "RenderedText",
             "DisplayDescription",
             "DescriptionRendered");
-        var canonicalPowerId = ResolvePowerCanonicalId(power);
         var vars = ExtractDescriptionVariables(power, raw, ResolvePowerDescriptionSeedVariables(power, canonicalPowerId));
         var renderOutcome = RenderDescription(raw, rendered, vars);
         var canonicalDescription = ChooseCanonicalDescription(renderOutcome.Text, raw);
@@ -7151,6 +7264,13 @@ internal sealed class Sts2RuntimeReflectionReader
             traits: null,
             path: $"{path}.glossary",
             power);
+        canonicalDescription ??= ResolveCanonicalPowerDescriptionFromGlossary(canonicalPowerId, name, glossary);
+        if (string.IsNullOrWhiteSpace(canonicalDescription))
+        {
+            _logger?.Warn(
+                $"Power description unresolved power={canonicalPowerId ?? name} path={path} " +
+                $"members={DescribeObjectMembersForLog(power)}");
+        }
         if (enemyIndex is not null)
         {
             glossary = FilterPowerGlossary(
@@ -7185,6 +7305,41 @@ internal sealed class Sts2RuntimeReflectionReader
             Glossary: glossary);
     }
 
+    private static string? ResolveCanonicalPowerDescriptionFromGlossary(
+        string? canonicalPowerId,
+        string powerName,
+        IReadOnlyList<GlossaryAnchor> glossary)
+    {
+        var normalizedPowerId = NormalizeGlossaryId(canonicalPowerId);
+        var normalizedPowerName = NormalizeComparisonText(powerName);
+        foreach (var anchor in glossary)
+        {
+            if (string.IsNullOrWhiteSpace(anchor.Hint) ||
+                ContainsDescriptionPlaceholder(anchor.Hint) ||
+                string.Equals(anchor.Source, "missing_hint", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(anchor.Source, "fallback_builtin", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var normalizedAnchorId = NormalizeGlossaryId(anchor.GlossaryId);
+            var normalizedDisplay = NormalizeComparisonText(anchor.DisplayText);
+            var identityMatch =
+                (!string.IsNullOrWhiteSpace(normalizedPowerId) &&
+                 string.Equals(normalizedAnchorId, normalizedPowerId, StringComparison.OrdinalIgnoreCase)) ||
+                (!string.IsNullOrWhiteSpace(normalizedPowerName) &&
+                 string.Equals(normalizedDisplay, normalizedPowerName, StringComparison.OrdinalIgnoreCase));
+            if (!identityMatch)
+            {
+                continue;
+            }
+
+            return NormalizeDescriptionText(anchor.Hint);
+        }
+
+        return null;
+    }
+
     private RuntimePotionState? DescribePotion(object? potion, string path, TextDiagnosticsCollector textDiagnostics)
     {
         var source = GetMemberValue(potion, "Potion")
@@ -7207,13 +7362,13 @@ internal sealed class Sts2RuntimeReflectionReader
             return null;
         }
 
-        var hoverTipDescriptionValue = GetMemberValue(GetMemberValue(source, "HoverTip"), "Description");
+        var hoverTipDescriptionValue = GetSafeDescriptionMemberValue(GetMemberValue(source, "HoverTip"), "Description");
         var descriptionValue =
-            GetMemberValue(source, "Description")
-            ?? GetMemberValue(source, "DynamicDescription")
-            ?? GetMemberValue(source, "StaticDescription")
+            GetFirstSafeDescriptionMemberValue(source, "Description", "SmartDescription", "DynamicDescription", "StaticDescription")
             ?? GetMemberValue(source, "RulesText")
             ?? GetMemberValue(source, "Text");
+        var canonicalPotionId = ResolvePotionCanonicalId(source);
+        descriptionValue ??= TryResolvePotionDescriptionLocString(canonicalPotionId);
         var boundDescriptionValue = TryBindLocStringWithDynamicVars(descriptionValue, source);
         var raw = ConvertDescriptionTemplateToText(
             descriptionValue ?? hoverTipDescriptionValue,
@@ -7225,9 +7380,7 @@ internal sealed class Sts2RuntimeReflectionReader
             "RulesText",
             "Text");
         var rendered = NormalizeDescriptionText(ConvertRenderedDescriptionToText(
-            GetMemberValue(source, "RenderedDescription")
-            ?? GetMemberValue(source, "RenderedText")
-            ?? GetMemberValue(source, "DisplayDescription")
+            GetFirstSafeDescriptionMemberValue(source, "RenderedDescription", "RenderedText", "DisplayDescription", "DescriptionRendered")
             ?? boundDescriptionValue,
             $"{path}.rendered",
             textDiagnostics,
@@ -7247,7 +7400,6 @@ internal sealed class Sts2RuntimeReflectionReader
                 rendered = hoverTipRendered;
             }
         }
-        var canonicalPotionId = ResolvePotionCanonicalId(source);
         var vars = ExtractDescriptionVariables(
             source,
             raw,
@@ -8401,11 +8553,22 @@ internal sealed class Sts2RuntimeReflectionReader
             }
 
             var description = NormalizeDescriptionText(ConvertDescriptionTemplateToText(
-                GetMemberValue(hoverTip, "Description")
-                ?? GetMemberValue(hoverTip, "Text")
+                GetFirstSafeDescriptionMemberValue(
+                    hoverTip,
+                    "RenderedDescription",
+                    "RenderedText",
+                    "DisplayDescription",
+                    "DescriptionRendered",
+                    "Description",
+                    "SmartDescription",
+                    "Text")
                 ?? hoverTip,
                 "Description",
                 null,
+                "RenderedDescription",
+                "RenderedText",
+                "DisplayDescription",
+                "DescriptionRendered",
                 "Text"));
             if (!string.IsNullOrWhiteSpace(description))
             {
@@ -8447,7 +8610,15 @@ internal sealed class Sts2RuntimeReflectionReader
 
     private static bool LooksLikeHoverTip(object candidate)
     {
-        return GetMemberValue(candidate, "Description") is not null &&
+        return GetFirstSafeDescriptionMemberValue(
+                   candidate,
+                   "RenderedDescription",
+                   "RenderedText",
+                   "DisplayDescription",
+                   "DescriptionRendered",
+                   "Description",
+                   "SmartDescription",
+                   "Text") is not null &&
                (GetMemberValue(candidate, "Title") is not null || GetMemberValue(candidate, "Id") is not null);
     }
 
@@ -8469,15 +8640,14 @@ internal sealed class Sts2RuntimeReflectionReader
 
             foreach (var memberName in GlossaryHintDescriptionMembers)
             {
-                var value = GetMemberValue(source, memberName);
+                var value = GetSafeDescriptionMemberValue(source, memberName)
+                    ?? (!LooksLikeRiskyDescriptionMember(memberName) ? GetMemberValue(source, memberName) : null);
                 if (value is null)
                 {
                     continue;
                 }
 
-                var text = string.Equals(memberName, "Description", StringComparison.Ordinal)
-                    ? NormalizeDescriptionText(ConvertDescriptionTemplateToText(value, "_", null, memberName))
-                    : NormalizeDescriptionText(ConvertToText(value, memberName));
+                var text = NormalizeDescriptionText(ConvertDescriptionTemplateToText(value, "_", null, memberName));
                 if (!string.IsNullOrWhiteSpace(text))
                 {
                     hint = text;
@@ -8505,6 +8675,121 @@ internal sealed class Sts2RuntimeReflectionReader
 
         hint = null;
         return false;
+    }
+
+    private object? TryResolvePowerDescriptionLocString(string? canonicalPowerId)
+    {
+        return TryResolveDescriptionLocString(canonicalPowerId, new[] { "powers" }, GlossaryLocStringSuffixes);
+    }
+
+    private object? TryResolveRelicDescriptionLocString(string? canonicalRelicId)
+    {
+        return TryResolveDescriptionLocString(canonicalRelicId, new[] { "relics", "relic" }, EntityDescriptionLocStringSuffixes);
+    }
+
+    private object? TryResolvePotionDescriptionLocString(string? canonicalPotionId)
+    {
+        return TryResolveDescriptionLocString(canonicalPotionId, new[] { "potions", "potion" }, EntityDescriptionLocStringSuffixes);
+    }
+
+    private object? TryResolveDescriptionLocString(
+        string? canonicalId,
+        IReadOnlyList<string> tables,
+        IReadOnlyList<string> suffixes)
+    {
+        foreach (var normalizedId in EnumerateDescriptionLocalizationIds(canonicalId))
+        {
+            foreach (var suffix in suffixes)
+            {
+                foreach (var table in tables)
+                {
+                    foreach (var key in new[] { $"{normalizedId}.{suffix}", $"{table}/{normalizedId}.{suffix}", $"{table}.{normalizedId}.{suffix}" })
+                    {
+                        var locString = key.Contains('/')
+                            ? TryResolveLocStringByKey(key)
+                            : key.StartsWith($"{table}.", StringComparison.Ordinal)
+                                ? TryResolveLocStringByKey(key)
+                                : TryResolveLocStringByTableAndKey(table, key);
+                        if (IsUsableDescriptionLocString(locString, normalizedId, suffix))
+                        {
+                            return locString;
+                        }
+                    }
+                }
+
+                var fallback = TryResolveLocStringByKey($"{normalizedId}.{suffix}");
+                if (IsUsableDescriptionLocString(fallback, normalizedId, suffix))
+                {
+                    return fallback;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<string> EnumerateDescriptionLocalizationIds(string? canonicalId)
+    {
+        var normalized = NormalizeDescriptionLocalizationId(canonicalId);
+        if (!string.IsNullOrWhiteSpace(normalized))
+        {
+            yield return normalized;
+            yield return normalized.ToLowerInvariant();
+        }
+
+        if (string.IsNullOrWhiteSpace(canonicalId))
+        {
+            yield break;
+        }
+
+        var trimmed = canonicalId.Trim();
+        if (string.IsNullOrWhiteSpace(trimmed))
+        {
+            yield break;
+        }
+
+        if (!string.Equals(trimmed, normalized, StringComparison.Ordinal))
+        {
+            yield return trimmed;
+            yield return trimmed.ToUpperInvariant();
+            yield return trimmed.ToLowerInvariant();
+        }
+    }
+
+    private static string? NormalizeDescriptionLocalizationId(string? canonicalId)
+    {
+        if (string.IsNullOrWhiteSpace(canonicalId))
+        {
+            return null;
+        }
+
+        var trimmed = canonicalId.Trim();
+        var lastDot = trimmed.LastIndexOf('.');
+        return lastDot >= 0 && lastDot + 1 < trimmed.Length
+            ? trimmed[(lastDot + 1)..].ToUpperInvariant()
+            : trimmed.ToUpperInvariant();
+    }
+
+    private static bool IsUsableDescriptionLocString(object? locString, string normalizedId, string suffix)
+    {
+        if (locString is null)
+        {
+            return false;
+        }
+
+        var rawText = TryInvokeParameterlessMethod(locString, "GetRawText") as string;
+        if (!string.IsNullOrWhiteSpace(rawText))
+        {
+            return true;
+        }
+
+        var entryKey = ConvertToText(GetMemberValue(locString, "LocEntryKey"));
+        if (string.IsNullOrWhiteSpace(entryKey))
+        {
+            return true;
+        }
+
+        return !string.Equals(entryKey, $"{normalizedId}.{suffix}", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool TryResolveBuiltInGlossaryHint(string glossaryId, out string? hint)
@@ -8565,6 +8850,48 @@ internal sealed class Sts2RuntimeReflectionReader
                 catch
                 {
                     // Ignore localization lookup failures and continue to the next strategy.
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private object? TryResolveLocStringByTableAndKey(string table, string key)
+    {
+        var assembly = FindSts2Assembly();
+        var locManagerType = assembly?.GetType("MegaCrit.Sts2.Core.Localization.LocManager");
+        if (locManagerType is null)
+        {
+            return null;
+        }
+
+        foreach (var methodName in new[] { "GetIfExists", "Get", "KeyPathToLocString", "GetLocString" })
+        {
+            var methods = locManagerType
+                .GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
+                .Where(method => string.Equals(method.Name, methodName, StringComparison.Ordinal))
+                .ToArray();
+            foreach (var method in methods)
+            {
+                var parameters = method.GetParameters();
+                if (parameters.Length != 2 ||
+                    parameters[0].ParameterType != typeof(string) ||
+                    parameters[1].ParameterType != typeof(string))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    var value = method.Invoke(null, new object?[] { table, key });
+                    if (value is not null)
+                    {
+                        return value;
+                    }
+                }
+                catch
+                {
                 }
             }
         }
@@ -9971,6 +10298,7 @@ internal sealed class Sts2RuntimeReflectionReader
 
         var canonicalCardId = ResolveCardCanonicalId(card);
         var selectionDiagnosticsEnabled = LooksLikeCombatSelectionCard(card, canonicalCardId);
+        var beforeSnapshot = CapturePlayCardRuntimeSnapshot(runNode, runState, hand);
 
         object? target = null;
         var targetId = ConvertToText(GetDictionaryValue(request.Params, "target_id"));
@@ -9988,7 +10316,30 @@ internal sealed class Sts2RuntimeReflectionReader
         var runtimeHandler = "card.TryManualPlay";
         Dictionary<string, object?>? playPathMetadata = null;
         var played = false;
-        if (TryExecutePlayCardViaPlayerHand(card, target, out var uiRuntimeHandler, out var uiMetadata))
+        var tryManualPlay = card.GetType().GetMethod("TryManualPlay", BindingFlags.Public | BindingFlags.Instance);
+        if (tryManualPlay is not null)
+        {
+            try
+            {
+                played = tryManualPlay.Invoke(card, new[] { target }) as bool? == true;
+            }
+            catch (TargetInvocationException ex)
+            {
+                return new RuntimeActionResult(
+                    false,
+                    $"Card '{cardId}' could not be played: {ex.GetBaseException().Message}",
+                    "play_rejected",
+                    new Dictionary<string, object?>
+                    {
+                        ["card_id"] = cardId,
+                        ["target_id"] = targetId,
+                        ["runtime_handler"] = runtimeHandler,
+                        ["play_strategy_attempt"] = "card_try_manual_play",
+                        ["play_strategy_failure_step"] = "try_manual_play_threw",
+                    });
+            }
+        }
+        else if (TryExecutePlayCardViaPlayerHand(card, target, out var uiRuntimeHandler, out var uiMetadata))
         {
             runtimeHandler = uiRuntimeHandler;
             playPathMetadata = uiMetadata;
@@ -10001,24 +10352,38 @@ internal sealed class Sts2RuntimeReflectionReader
                 playPathMetadata = uiMetadata;
             }
 
-            var tryManualPlay = card.GetType().GetMethod("TryManualPlay", BindingFlags.Public | BindingFlags.Instance);
-            if (tryManualPlay is null)
-            {
-                return new RuntimeActionResult(false, "Card.TryManualPlay is not available in this runtime.", "runtime_incompatible");
-            }
-
-            played = tryManualPlay.Invoke(card, new[] { target }) as bool? == true;
-            if (!played)
-            {
-                return new RuntimeActionResult(false, $"Card '{cardId}' could not be played.", "play_rejected");
-            }
+            return new RuntimeActionResult(false, "Card.TryManualPlay is not available in this runtime.", "runtime_incompatible");
         }
+
+        if (!played)
+        {
+            return new RuntimeActionResult(
+                false,
+                $"Card '{cardId}' could not be played.",
+                "play_rejected",
+                new Dictionary<string, object?>
+                {
+                    ["card_id"] = cardId,
+                    ["target_id"] = targetId,
+                    ["runtime_handler"] = runtimeHandler,
+                    ["play_strategy_attempt"] = string.Equals(runtimeHandler, "card.TryManualPlay", StringComparison.Ordinal)
+                        ? "card_try_manual_play"
+                        : "player_hand",
+                    ["play_strategy_failure_step"] = "play_returned_false",
+                });
+        }
+
+        var afterSnapshot = CapturePlayCardRuntimeSnapshot(runNode, runState, hand);
+        var progressEvidence = CollectPlayCardProgressEvidence(beforeSnapshot, afterSnapshot);
 
         var metadata = new Dictionary<string, object?>
         {
             ["card_id"] = cardId,
             ["target_id"] = targetId,
             ["runtime_handler"] = runtimeHandler,
+            ["state_progress_detected"] = progressEvidence.Count > 0,
+            ["state_progress_evidence"] = progressEvidence,
+            ["queue_stage"] = "executing",
         };
         if (playPathMetadata is not null)
         {
@@ -10031,6 +10396,8 @@ internal sealed class Sts2RuntimeReflectionReader
         {
             metadata["canonical_card_id"] = canonicalCardId;
         }
+        AppendPlayCardSnapshotMetadata(metadata, "before", beforeSnapshot);
+        AppendPlayCardSnapshotMetadata(metadata, "after", afterSnapshot);
 
         if (selectionDiagnosticsEnabled)
         {
@@ -10067,7 +10434,136 @@ internal sealed class Sts2RuntimeReflectionReader
             }
         }
 
+        if (progressEvidence.Count == 0)
+        {
+            _logger?.Warn(
+                $"Play card produced no live progress card={canonicalCardId ?? cardId} handler={runtimeHandler} " +
+                $"before_hand={beforeSnapshot.HandSignature} after_hand={afterSnapshot.HandSignature} " +
+                $"before_energy={beforeSnapshot.Energy?.ToString() ?? "?"} after_energy={afterSnapshot.Energy?.ToString() ?? "?"}");
+            metadata["play_strategy_failure_step"] = "no_live_state_progress";
+            return new RuntimeActionResult(
+                false,
+                $"Card '{cardId}' did not advance the live state after execution.",
+                "runtime_not_applied",
+                metadata);
+        }
+
         return new RuntimeActionResult(true, $"Played card '{cardId}'.", metadata: metadata);
+    }
+
+    private PlayCardRuntimeSnapshot CapturePlayCardRuntimeSnapshot(object runNode, object runState, object? hand)
+    {
+        var player = GetPlayers(runState).FirstOrDefault();
+        var combatState = GetCombatState(runState);
+        var selectionScreen = GetCombatCardSelectionScreen(runNode, runState);
+        var selectionPrompt = selectionScreen is null
+            ? null
+            : ResolveCombatSelectionPrompt(selectionScreen, textDiagnostics: null);
+        return new PlayCardRuntimeSnapshot(
+            Energy: GetNullableInt(player, "Energy")
+                ?? GetNullableInt(GetMemberValue(player, "PlayerCombatState"), "Energy")
+                ?? GetNullableInt(GetMemberValue(GetMemberValue(player, "PlayerCombatState"), "Energy"), "Current")
+                ?? GetNullableInt(GetMemberValue(GetMemberValue(player, "PlayerCombatState"), "Energy"), "Value"),
+            PlayerHp: GetNullableInt(player, "Hp") ?? GetNullableInt(player, "Health"),
+            PlayerBlock: GetNullableInt(player, "Block"),
+            HandCount: EnumerateObjects(GetMemberValue(hand, "Cards")).Count(),
+            HandSignature: BuildHandSignature(hand),
+            EnemySignature: BuildEnemySignature(GetMemberValue(combatState, "Enemies")),
+            SelectionScreenType: GetTypeName(selectionScreen),
+            SelectionKind: selectionScreen is null ? null : ResolveCombatSelectionKind(selectionScreen, selectionPrompt),
+            SelectionPrompt: selectionPrompt,
+            OverlayTopType: GetTypeName(GetOverlayTopScreen(runNode)));
+    }
+
+    private static string BuildHandSignature(object? hand)
+    {
+        return string.Join(
+            "|",
+            EnumerateObjects(GetMemberValue(hand, "Cards"))
+                .Select((candidate, index) => RuntimeCardIdentity.CreateCardId(candidate, index)));
+    }
+
+    private string BuildEnemySignature(object? enemies)
+    {
+        return string.Join(
+            "|",
+            EnumerateObjects(enemies)
+                .Select((enemy, index) =>
+                {
+                    var enemyId = ResolveEnemyId(enemy, index);
+                    var hp = GetNullableInt(enemy, "Hp") ?? GetNullableInt(enemy, "Health");
+                    var block = GetNullableInt(enemy, "Block");
+                    return $"{enemyId}:{hp?.ToString() ?? "?"}:{block?.ToString() ?? "?"}";
+                }));
+    }
+
+    private static List<string> CollectPlayCardProgressEvidence(PlayCardRuntimeSnapshot before, PlayCardRuntimeSnapshot after)
+    {
+        var evidence = new List<string>();
+        if (!string.Equals(before.HandSignature, after.HandSignature, StringComparison.Ordinal))
+        {
+            evidence.Add("hand_changed");
+        }
+
+        if (before.HandCount != after.HandCount)
+        {
+            evidence.Add("hand_count_changed");
+        }
+
+        if (before.Energy != after.Energy)
+        {
+            evidence.Add("energy_changed");
+        }
+
+        if (before.PlayerHp != after.PlayerHp)
+        {
+            evidence.Add("player_hp_changed");
+        }
+
+        if (before.PlayerBlock != after.PlayerBlock)
+        {
+            evidence.Add("player_block_changed");
+        }
+
+        if (!string.Equals(before.EnemySignature, after.EnemySignature, StringComparison.Ordinal))
+        {
+            evidence.Add("enemy_state_changed");
+        }
+
+        if (!string.Equals(before.SelectionScreenType, after.SelectionScreenType, StringComparison.Ordinal) ||
+            !string.Equals(before.SelectionKind, after.SelectionKind, StringComparison.Ordinal))
+        {
+            evidence.Add("selection_window_changed");
+        }
+
+        if (!string.Equals(before.SelectionPrompt, after.SelectionPrompt, StringComparison.Ordinal))
+        {
+            evidence.Add("selection_prompt_changed");
+        }
+
+        if (!string.Equals(before.OverlayTopType, after.OverlayTopType, StringComparison.Ordinal))
+        {
+            evidence.Add("overlay_changed");
+        }
+
+        return evidence;
+    }
+
+    private static void AppendPlayCardSnapshotMetadata(
+        IDictionary<string, object?> metadata,
+        string prefix,
+        PlayCardRuntimeSnapshot snapshot)
+    {
+        metadata[$"{prefix}_energy"] = snapshot.Energy;
+        metadata[$"{prefix}_player_hp"] = snapshot.PlayerHp;
+        metadata[$"{prefix}_player_block"] = snapshot.PlayerBlock;
+        metadata[$"{prefix}_hand_count"] = snapshot.HandCount;
+        metadata[$"{prefix}_hand_signature"] = snapshot.HandSignature;
+        metadata[$"{prefix}_enemy_signature"] = snapshot.EnemySignature;
+        metadata[$"{prefix}_selection_screen_type"] = snapshot.SelectionScreenType;
+        metadata[$"{prefix}_selection_kind"] = snapshot.SelectionKind;
+        metadata[$"{prefix}_selection_prompt"] = snapshot.SelectionPrompt;
+        metadata[$"{prefix}_overlay_top_type"] = snapshot.OverlayTopType;
     }
 
     private bool TryExecutePlayCardViaPlayerHand(
@@ -10222,10 +10718,12 @@ internal sealed class Sts2RuntimeReflectionReader
             new[]
             {
                 canonicalCardId,
-                ConvertToText(GetMemberValue(card, "Description")),
-                ConvertDescriptionTemplateToText(GetMemberValue(card, "RenderedDescription"), "_"),
+                ConvertDescriptionTemplateToText(
+                    GetFirstMemberValue(card, "RenderedDescription", "RenderedText", "RawDescription", "DescriptionTemplate", "RulesText"),
+                    "_"),
                 ConvertToText(GetMemberValue(card, "Name")),
                 ConvertToText(GetMemberValue(card, "Title")),
+                ConvertToText(GetMemberValue(card, "CardType")),
             }.Where(value => !string.IsNullOrWhiteSpace(value)));
         return text.Contains("选择", StringComparison.OrdinalIgnoreCase) ||
                text.Contains("消耗", StringComparison.OrdinalIgnoreCase) ||
