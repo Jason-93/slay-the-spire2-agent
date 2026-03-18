@@ -749,14 +749,14 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
     {
         var cardOffer = CreateFixtureCard(
             "shop-card-0",
-            "iron_wave",
-            "Iron Wave",
-            1,
-            "Deal 5 **damage**. Gain 5 **Block**.",
-            targetType: "AnyEnemy",
-            cardType: "Attack",
-            rarity: "Common",
-            keywords: new[] { "damage", "block" });
+            "production",
+            "Production",
+            0,
+            "Gain 2 **Energy**.",
+            targetType: "Self",
+            cardType: "Skill",
+            rarity: "Uncommon",
+            keywords: new[] { "energy" });
         var relicOffer = CreateFixtureRelic(
             "Bronze Scales",
             "At the start of each combat, gain 3 **Thorns**.",
@@ -822,7 +822,7 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                 ["price"] = 75,
                 ["purchasable"] = true,
                 ["unavailable_reason"] = null,
-                ["description"] = "Remove a card from your deck.",
+                ["description"] = "Remove a card from your deck. The price of this service increases by 25 gold in future events.",
                 ["service_kind"] = "purge_card",
             },
         };
@@ -1525,6 +1525,9 @@ public sealed class FixtureGameStateProvider : IGameStateProvider
                     break;
                 case "thorns":
                     glossary.Add(new GlossaryAnchor("thorns", "Thorns", "Deals damage back to attackers when hit by an attack.", "runtime_hover_tip"));
+                    break;
+                case "energy":
+                    glossary.Add(new GlossaryAnchor("energy", "Energy", "Used to play cards from your hand.", "runtime_hover_tip"));
                     break;
             }
         }

@@ -226,6 +226,12 @@ internal sealed class Sts2RuntimeReflectionReader
     private static readonly Regex EnergyIconPathRegex = new(@"res://images/packed/sprite_fonts/[A-Za-z0-9_]+_energy_icon\.png", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex EnergyIconRunRegex = new(@"(?:(?:res://images/packed/sprite_fonts/[A-Za-z0-9_]+_energy_icon\.png)\s*)+", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex EnergyLabelRunRegex = new(@"(?:(?<count>\d+)能量\s*){2,}", RegexOptions.Compiled);
+    private static readonly IReadOnlyDictionary<string, string> DescriptionSemanticDisplayText =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["gold"] = "金币",
+            ["energy"] = "能量",
+        };
     private static readonly string[] DescriptionSearchNestedMembers =
     {
         "Data",
@@ -304,6 +310,7 @@ internal sealed class Sts2RuntimeReflectionReader
             ["strength"] = new[] { "Strength", "StrengthAmount" },
             ["magic"] = new[] { "MagicNumber", "Magic", "MagicValue", "ModifiedMagicNumber", "CurrentMagicNumber", "Value" },
             ["energy"] = new[] { "Energy", "EnergyGain", "EnergyAmount", "Cost", "CurrentEnergyCost" },
+            ["gold"] = new[] { "Gold", "GoldAmount", "GoldCost", "Price", "Cost", "PurchasePrice", "PriceIncrease", "CostIncrease", "PriceDelta" },
             ["vulnerable"] = new[] { "Vulnerable", "VulnerableAmount" },
             ["weak"] = new[] { "Weak", "WeakAmount" },
             ["frail"] = new[] { "Frail", "FrailAmount" },
@@ -3341,8 +3348,8 @@ internal sealed class Sts2RuntimeReflectionReader
             "RenderedDescription",
             "RenderedText",
             "DisplayDescription"));
-        var seedVariables = ExtractDescriptionVariablesFromLocString(descriptionValue, "loc_string")
-            .Concat(ExtractDescriptionVariablesFromLocString(boundDescriptionValue, "bound_loc_string"))
+        var seedVariables = ExtractDescriptionVariablesFromLocString(descriptionValue, "loc_string", secondarySource ?? primarySource)
+            .Concat(ExtractDescriptionVariablesFromLocString(boundDescriptionValue, "bound_loc_string", secondarySource ?? primarySource))
             .ToArray();
         var variables = DeduplicateVariables(
             (primarySource is null
@@ -5394,8 +5401,8 @@ internal sealed class Sts2RuntimeReflectionReader
             "ResolvedDescription",
             "CurrentDescription");
         var seedVariables = ResolveCardDescriptionSeedVariables(source ?? card, raw, keywords)
-            .Concat(ExtractDescriptionVariablesFromLocString(descriptionValue, "loc_string"))
-            .Concat(ExtractDescriptionVariablesFromLocString(boundDescriptionValue, "bound_loc_string"))
+            .Concat(ExtractDescriptionVariablesFromLocString(descriptionValue, "loc_string", source ?? card))
+            .Concat(ExtractDescriptionVariablesFromLocString(boundDescriptionValue, "bound_loc_string", source ?? card))
             .ToArray();
         var vars = ExtractDescriptionVariables(source ?? card, raw, seedVariables);
         var gameRendered = ShouldAttemptGameRenderedCardDescription(raw)
@@ -5716,7 +5723,7 @@ internal sealed class Sts2RuntimeReflectionReader
         };
     }
 
-    private static IReadOnlyList<DescriptionVariable> ExtractDescriptionVariablesFromLocString(object? descriptionValue, string sourceLabel)
+    private static IReadOnlyList<DescriptionVariable> ExtractDescriptionVariablesFromLocString(object? descriptionValue, string sourceLabel, object? semanticContext = null)
     {
         if (descriptionValue is null)
         {
@@ -5744,12 +5751,13 @@ internal sealed class Sts2RuntimeReflectionReader
                 continue;
             }
 
-            var resolution = ResolveLocStringVariableValue(entry.Value);
+            var resolution = ResolveLocStringVariableValue(entry.Value, key, rawKey, semanticContext);
             results.Add(new DescriptionVariable(
                 key,
                 resolution.Value,
                 resolution.Source ?? sourceLabel,
-                rawKey));
+                rawKey,
+                resolution.SemanticKind));
         }
 
         return DeduplicateVariables(results);
@@ -5838,16 +5846,17 @@ internal sealed class Sts2RuntimeReflectionReader
         return false;
     }
 
-    private static VariableResolution ResolveLocStringVariableValue(object? value)
+    private static VariableResolution ResolveLocStringVariableValue(object? value, string? normalizedKey = null, string? rawKey = null, object? semanticContext = null)
     {
+        var semanticKind = ResolveDescriptionSemanticKind(semanticContext, normalizedKey, rawKey, rawKey);
         if (value is null)
         {
-            return new VariableResolution(null, null);
+            return new VariableResolution(null, null, semanticKind);
         }
 
         try
         {
-            return new VariableResolution(Convert.ToInt32(value), "loc_string.value");
+            return new VariableResolution(Convert.ToInt32(value), "loc_string.value", semanticKind);
         }
         catch
         {
@@ -5859,11 +5868,11 @@ internal sealed class Sts2RuntimeReflectionReader
             var numeric = GetNullableInt(value, memberName);
             if (numeric is not null)
             {
-                return new VariableResolution(numeric, $"loc_string.{memberName}");
+                return new VariableResolution(numeric, $"loc_string.{memberName}", semanticKind);
             }
         }
 
-        return new VariableResolution(null, null);
+        return new VariableResolution(null, null, semanticKind);
     }
 
     private static string ResolveEnemyId(object enemy, int index)
@@ -6718,8 +6727,8 @@ internal sealed class Sts2RuntimeReflectionReader
         var vars = ExtractDescriptionVariables(
             source,
             raw,
-            ExtractDescriptionVariablesFromLocString(descriptionValue, "loc_string")
-                .Concat(ExtractDescriptionVariablesFromLocString(boundDescriptionValue, "bound_loc_string"))
+            ExtractDescriptionVariablesFromLocString(descriptionValue, "loc_string", source)
+                .Concat(ExtractDescriptionVariablesFromLocString(boundDescriptionValue, "bound_loc_string", source))
                 .ToArray());
         var renderOutcome = RenderDescription(raw, rendered, vars);
         var canonicalDescription = ChooseCanonicalDescription(renderOutcome.Text, raw);
@@ -7242,8 +7251,8 @@ internal sealed class Sts2RuntimeReflectionReader
         var vars = ExtractDescriptionVariables(
             source,
             raw,
-            ExtractDescriptionVariablesFromLocString(descriptionValue, "loc_string")
-                .Concat(ExtractDescriptionVariablesFromLocString(boundDescriptionValue, "bound_loc_string"))
+            ExtractDescriptionVariablesFromLocString(descriptionValue, "loc_string", source)
+                .Concat(ExtractDescriptionVariablesFromLocString(boundDescriptionValue, "bound_loc_string", source))
                 .ToArray());
         var renderOutcome = RenderDescription(raw, rendered, vars);
         var canonicalDescription = ChooseCanonicalDescription(renderOutcome.Text, raw);
@@ -7584,7 +7593,7 @@ internal sealed class Sts2RuntimeReflectionReader
             return;
         }
 
-        variables.Add(new DescriptionVariable(key, resolution.Value, resolution.Source ?? sourceLabel, placeholder));
+        variables.Add(new DescriptionVariable(key, resolution.Value, resolution.Source ?? sourceLabel, placeholder, resolution.SemanticKind));
     }
 
     private static IReadOnlyList<DescriptionVariable> ExtractDescriptionVariables(
@@ -7614,7 +7623,8 @@ internal sealed class Sts2RuntimeReflectionReader
                     key,
                     resolution.Value,
                     resolution.Source ?? "description_placeholder",
-                    placeholder));
+                    placeholder,
+                    resolution.SemanticKind));
             }
         }
 
@@ -7628,7 +7638,8 @@ internal sealed class Sts2RuntimeReflectionReader
             .GroupBy(variable => variable.Key, StringComparer.OrdinalIgnoreCase)
             .Select(group =>
             {
-                var preferred = group.FirstOrDefault(variable => variable.Value is not null);
+                var preferred = group.FirstOrDefault(variable => variable.Value is not null && !string.IsNullOrWhiteSpace(variable.SemanticKind))
+                    ?? group.FirstOrDefault(variable => variable.Value is not null);
                 if (preferred is not null)
                 {
                     return preferred;
@@ -7643,7 +7654,7 @@ internal sealed class Sts2RuntimeReflectionReader
     {
         if (source is null || string.IsNullOrWhiteSpace(key))
         {
-            return new VariableResolution(null, null);
+            return new VariableResolution(null, null, null);
         }
 
         if (!DescriptionVariableMemberAliases.TryGetValue(key, out var aliases))
@@ -7651,12 +7662,14 @@ internal sealed class Sts2RuntimeReflectionReader
             aliases = new[] { key };
         }
 
+        var semanticKind = ResolveDescriptionSemanticKind(source, key, key, key);
+
         foreach (var match in EnumerateDescriptionVariableMatches(source, aliases))
         {
-            return match;
+            return new VariableResolution(match.Value, match.Source, semanticKind ?? match.SemanticKind);
         }
 
-        return new VariableResolution(null, null);
+        return new VariableResolution(null, null, semanticKind);
     }
 
     private static string NormalizeDescriptionVariableKey(string? rawKey)
@@ -7682,6 +7695,50 @@ internal sealed class Sts2RuntimeReflectionReader
             "strengthpower" => "strength",
             _ => normalized ?? string.Empty,
         };
+    }
+
+    private static string? ResolveDescriptionSemanticKind(object? source, string? normalizedKey, string? rawKey, string? placeholder)
+    {
+        foreach (var candidate in new[]
+                 {
+                     normalizedKey,
+                     NormalizeGlossaryId(rawKey),
+                     NormalizeGlossaryId(placeholder),
+                 })
+        {
+            switch (candidate)
+            {
+                case "energy":
+                case "energyamount":
+                case "energygain":
+                    return "energy";
+                case "draw":
+                case "cards":
+                case "drawcount":
+                case "cardstodraw":
+                    return "cards";
+                case "gold":
+                case "goldamount":
+                case "goldcost":
+                case "price":
+                case "cost":
+                case "purchaseprice":
+                case "priceincrease":
+                case "costincrease":
+                case "pricedelta":
+                    return "gold";
+            }
+        }
+
+        var normalizedTypeName = NormalizeGlossaryId(GetTypeName(source));
+        if ((normalizedKey is "amount" or "value" || NormalizeGlossaryId(rawKey) is "amount" or "value") &&
+            normalizedTypeName is not null &&
+            normalizedTypeName.Contains("merchantcardremoval", StringComparison.Ordinal))
+        {
+            return "gold";
+        }
+
+        return null;
     }
 
     private static RenderOutcome RenderCardDescription(
@@ -7772,20 +7829,48 @@ internal sealed class Sts2RuntimeReflectionReader
         var variableMap = (variables ?? Array.Empty<DescriptionVariable>())
             .Where(variable => !string.IsNullOrWhiteSpace(variable.Key))
             .GroupBy(variable => variable.Key, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(group => group.Key, group => group.First().Value, StringComparer.OrdinalIgnoreCase);
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
 
         var rendered = PlaceholderRegex.Replace(template, match =>
         {
             var key = NormalizeDescriptionVariableKey(match.Groups["name"].Value);
-            if (variableMap.TryGetValue(key, out var value) && value is not null)
+            if (variableMap.TryGetValue(key, out var variable) && variable.Value is not null)
             {
-                return value.Value.ToString();
+                return FormatRenderedDescriptionVariable(template, match, variable);
             }
 
             return match.Value;
         });
 
         return NormalizeDescriptionText(rendered);
+    }
+
+    private static string FormatRenderedDescriptionVariable(string template, Match match, DescriptionVariable variable)
+    {
+        var valueText = variable.Value?.ToString() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(valueText))
+        {
+            return match.Value;
+        }
+
+        if (string.IsNullOrWhiteSpace(variable.SemanticKind) ||
+            !DescriptionSemanticDisplayText.TryGetValue(variable.SemanticKind, out var displayText) ||
+            string.IsNullOrWhiteSpace(displayText) ||
+            HasNearbySemanticDisplayText(template, match.Index, match.Length, displayText))
+        {
+            return valueText;
+        }
+
+        return $"{valueText}{displayText}";
+    }
+
+    private static bool HasNearbySemanticDisplayText(string template, int index, int length, string displayText)
+    {
+        const int contextSpan = 12;
+        var start = Math.Max(0, index - contextSpan);
+        var end = Math.Min(template.Length, index + length + contextSpan);
+        var context = template[start..end];
+        return context.Contains(displayText, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string? NormalizeDescriptionText(string? text)
@@ -9221,7 +9306,7 @@ internal sealed class Sts2RuntimeReflectionReader
         string? Hint,
         string Source);
 
-    private readonly record struct VariableResolution(int? Value, string? Source);
+    private readonly record struct VariableResolution(int? Value, string? Source, string? SemanticKind = null);
 
     private enum CardDescriptionContext
     {

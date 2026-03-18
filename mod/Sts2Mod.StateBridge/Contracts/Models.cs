@@ -4,7 +4,8 @@ public sealed record DescriptionVariable(
     string Key,
     int? Value = null,
     string? Source = null,
-    string? Placeholder = null);
+    string? Placeholder = null,
+    string? SemanticKind = null);
 
 public sealed record GlossaryAnchor(
     string GlossaryId,

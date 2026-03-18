@@ -113,6 +113,14 @@ def validate_shop_flow() -> None:
             if offer.get("service_kind") == "purge_card"
         )
         assert "{" not in str(purge_service.get("description") or "")
+        assert "25" in str(purge_service.get("description") or "")
+        assert "gold" in str(purge_service.get("description") or "").lower()
+        production = next(
+            offer for offer in shop_snapshot["metadata"]["shop_offers"]
+            if offer.get("canonical_id") == "production"
+        )
+        assert production.get("description") == "Gain 2 **Energy**."
+        assert any(anchor["glossary_id"] == "energy" for anchor in production.get("glossary", []))
         assert any(action["type"] == "leave_shop" for action in shop_actions)
         assert any(action["type"] == "buy_shop_card" for action in shop_actions)
         buy_shop_card = next(action for action in shop_actions if action["type"] == "buy_shop_card")
