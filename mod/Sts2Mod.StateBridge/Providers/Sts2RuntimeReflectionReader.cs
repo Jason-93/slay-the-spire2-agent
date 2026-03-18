@@ -9131,6 +9131,25 @@ internal sealed class Sts2RuntimeReflectionReader
 
     private static string? ConvertRenderedDescriptionToText(object? value, string path, TextDiagnosticsCollector? textDiagnostics = null, params string[] preferredMembers)
     {
+        if (value is not null)
+        {
+            var typeName = GetTypeName(value) ?? string.Empty;
+            if (typeName.Contains("LocString", StringComparison.Ordinal))
+            {
+                if (TryInvokeParameterlessMethod(value, "GetRawText") is string rawText && !string.IsNullOrWhiteSpace(rawText))
+                {
+                    textDiagnostics?.Record(path, new TextResolutionResult(rawText, "fallback", "loc_string.raw_rendered_fallback"));
+                    return rawText;
+                }
+
+                if (GetMemberValue(value, "LocEntryKey") is string entryKey && !string.IsNullOrWhiteSpace(entryKey))
+                {
+                    textDiagnostics?.Record(path, new TextResolutionResult(entryKey, "fallback", "loc_string.key_rendered_fallback"));
+                    return entryKey;
+                }
+            }
+        }
+
         return RuntimeTextResolver.Resolve(value, path, textDiagnostics, preferredMembers).Text;
     }
 

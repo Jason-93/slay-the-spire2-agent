@@ -16,6 +16,11 @@ from urllib.request import urlopen
 
 
 ROOT = Path(__file__).resolve().parents[1]
+MOD_ID = "sts2-agent-bridge"
+MOD_DIR_NAME = "Sts2Mod.StateBridge"
+MOD_ARTIFACT_BASENAME = MOD_ID
+MOD_MANIFEST_FILE_NAME = f"{MOD_ID}.json"
+LEGACY_MOD_MANIFEST_FILE_NAME = "mod_manifest.json"
 DEFAULT_GAME_DIRS = [
     Path(r"F:\SteamLibrary\steamapps\common\Slay the Spire 2"),
     Path(r"C:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2"),
@@ -157,13 +162,13 @@ def build_mod(game_dir: Path) -> Path:
 
 def install_mod(game_dir: Path, source_dir: Path | None = None, kill_game: bool = False) -> Path:
     source_dir = source_dir or resolve_mod_output_dir()
-    target_dir = game_dir / "mods" / "Sts2Mod.StateBridge"
+    target_dir = game_dir / "mods" / MOD_DIR_NAME
     target_dir.mkdir(parents=True, exist_ok=True)
 
     required_files = [
-        source_dir / "Sts2Mod.StateBridge.pck",
-        source_dir / "Sts2Mod.StateBridge.dll",
-        source_dir / "mod_manifest.json",
+        source_dir / f"{MOD_ARTIFACT_BASENAME}.pck",
+        source_dir / f"{MOD_ARTIFACT_BASENAME}.dll",
+        source_dir / MOD_MANIFEST_FILE_NAME,
     ]
     for required_file in required_files:
         if not required_file.exists():
@@ -175,6 +180,9 @@ def install_mod(game_dir: Path, source_dir: Path | None = None, kill_game: bool 
             print(f"Stopped running Slay the Spire 2 processes: {', '.join(killed_pids)}")
 
     try:
+        legacy_manifest_path = target_dir / LEGACY_MOD_MANIFEST_FILE_NAME
+        if legacy_manifest_path.exists():
+            legacy_manifest_path.unlink()
         for required_file in required_files:
             shutil.copy2(required_file, target_dir / required_file.name)
     except PermissionError as exc:
@@ -218,8 +226,10 @@ def summarize_runtime_log(log_file: Path) -> list[str]:
         hints.append("Direct launch is missing Steam app id; create steam_appid.txt or launch through Steam.")
     if "Skipping loading mod" in content and "mods warning" in content:
         hints.append("STS2 found the mod pack but skipped loading it because the in-game mods warning has not been acknowledged yet.")
-    if "Found mod pck file" not in content:
-        hints.append("Game log did not report discovering the installed .pck file; verify the mod directory contents.")
+    if "Neither a DLL nor a PCK was loaded" in content:
+        hints.append("Manifest was discovered but the loader did not activate the DLL/PCK; verify the new <mod_id>.json fields like has_dll/has_pck.")
+    if "Found mod manifest file" not in content:
+        hints.append("Game log did not report discovering the installed manifest json; verify the mod directory contents and filename.")
     return hints
 
 

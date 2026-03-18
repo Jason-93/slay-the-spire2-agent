@@ -10,6 +10,10 @@
     <RootNamespace>Sts2Mod.StateBridge</RootNamespace>
     <Version>0.1.0</Version>
     <Sts2ProtocolVersion>0.1.0</Sts2ProtocolVersion>
+    <ModId>sts2-agent-bridge</ModId>
+    <ModManifestFileName>$(ModId).json</ModManifestFileName>
+    <ModAssemblyFileName>$(ModId).dll</ModAssemblyFileName>
+    <ModPckFileName>$(ModId).pck</ModPckFileName>
     <BridgeOutputDir Condition="'$(BridgeOutputDir)' == ''">$(MSBuildProjectDirectory)\bin\$(Configuration)\$(TargetFramework)\mod\</BridgeOutputDir>
     <RepoRootDir>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\..\..'))</RepoRootDir>
     <PythonExe Condition="'$(PythonExe)' == ''">python</PythonExe>
@@ -19,6 +23,7 @@
     <Sts2ModLoaderDir Condition="'$(Sts2ModLoaderDir)' == ''"></Sts2ModLoaderDir>
     <HasSts2RuntimeReferences Condition="Exists('$(Sts2ManagedDir)\sts2.dll') and Exists('$(Sts2ModLoaderDir)\0Harmony.dll')">true</HasSts2RuntimeReferences>
     <DefineConstants Condition="'$(HasSts2RuntimeReferences)' == 'true'">$(DefineConstants);STS2_REAL_RUNTIME</DefineConstants>
+    <ModManifestPckFlag Condition="'$(EnableModPckPackaging)' == 'true'">--has-pck</ModManifestPckFlag>
   </PropertyGroup>
 
   <ItemGroup Condition="Exists('$(Sts2ManagedDir)\sts2.dll')">
@@ -48,23 +53,28 @@
 
   <Target Name="WriteModManifest" AfterTargets="Build">
     <MakeDir Directories="$(BridgeOutputDir)" />
-    <WriteLinesToFile
-      File="$(BridgeOutputDir)mod_manifest.json"
-      Overwrite="true"
-      Lines='{"pck_name":"Sts2Mod.StateBridge","name":"STS2 Agent Bridge","author":"netcan","description":"Loopback bridge for exporting and controlling Slay the Spire 2 runtime state.","version":"$(Version)"}' />
-    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(BridgeOutputDir)" SkipUnchangedFiles="true" />
-    <Message Importance="High" Text="Packing Sts2Mod.StateBridge.pck via Godot headless tooling..." Condition="'$(EnableModPckPackaging)' == 'true'" />
+    <Delete Files="$(BridgeOutputDir)mod_manifest.json" Condition="Exists('$(BridgeOutputDir)mod_manifest.json')" />
+    <Delete Files="$(BridgeOutputDir)Sts2Mod.StateBridge.dll" Condition="Exists('$(BridgeOutputDir)Sts2Mod.StateBridge.dll')" />
+    <Delete Files="$(BridgeOutputDir)Sts2Mod.StateBridge.pck" Condition="Exists('$(BridgeOutputDir)Sts2Mod.StateBridge.pck')" />
+    <Exec
+      WorkingDirectory="$(RepoRootDir)"
+      Command="&quot;$(PythonExe)&quot; &quot;$(RepoRootDir)\tools\write_mod_manifest.py&quot; --output &quot;$(BridgeOutputDir)$(ModManifestFileName)&quot; --id &quot;$(ModId)&quot; --name &quot;STS2 Agent Bridge&quot; --author &quot;netcan&quot; --description &quot;Loopback bridge for exporting and controlling Slay the Spire 2 runtime state.&quot; --version &quot;$(Version)&quot; --has-dll --affects-gameplay $(ModManifestPckFlag)"
+      ConsoleToMsBuild="true"
+      StandardOutputImportance="High"
+      StandardErrorImportance="High" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFiles="$(BridgeOutputDir)$(ModAssemblyFileName)" SkipUnchangedFiles="true" />
+    <Message Importance="High" Text="Packing $(ModPckFileName) via Godot headless tooling..." Condition="'$(EnableModPckPackaging)' == 'true'" />
     <Exec
       Condition="'$(EnableModPckPackaging)' == 'true' and '$(DesignTimeBuild)' != 'true' and '$(GodotExe)' == ''"
       WorkingDirectory="$(RepoRootDir)"
-      Command="&quot;$(PythonExe)&quot; &quot;$(RepoRootDir)\tools\build_mod_pck.py&quot; --manifest &quot;$(BridgeOutputDir)mod_manifest.json&quot; --output &quot;$(BridgeOutputDir)Sts2Mod.StateBridge.pck&quot;"
+      Command="&quot;$(PythonExe)&quot; &quot;$(RepoRootDir)\tools\build_mod_pck.py&quot; --manifest &quot;$(BridgeOutputDir)$(ModManifestFileName)&quot; --manifest-resource-path &quot;res://$(ModManifestFileName)&quot; --output &quot;$(BridgeOutputDir)$(ModPckFileName)&quot;"
       ConsoleToMsBuild="true"
       StandardOutputImportance="High"
       StandardErrorImportance="High" />
     <Exec
       Condition="'$(EnableModPckPackaging)' == 'true' and '$(DesignTimeBuild)' != 'true' and '$(GodotExe)' != ''"
       WorkingDirectory="$(RepoRootDir)"
-      Command="&quot;$(PythonExe)&quot; &quot;$(RepoRootDir)\tools\build_mod_pck.py&quot; --manifest &quot;$(BridgeOutputDir)mod_manifest.json&quot; --output &quot;$(BridgeOutputDir)Sts2Mod.StateBridge.pck&quot; --godot-exe &quot;$(GodotExe)&quot;"
+      Command="&quot;$(PythonExe)&quot; &quot;$(RepoRootDir)\tools\build_mod_pck.py&quot; --manifest &quot;$(BridgeOutputDir)$(ModManifestFileName)&quot; --manifest-resource-path &quot;res://$(ModManifestFileName)&quot; --output &quot;$(BridgeOutputDir)$(ModPckFileName)&quot; --godot-exe &quot;$(GodotExe)&quot;"
       ConsoleToMsBuild="true"
       StandardOutputImportance="High"
       StandardErrorImportance="High" />

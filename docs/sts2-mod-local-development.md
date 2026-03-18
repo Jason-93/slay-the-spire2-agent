@@ -39,25 +39,40 @@ dotnet build mod/Sts2Mod.StateBridge.sln \
 
 构建成功后，`mod/Sts2Mod.StateBridge/bin/Debug/net9.0/mod/` 会输出：
 
-- `Sts2Mod.StateBridge.pck`
-- `Sts2Mod.StateBridge.dll`
-- `mod_manifest.json`
+- `sts2-agent-bridge.pck`
+- `sts2-agent-bridge.dll`
+- `sts2-agent-bridge.json`
 
 ## 真实 mod 安装
 
-STS2 当前内置 mod loader 会递归扫描游戏目录下的 `mods/`，以 `.pck` 作为资源包入口，并在同目录发现同名 `.dll` 时加载程序集。基于这一约束，安装时至少需要这三个文件位于同一 mod 目录：
+STS2 新版 mod loader 会递归扫描游戏目录下的 `mods/`，并要求在 mod 目录内提供一个外置的 `<mod_id>.json` manifest。当前 bridge 仍同时附带 `.dll` 与 `.pck`，因此安装时至少需要这三个文件位于同一 mod 目录：
 
-- `Sts2Mod.StateBridge.pck`
-- `Sts2Mod.StateBridge.dll`
-- `mod_manifest.json`（需要被打进 `.pck` 的 `res://mod_manifest.json`）
+- `sts2-agent-bridge.pck`
+- `sts2-agent-bridge.dll`
+- `sts2-agent-bridge.json`
+
+当前 manifest 使用新版字段：
+
+- `has_dll=true`
+- `has_pck=true`
+- `dependencies=[]`
+- `affects_gameplay=true`
+
+如果后续需要声明依赖或调整多人联机校验行为，应直接改这个 manifest 生成脚本。
 
 推荐目录结构：
 
 ```text
 F:\SteamLibrary\steamapps\common\Slay the Spire 2\mods\Sts2Mod.StateBridge\
-  Sts2Mod.StateBridge.pck
-  Sts2Mod.StateBridge.dll
+  sts2-agent-bridge.json
+  sts2-agent-bridge.pck
+  sts2-agent-bridge.dll
 ```
+
+额外注意：
+
+- `settings.save` 现在会记录上一次加载的 mod 顺序；手改顺序可能影响实际 load order。
+- 如果 manifest 声明了 `dependencies`，而 `settings.save` 中的顺序不满足依赖，游戏会强制重新排序。
 
 当前仓库会自动调用 Godot headless 工具生成 `.pck`。若本机无法找到 Godot，可通过以下任一方式提供：
 
@@ -126,8 +141,8 @@ python tools/validate_mod_pck.py
 - 四类窗口的 `snapshot` / `actions`
 - `POST /apply` 成功推进到下一窗口
 - 旧 `decision_id` 会被拒绝为 `stale_decision`
-- `.pck`、DLL 与 manifest 已一起生成
-- `.pck` 内可检测到 `res://mod_manifest.json`
+- `.pck`、DLL 与新版 manifest 已一起生成
+- `.pck` 内可检测到 `res://sts2-agent-bridge.json`
 
 ### 一键安装与调试
 

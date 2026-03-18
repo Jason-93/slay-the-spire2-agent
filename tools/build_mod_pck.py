@@ -59,9 +59,15 @@ def run_godot_script(godot_exe: Path, script_path: Path, script_args: list[str])
     )
 
 
-def build_mod_pck(manifest_path: Path, output_path: Path, godot_exe: Path) -> Path:
+def build_mod_pck(
+    manifest_path: Path,
+    output_path: Path,
+    godot_exe: Path,
+    manifest_resource_path: str | None = None,
+) -> Path:
     manifest_path = manifest_path.resolve()
     output_path = output_path.resolve()
+    manifest_resource_path = manifest_resource_path or f"res://{manifest_path.name}"
 
     if not manifest_path.exists():
         raise FileNotFoundError(f"Manifest file does not exist: {manifest_path}")
@@ -75,7 +81,7 @@ def build_mod_pck(manifest_path: Path, output_path: Path, godot_exe: Path) -> Pa
     result = run_godot_script(
         godot_exe,
         PACK_SCRIPT,
-        [str(output_path), "res://mod_manifest.json", str(manifest_path)],
+        [str(output_path), manifest_resource_path, str(manifest_path)],
     )
     if result.returncode != 0:
         raise RuntimeError(
@@ -95,14 +101,18 @@ def build_mod_pck(manifest_path: Path, output_path: Path, godot_exe: Path) -> Pa
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build the minimal STS2 mod .pck package.")
-    parser.add_argument("--manifest", required=True, type=Path, help="Path to the generated mod_manifest.json")
+    parser.add_argument("--manifest", required=True, type=Path, help="Path to the generated mod manifest JSON")
+    parser.add_argument(
+        "--manifest-resource-path",
+        help="Optional resource path to embed the manifest under inside the .pck (defaults to res://<manifest-name>)",
+    )
     parser.add_argument("--output", required=True, type=Path, help="Path to the output .pck file")
     parser.add_argument("--godot-exe", help="Optional path to the Godot editor executable")
     args = parser.parse_args()
 
     try:
         godot_exe = discover_godot_exe(args.godot_exe)
-        output_path = build_mod_pck(args.manifest, args.output, godot_exe)
+        output_path = build_mod_pck(args.manifest, args.output, godot_exe, args.manifest_resource_path)
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

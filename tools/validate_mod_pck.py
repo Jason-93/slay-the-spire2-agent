@@ -7,6 +7,7 @@ from pathlib import Path
 from build_mod_pck import ROOT, discover_godot_exe, run_godot_script
 
 CHECK_SCRIPT = ROOT / "tools" / "godot_check_pck.gd"
+MOD_ID = "sts2-agent-bridge"
 
 
 def resolve_mod_output_dir() -> Path:
@@ -16,11 +17,21 @@ def resolve_mod_output_dir() -> Path:
     return candidates[0]
 
 
+def resolve_manifest_path(output_dir: Path) -> Path:
+    manifests = sorted(output_dir.glob("*.json"))
+    if not manifests:
+        raise FileNotFoundError(f"could not find a generated mod manifest in: {output_dir}")
+    if len(manifests) > 1:
+        names = ", ".join(path.name for path in manifests)
+        raise RuntimeError(f"expected exactly one mod manifest json, found: {names}")
+    return manifests[0]
+
+
 def main() -> int:
     output_dir = resolve_mod_output_dir()
-    pck_path = output_dir / "Sts2Mod.StateBridge.pck"
-    dll_path = output_dir / "Sts2Mod.StateBridge.dll"
-    manifest_path = output_dir / "mod_manifest.json"
+    pck_path = output_dir / f"{MOD_ID}.pck"
+    dll_path = output_dir / f"{MOD_ID}.dll"
+    manifest_path = resolve_manifest_path(output_dir)
 
     for required_path in (pck_path, dll_path, manifest_path):
         if not required_path.exists():
@@ -30,7 +41,7 @@ def main() -> int:
     result: subprocess.CompletedProcess[str] = run_godot_script(
         godot_exe,
         CHECK_SCRIPT,
-        [str(pck_path), "res://mod_manifest.json"],
+        [str(pck_path), f"res://{manifest_path.name}"],
     )
     if result.returncode != 0:
         raise RuntimeError(
