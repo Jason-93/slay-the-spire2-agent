@@ -223,6 +223,9 @@ internal sealed class Sts2RuntimeReflectionReader
     private static readonly Regex RichTextTagRegex = new(@"\[(?:/?)[^\]]+\]", RegexOptions.Compiled);
     private static readonly Regex RichTextPairRegex = new(@"\[(?<tag>[A-Za-z0-9_]+)\](?<content>.*?)\[/\k<tag>\]", RegexOptions.Compiled);
     private static readonly Regex PlaceholderRegex = new(@"\{(?<name>[A-Za-z_][A-Za-z0-9_]*)(?::(?<expr>[^}]+))?\}", RegexOptions.Compiled);
+    private static readonly Regex EnergyIconPathRegex = new(@"res://images/packed/sprite_fonts/[A-Za-z0-9_]+_energy_icon\.png", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex EnergyIconRunRegex = new(@"(?:(?:res://images/packed/sprite_fonts/[A-Za-z0-9_]+_energy_icon\.png)\s*)+", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex EnergyLabelRunRegex = new(@"(?:(?<count>\d+)能量\s*){2,}", RegexOptions.Compiled);
     private static readonly string[] DescriptionSearchNestedMembers =
     {
         "Data",
@@ -305,7 +308,7 @@ internal sealed class Sts2RuntimeReflectionReader
             ["weak"] = new[] { "Weak", "WeakAmount" },
             ["frail"] = new[] { "Frail", "FrailAmount" },
             ["dexterity"] = new[] { "Dexterity", "DexterityAmount" },
-            ["amount"] = new[] { "Amount", "Stacks", "Value" },
+            ["amount"] = new[] { "Amount", "Stacks", "Value", "PriceIncrease", "CostIncrease", "PriceDelta", "CalcPriceIncrease" },
         };
     private static readonly IReadOnlyDictionary<string, GlossarySpec> KnownGlossarySpecs =
         new Dictionary<string, GlossarySpec>(StringComparer.OrdinalIgnoreCase)
@@ -3131,9 +3134,12 @@ internal sealed class Sts2RuntimeReflectionReader
 
         if (typeName.Contains("MerchantCardRemoval", StringComparison.OrdinalIgnoreCase))
         {
+            var serviceEntry =
+                ResolveShopPayloadNode(node, new[] { "Entry", "_removalEntry", "RemovalEntry" })
+                ?? GetFirstMemberValue(node, "Entry", "_removalEntry", "RemovalEntry");
             var service = DescribeShopService(
                 primarySource: node,
-                secondarySource: null,
+                secondarySource: serviceEntry,
                 path: $"shop.service[{index}]",
                 textDiagnostics);
             var purchasable = interactable && gold >= price;
@@ -3326,7 +3332,7 @@ internal sealed class Sts2RuntimeReflectionReader
             "RulesText",
             "Text",
             "LocString");
-        var rendered = NormalizeDescriptionText(ConvertDescriptionTemplateToText(
+        var rendered = NormalizeDescriptionText(ConvertRenderedDescriptionToText(
             GetFirstMemberValue(primarySource, "RenderedDescription", "RenderedText", "DisplayDescription")
             ?? GetFirstMemberValue(secondarySource, "RenderedDescription", "RenderedText", "DisplayDescription")
             ?? boundDescriptionValue,
@@ -5361,7 +5367,7 @@ internal sealed class Sts2RuntimeReflectionReader
             "CardText",
             "BodyText",
             "Text");
-        var runtimeRendered = ConvertDescriptionTemplateToText(
+        var runtimeRendered = ConvertRenderedDescriptionToText(
             GetMemberValue(card, "RenderedDescription")
             ?? GetMemberValue(source, "RenderedDescription")
             ?? GetMemberValue(card, "RenderedText")
@@ -6255,7 +6261,7 @@ internal sealed class Sts2RuntimeReflectionReader
             "TooltipText",
             "IntentDescription",
             "IntentText");
-        var rendered = ConvertDescriptionTemplateToText(
+        var rendered = ConvertRenderedDescriptionToText(
             renderedDescriptionValue,
             $"{path}.move_description_rendered",
             textDiagnostics,
@@ -6687,7 +6693,7 @@ internal sealed class Sts2RuntimeReflectionReader
             "RulesText",
             "Text",
             "TooltipText");
-        var rendered = ConvertDescriptionTemplateToText(
+        var rendered = ConvertRenderedDescriptionToText(
             GetFirstMemberValue(
                 source,
                 "RenderedDescription",
@@ -7113,7 +7119,7 @@ internal sealed class Sts2RuntimeReflectionReader
             "Description",
             "RulesText",
             "Text");
-        var rendered = ConvertDescriptionTemplateToText(
+        var rendered = ConvertRenderedDescriptionToText(
             GetMemberValue(power, "RenderedDescription")
             ?? GetMemberValue(power, "RenderedText")
             ?? GetMemberValue(power, "DisplayDescription")
@@ -7209,7 +7215,7 @@ internal sealed class Sts2RuntimeReflectionReader
             "StaticDescription",
             "RulesText",
             "Text");
-        var rendered = NormalizeDescriptionText(ConvertDescriptionTemplateToText(
+        var rendered = NormalizeDescriptionText(ConvertRenderedDescriptionToText(
             GetMemberValue(source, "RenderedDescription")
             ?? GetMemberValue(source, "RenderedText")
             ?? GetMemberValue(source, "DisplayDescription")
@@ -7221,7 +7227,7 @@ internal sealed class Sts2RuntimeReflectionReader
             "DisplayDescription"));
         if (string.IsNullOrWhiteSpace(rendered))
         {
-            var hoverTipRendered = NormalizeDescriptionText(ConvertDescriptionTemplateToText(
+            var hoverTipRendered = NormalizeDescriptionText(ConvertRenderedDescriptionToText(
                 hoverTipDescriptionValue,
                 $"{path}.hover_tip_description",
                 textDiagnostics,
@@ -7805,16 +7811,29 @@ internal sealed class Sts2RuntimeReflectionReader
 
     private static string NormalizeDescriptionRichText(string text)
     {
-        var normalized = text;
+        var normalized = NormalizeInlineIconPaths(text);
         for (var pass = 0; pass < 4; pass += 1)
         {
             var replaced = RichTextPairRegex.Replace(normalized, match =>
             {
                 var tag = match.Groups["tag"].Value;
                 var content = match.Groups["content"].Value;
-                return string.Equals(tag, "gold", StringComparison.OrdinalIgnoreCase)
-                    ? $"**{content.Trim()}**"
-                    : content;
+                if (string.Equals(tag, "gold", StringComparison.OrdinalIgnoreCase))
+                {
+                    return $"**{content.Trim()}**";
+                }
+
+                var trimmedContent = content.Trim();
+                var spec = ResolveKnownGlossarySpec(NormalizeGlossaryId(tag), trimmedContent);
+                if (spec is not null &&
+                    !string.IsNullOrWhiteSpace(trimmedContent) &&
+                    (PlaceholderRegex.IsMatch(trimmedContent) || int.TryParse(trimmedContent, out _)) &&
+                    !trimmedContent.Contains(spec.DisplayText, StringComparison.OrdinalIgnoreCase))
+                {
+                    return $"{trimmedContent}{spec.DisplayText}";
+                }
+
+                return content;
             });
             if (string.Equals(replaced, normalized, StringComparison.Ordinal))
             {
@@ -7824,7 +7843,45 @@ internal sealed class Sts2RuntimeReflectionReader
             normalized = replaced;
         }
 
-        return RichTextTagRegex.Replace(normalized, string.Empty);
+        normalized = RichTextTagRegex.Replace(normalized, string.Empty);
+        return CollapseRepeatedEnergyLabels(normalized);
+    }
+
+    private static string NormalizeInlineIconPaths(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text) || !EnergyIconPathRegex.IsMatch(text))
+        {
+            return text;
+        }
+
+        var energyLabel = KnownGlossarySpecs["energy"].DisplayText;
+        return EnergyIconRunRegex.Replace(text, match =>
+        {
+            var count = EnergyIconPathRegex.Matches(match.Value).Count;
+            return count > 0 ? $"{count}{energyLabel}" : match.Value;
+        });
+    }
+
+    private static string CollapseRepeatedEnergyLabels(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text) || !EnergyLabelRunRegex.IsMatch(text))
+        {
+            return text;
+        }
+
+        return EnergyLabelRunRegex.Replace(text, match =>
+        {
+            var total = 0;
+            foreach (Capture capture in match.Groups["count"].Captures)
+            {
+                if (int.TryParse(capture.Value, out var value))
+                {
+                    total += value;
+                }
+            }
+
+            return total > 0 ? $"{total}能量" : match.Value;
+        });
     }
 
     private static string? ChooseCanonicalDescription(string? rendered, string? raw)
@@ -8984,6 +9041,11 @@ internal sealed class Sts2RuntimeReflectionReader
             }
         }
 
+        return RuntimeTextResolver.Resolve(value, path, textDiagnostics, preferredMembers).Text;
+    }
+
+    private static string? ConvertRenderedDescriptionToText(object? value, string path, TextDiagnosticsCollector? textDiagnostics = null, params string[] preferredMembers)
+    {
         return RuntimeTextResolver.Resolve(value, path, textDiagnostics, preferredMembers).Text;
     }
 
