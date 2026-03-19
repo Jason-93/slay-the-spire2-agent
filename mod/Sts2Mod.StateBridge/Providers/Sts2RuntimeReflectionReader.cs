@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Globalization;
 using System.Reflection;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -1519,10 +1520,13 @@ internal sealed class Sts2RuntimeReflectionReader
                             actionMetadata["selection_prompt"] = probe.SelectionPrompt;
                         }
 
-                        actionMetadata["requires_target"] = probe.RequiresTarget;
+                        actionMetadata["requires_target"] =
+                            probe.RequiresTarget ||
+                            (!string.IsNullOrWhiteSpace(probe.TargetType) && BuildTargetConstraints(probe.TargetType, liveEnemyIds).Count > 0);
                     }
                 }
 
+                var potionTargetType = ConvertToText(actionMetadata.TryGetValue("target_type", out var targetTypeValue) ? targetTypeValue : null);
                 actions.Add(new RuntimeActionDefinition(
                     "use_potion",
                     $"Use {potion.Name}",
@@ -1532,6 +1536,7 @@ internal sealed class Sts2RuntimeReflectionReader
                         ["potion_index"] = potionIndex,
                         ["canonical_potion_id"] = potion.CanonicalPotionId,
                     },
+                    BuildTargetConstraints(potionTargetType, liveEnemyIds),
                     Metadata: actionMetadata));
             }
         }
@@ -9827,6 +9832,7 @@ internal sealed class Sts2RuntimeReflectionReader
             ["action_type"] = "use_potion",
             ["runtime_handler_candidates"] = new[]
             {
+                "game_action.UsePotionAction",
                 "potion_model.EnqueueManualUse",
                 "potion_holder.UsePotion",
             },
@@ -9901,14 +9907,38 @@ internal sealed class Sts2RuntimeReflectionReader
             metadata["target_probe_message"] = probe.ProbeMessage;
         }
 
-        if (probe.RequiresTarget)
+        var targetConstraints = BuildTargetConstraints(probe.TargetType, EnumerateObjects(GetMemberValue(GetCombatState(runState), "Enemies"))
+            .Where(enemy => GetBoolean(enemy, "IsAlive", defaultValue: true))
+            .Select((enemy, index) => ResolveEnemyId(enemy, index))
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Cast<string>()
+            .ToArray());
+        var inferredTargetRequirement = probe.RequiresTarget || targetConstraints.Count > 0;
+        object? target = null;
+        var targetId = ConvertToText(GetDictionaryValue(request.Params, "target_id"));
+        if (!string.IsNullOrWhiteSpace(targetId))
+        {
+            target = EnumerateObjects(GetMemberValue(GetCombatState(runState), "Enemies"))
+                .Select((enemy, index) => new { Enemy = enemy, EnemyId = ResolveEnemyId(enemy, index) })
+                .FirstOrDefault(entry => string.Equals(entry.EnemyId, targetId, StringComparison.Ordinal))
+                ?.Enemy;
+            if (target is null)
+            {
+                metadata["failure_stage"] = "target_validation";
+                return new RuntimeActionResult(false, $"Target '{targetId}' is no longer available.", "invalid_target", metadata);
+            }
+
+            metadata["target_id"] = targetId;
+        }
+
+        if (inferredTargetRequirement && target is null)
         {
             metadata["failure_stage"] = "target_validation";
             metadata["requires_target"] = true;
             return new RuntimeActionResult(false, "This potion requires an explicit target.", "target_required", metadata);
         }
 
-        metadata["requires_target"] = false;
+        metadata["requires_target"] = inferredTargetRequirement;
 
         if (GetBoolean(resolved.PotionModel, "HasBeenRemovedFromState"))
         {
@@ -9928,20 +9958,31 @@ internal sealed class Sts2RuntimeReflectionReader
             return new RuntimeActionResult(false, "Potion holder is currently not usable.", "not_allowed", metadata);
         }
 
-        if (TryExecutePotionViaModel(resolved.PotionModel, metadata, out var modelFailure))
+        if (TryExecutePotionViaGameAction(player, resolved.PotionModel, potionIndex.Value, targetId, target, metadata, out var gameActionFailure))
+        {
+            metadata["runtime_handler"] = "game_action.UsePotionAction";
+            return new RuntimeActionResult(true, $"Used potion '{resolved.PotionState.Name}'.", metadata: metadata);
+        }
+
+        if (TryExecutePotionViaModel(resolved.PotionModel, target, metadata, out var modelFailure))
         {
             metadata["runtime_handler"] = "potion_model.EnqueueManualUse";
             return new RuntimeActionResult(true, $"Used potion '{resolved.PotionState.Name}'.", metadata: metadata);
         }
 
         string? holderFailure = null;
-        if (resolved.Holder is not null && TryExecutePotionViaHolder(resolved.Holder, metadata, out holderFailure))
+        if (resolved.Holder is not null && TryExecutePotionViaHolder(resolved.Holder, target, metadata, out holderFailure))
         {
             metadata["runtime_handler"] = "potion_holder.UsePotion";
             return new RuntimeActionResult(true, $"Used potion '{resolved.PotionState.Name}'.", metadata: metadata);
         }
 
         metadata["failure_stage"] = "runtime_handler";
+        if (!string.IsNullOrWhiteSpace(gameActionFailure))
+        {
+            metadata["game_action_failure"] = gameActionFailure;
+        }
+
         if (!string.IsNullOrWhiteSpace(modelFailure))
         {
             metadata["model_handler_failure"] = modelFailure;
@@ -10179,7 +10220,7 @@ internal sealed class Sts2RuntimeReflectionReader
                ?? slotOrPotion;
     }
 
-    private bool TryExecutePotionViaModel(object potionModel, Dictionary<string, object?> metadata, out string? failure)
+    private bool TryExecutePotionViaModel(object potionModel, object? target, Dictionary<string, object?> metadata, out string? failure)
     {
         failure = null;
         var method = potionModel.GetType().GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
@@ -10193,7 +10234,7 @@ internal sealed class Sts2RuntimeReflectionReader
 
         try
         {
-            method.Invoke(potionModel, new object?[] { null });
+            method.Invoke(potionModel, new[] { target });
             metadata["model_handler_type"] = potionModel.GetType().FullName ?? potionModel.GetType().Name;
             return true;
         }
@@ -10210,12 +10251,283 @@ internal sealed class Sts2RuntimeReflectionReader
         }
     }
 
-    private bool TryExecutePotionViaHolder(object holder, Dictionary<string, object?> metadata, out string? failure)
+    private bool TryExecutePotionViaGameAction(
+        object player,
+        object potionModel,
+        int potionIndex,
+        string? targetId,
+        object? target,
+        Dictionary<string, object?> metadata,
+        out string? failure)
+    {
+        failure = null;
+        var assembly = FindSts2Assembly();
+        var usePotionActionType = assembly?.GetType("MegaCrit.Sts2.Core.GameActions.UsePotionAction");
+        if (usePotionActionType is null)
+        {
+            failure = "use_potion_action_type_missing";
+            return false;
+        }
+
+        metadata["game_action_type"] = usePotionActionType.FullName;
+        var isCombatInProgress = GetBoolean(GetMemberValue(assembly?.GetType("MegaCrit.Sts2.Core.Combat.CombatManager"), "Instance"), "IsInProgress");
+        var runManager = GetMemberValue(assembly?.GetType("MegaCrit.Sts2.Core.Runs.RunManager"), "Instance");
+        var actionQueueSynchronizer = GetMemberValue(runManager, "ActionQueueSynchronizer");
+        var actionQueueSet = GetMemberValue(runManager, "ActionQueueSet");
+        var playerNetId = GetNullableULong(player, "NetId");
+        if (runManager is not null)
+        {
+            metadata["run_manager_type"] = runManager.GetType().FullName ?? runManager.GetType().Name;
+        }
+
+        if (actionQueueSynchronizer is not null)
+        {
+            metadata["action_queue_synchronizer_type"] = actionQueueSynchronizer.GetType().FullName ?? actionQueueSynchronizer.GetType().Name;
+        }
+
+        if (actionQueueSet is not null)
+        {
+            metadata["action_queue_set_type"] = actionQueueSet.GetType().FullName ?? actionQueueSet.GetType().Name;
+        }
+
+        if (playerNetId.HasValue)
+        {
+            metadata["player_net_id"] = playerNetId.Value;
+        }
+
+        var constructors = usePotionActionType
+            .GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+            .OrderByDescending(ctor => ctor.GetParameters().Length)
+            .ToArray();
+        if (constructors.Length == 0)
+        {
+            failure = "use_potion_action_ctor_missing";
+            return false;
+        }
+
+        try
+        {
+            object? action = null;
+            var constructorFailures = new List<string>();
+            foreach (var constructor in constructors)
+            {
+                var parameters = constructor.GetParameters();
+                try
+                {
+                    if (parameters.Length == 5 &&
+                        IsParameterType(parameters[0], "MegaCrit.Sts2.Core.Entities.Players.Player") &&
+                        parameters[1].ParameterType == typeof(uint))
+                    {
+                        var resolvedTargetId = TryResolveActionTargetId(targetId, target);
+                        var targetPlayerIdType = parameters[3].ParameterType;
+                        action = constructor.Invoke(new object?[]
+                        {
+                            player,
+                            (uint)Math.Max(potionIndex, 0),
+                            resolvedTargetId,
+                            targetPlayerIdType.IsValueType ? Activator.CreateInstance(targetPlayerIdType) : null,
+                            isCombatInProgress,
+                        });
+                        metadata["game_action_ctor"] = "player+potion_index+target_id";
+                        if (resolvedTargetId.HasValue)
+                        {
+                            metadata["game_action_target_id"] = resolvedTargetId.Value;
+                        }
+
+                        break;
+                    }
+
+                    if (parameters.Length == 3 &&
+                        IsParameterType(parameters[0], "MegaCrit.Sts2.Core.Models.PotionModel"))
+                    {
+                        action = constructor.Invoke(new object?[]
+                        {
+                            potionModel,
+                            target,
+                            isCombatInProgress,
+                        });
+                        metadata["game_action_ctor"] = "potion_model+target";
+                        break;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    constructorFailures.Add($"{constructor}: {ex.GetBaseException().Message}");
+                }
+            }
+
+            if (action is null)
+            {
+                if (constructorFailures.Count > 0)
+                {
+                    metadata["game_action_ctor_failures"] = constructorFailures;
+                    failure = constructorFailures[0];
+                }
+                else
+                {
+                    failure = "use_potion_action_no_compatible_ctor";
+                }
+
+                return false;
+            }
+
+            metadata["game_action_initial_state"] = ConvertToText(GetMemberValue(action, "State"));
+            if (!TryEnqueuePotionGameAction(action, actionQueueSynchronizer, actionQueueSet, playerNetId, metadata, out failure))
+            {
+                return false;
+            }
+
+            metadata["game_action_state_after_enqueue"] = ConvertToText(GetMemberValue(action, "State"));
+            if (GetMemberValue(action, "CompletionTask") is Task completionTask)
+            {
+                metadata["game_action_task_status"] = completionTask.Status.ToString();
+                if (completionTask.IsFaulted)
+                {
+                    failure = completionTask.Exception?.GetBaseException().Message ?? "use_potion_action_task_faulted";
+                    metadata["game_action_task_faulted"] = true;
+                    return false;
+                }
+            }
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            failure = ex.GetBaseException().Message;
+            return false;
+        }
+    }
+
+    private bool TryEnqueuePotionGameAction(
+        object action,
+        object? actionQueueSynchronizer,
+        object? actionQueueSet,
+        ulong? playerNetId,
+        Dictionary<string, object?> metadata,
+        out string? failure)
+    {
+        failure = null;
+        var enqueueFailures = new List<string>();
+
+        if (actionQueueSynchronizer is not null && playerNetId.HasValue)
+        {
+            var enqueueMethod = actionQueueSynchronizer.GetType().GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                .FirstOrDefault(method =>
+                {
+                    if (!string.Equals(method.Name, "EnqueueAction", StringComparison.Ordinal))
+                    {
+                        return false;
+                    }
+
+                    var parameters = method.GetParameters();
+                    return parameters.Length == 2 &&
+                           parameters[0].ParameterType.IsInstanceOfType(action) &&
+                           parameters[1].ParameterType == typeof(ulong);
+                });
+            if (enqueueMethod is not null)
+            {
+                try
+                {
+                    enqueueMethod.Invoke(actionQueueSynchronizer, new object?[] { action, playerNetId.Value });
+                    metadata["game_action_enqueue_method"] = "ActionQueueSynchronizer.EnqueueAction";
+                    metadata["game_action_owner_id"] = playerNetId.Value;
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    enqueueFailures.Add($"ActionQueueSynchronizer.EnqueueAction: {ex.GetBaseException().Message}");
+                }
+            }
+
+            var requestMethod = actionQueueSynchronizer.GetType().GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                .FirstOrDefault(method =>
+                {
+                    if (!string.Equals(method.Name, "RequestEnqueue", StringComparison.Ordinal))
+                    {
+                        return false;
+                    }
+
+                    var parameters = method.GetParameters();
+                    return parameters.Length == 1 && parameters[0].ParameterType.IsInstanceOfType(action);
+                });
+            if (requestMethod is not null)
+            {
+                try
+                {
+                    requestMethod.Invoke(actionQueueSynchronizer, new[] { action });
+                    metadata["game_action_enqueue_method"] = "ActionQueueSynchronizer.RequestEnqueue";
+                    metadata["game_action_owner_id"] = playerNetId.Value;
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    enqueueFailures.Add($"ActionQueueSynchronizer.RequestEnqueue: {ex.GetBaseException().Message}");
+                }
+            }
+        }
+
+        if (actionQueueSet is not null)
+        {
+            var enqueueWithoutSynchronizingMethod = actionQueueSet.GetType().GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                .FirstOrDefault(method =>
+                {
+                    if (!string.Equals(method.Name, "EnqueueWithoutSynchronizing", StringComparison.Ordinal))
+                    {
+                        return false;
+                    }
+
+                    var parameters = method.GetParameters();
+                    return parameters.Length == 1 && parameters[0].ParameterType.IsInstanceOfType(action);
+                });
+            if (enqueueWithoutSynchronizingMethod is not null)
+            {
+                try
+                {
+                    enqueueWithoutSynchronizingMethod.Invoke(actionQueueSet, new[] { action });
+                    metadata["game_action_enqueue_method"] = "ActionQueueSet.EnqueueWithoutSynchronizing";
+                    if (playerNetId.HasValue)
+                    {
+                        metadata["game_action_owner_id"] = playerNetId.Value;
+                    }
+
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    enqueueFailures.Add($"ActionQueueSet.EnqueueWithoutSynchronizing: {ex.GetBaseException().Message}");
+                }
+            }
+        }
+
+        if (enqueueFailures.Count > 0)
+        {
+            metadata["game_action_enqueue_failures"] = enqueueFailures;
+            failure = enqueueFailures[0];
+            return false;
+        }
+
+        failure = "game_action_enqueue_unavailable";
+        return false;
+    }
+
+    private bool TryExecutePotionViaHolder(object holder, object? target, Dictionary<string, object?> metadata, out string? failure)
     {
         failure = null;
         try
         {
-            var task = TryInvokeParameterlessMethod(holder, "UsePotion");
+            var task = target is null
+                ? TryInvokeParameterlessMethod(holder, "UsePotion")
+                : TryInvokeFirstCompatibleMethod(
+                    holder,
+                    new[] { "UsePotion", "UsePotionOnTarget", "UsePotionTargeted" },
+                    new[]
+                    {
+                        new[] { target },
+                        new object?[] { target, null },
+                    },
+                    out _)
+                    ? new object()
+                    : null;
             metadata["holder_handler_type"] = holder.GetType().FullName ?? holder.GetType().Name;
             if (task is Task asyncTask)
             {
@@ -10269,6 +10581,94 @@ internal sealed class Sts2RuntimeReflectionReader
         return message.Contains("target must be present", StringComparison.OrdinalIgnoreCase) ||
                message.Contains("single target potion", StringComparison.OrdinalIgnoreCase) ||
                message.Contains("targeted potion", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static uint? TryResolveActionTargetId(string? targetId, object? target)
+    {
+        if (!string.IsNullOrWhiteSpace(targetId) && uint.TryParse(targetId, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedTargetId))
+        {
+            return parsedTargetId;
+        }
+
+        if (target is null)
+        {
+            return null;
+        }
+
+        var candidate = GetNullableUInt(target, "CombatId")
+                        ?? GetNullableUInt(target, "Id")
+                        ?? GetNullableUInt(GetMemberValue(target, "Monster"), "CombatId")
+                        ?? GetNullableUInt(GetMemberValue(target, "Monster"), "Id");
+        return candidate;
+    }
+
+    private static uint? GetNullableUInt(object? value, string memberName)
+    {
+        return GetNullableUInt(GetMemberValue(value, memberName));
+    }
+
+    private static uint? GetNullableUInt(object? value)
+    {
+        if (value is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return Convert.ToUInt32(value, CultureInfo.InvariantCulture);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static ulong? GetNullableULong(object? value, string memberName)
+    {
+        return GetNullableULong(GetMemberValue(value, memberName));
+    }
+
+    private static ulong? GetNullableULong(object? value)
+    {
+        if (value is null)
+        {
+            return null;
+        }
+
+        if (value is ulong unsignedLongValue)
+        {
+            return unsignedLongValue;
+        }
+
+        if (value is uint unsignedIntValue)
+        {
+            return unsignedIntValue;
+        }
+
+        if (value is long longValue && longValue >= 0)
+        {
+            return (ulong)longValue;
+        }
+
+        if (value is int intValue && intValue >= 0)
+        {
+            return (ulong)intValue;
+        }
+
+        try
+        {
+            return Convert.ToUInt64(value, CultureInfo.InvariantCulture);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static bool IsParameterType(ParameterInfo parameter, string fullName)
+    {
+        return string.Equals(parameter.ParameterType.FullName, fullName, StringComparison.Ordinal);
     }
 
     private RuntimeActionResult ExecutePlayCard(object runNode, object runState, ActionRequest request, LegalAction action)
