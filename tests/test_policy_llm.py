@@ -244,6 +244,38 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
         self.assertEqual(decision.metadata["provider"], "chat_completions")
         self.assertIn("raw_response_text", decision.metadata)
 
+    def test_policy_keeps_combat_decision_on_model_side(self) -> None:
+        snapshot = build_snapshot()
+        snapshot.player.hp = 80
+        snapshot.player.block = 0
+        snapshot.enemies[0].intent_type = "attack"
+        snapshot.enemies[0].intent_damage = 11
+        response_payload = {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "action_id": "act-potion",
+                                "reason": "完全交给模型决策",
+                                "detail": "即使存在来袭伤害，也不走本地打分捷径。",
+                                "halt": False,
+                                "confidence": "medium",
+                            },
+                            ensure_ascii=False,
+                        )
+                    }
+                }
+            ]
+        }
+
+        with patch("sts2_agent.policy.llm.urlopen", return_value=FakeHttpResponse(response_payload)) as mocked_urlopen:
+            decision = self.policy.decide(snapshot, build_actions())
+
+        self.assertEqual(decision.action_id, "act-potion")
+        self.assertEqual(decision.metadata["provider"], "chat_completions")
+        mocked_urlopen.assert_called_once()
+
     def test_snapshot_summary_keeps_combat_selection_metadata(self) -> None:
         snapshot = build_snapshot()
         snapshot.metadata = {
@@ -561,6 +593,11 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
             with self.assertRaises(ChatCompletionsRequestError):
                 self.policy.decide(build_snapshot(), build_actions())
 
+    def test_policy_maps_connection_reset_errors(self) -> None:
+        with patch("sts2_agent.policy.llm.urlopen", side_effect=ConnectionResetError("reset by peer")):
+            with self.assertRaises(ChatCompletionsRequestError):
+                self.policy.decide(build_snapshot(), build_actions())
+
     def test_summarize_snapshot_includes_rich_runtime_fields(self) -> None:
         payload = self.policy._summarize_snapshot(build_snapshot())
 
@@ -615,6 +652,7 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
         self.assertGreaterEqual(len(rules), 5)
         self.assertTrue(any("战斗结束时" in rule for rule in rules))
         self.assertTrue(any("end_turn" in rule for rule in rules))
+        self.assertTrue(any("减少本回合战损" in rule for rule in rules))
         self.assertIn("payload.game_rules", payload[0]["content"])
 
     def test_summarize_snapshot_hides_duplicate_move_name(self) -> None:

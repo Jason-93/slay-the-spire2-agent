@@ -83,6 +83,7 @@ class AutoplayOrchestrator:
         self._reject_code_counts: dict[str, int] = {}
         self._last_reject: dict[str, Any] = {}
         self._last_battle_context: dict[str, Any] = {}
+        self._same_window_action_exclusions: dict[tuple[str, str, int, str, str], set[tuple[str, object | None, object | None]]] = {}
 
     def request_stop(self) -> None:
         self._stop_requested = True
@@ -110,6 +111,7 @@ class AutoplayOrchestrator:
         self._reject_code_counts = {}
         self._last_reject = {}
         self._last_battle_context = {}
+        self._same_window_action_exclusions = {}
 
     def _publish_agent_status(
         self,
@@ -2017,6 +2019,7 @@ class AutoplayOrchestrator:
             )
 
         total_actions += 1
+        self._note_same_window_action(snapshot, selected_action, result)
         self._publish_agent_status(
             snapshot=snapshot,
             policy_output=policy_output,
@@ -3183,6 +3186,7 @@ class AutoplayOrchestrator:
             current_turn_actions += 1
             stale_action_attempts = 0
             consecutive_failures = 0
+            self._note_same_window_action(snapshot, selected_action, result)
             self._publish_agent_status(
                 snapshot=snapshot,
                 policy_output=policy_output,
@@ -4596,11 +4600,10 @@ class AutoplayOrchestrator:
             legal_actions = self.bridge.get_legal_actions(session_id)
         return snapshot, legal_actions
 
-    @staticmethod
-    def _effective_legal_actions(snapshot, legal_actions):
+    def _effective_legal_actions(self, snapshot, legal_actions):
         player = getattr(snapshot, "player", None)
         if player is None:
-            return list(legal_actions)
+            return self._apply_same_window_action_filters(snapshot, list(legal_actions))
         hand_by_id = {card.card_id: card for card in player.hand}
         effective_actions = []
         for action in legal_actions:
@@ -4616,7 +4619,70 @@ class AutoplayOrchestrator:
                 continue
             if card.playable and card.cost <= player.energy:
                 effective_actions.append(action)
-        return effective_actions
+        return self._apply_same_window_action_filters(snapshot, effective_actions)
+
+    @staticmethod
+    def _window_action_filter_key(snapshot) -> tuple[str, str, int, str, str]:
+        metadata = getattr(snapshot, "metadata", {}) or {}
+        return (
+            str(getattr(snapshot, "phase", "") or ""),
+            str(getattr(snapshot, "decision_id", "") or ""),
+            int(getattr(snapshot, "state_version", 0) or 0),
+            str(metadata.get("window_kind") or ""),
+            str(metadata.get("event_subphase") or ""),
+        )
+
+    @staticmethod
+    def _same_window_action_signature(action) -> tuple[str, object | None, object | None]:
+        params = getattr(action, "params", {}) or {}
+        return (
+            str(getattr(action, "type", "") or ""),
+            params.get("card_id"),
+            params.get("option_index"),
+            params.get("potion_index"),
+            params.get("canonical_potion_id"),
+        )
+
+    @classmethod
+    def _should_exclude_same_window_action(cls, snapshot, action) -> bool:
+        metadata = getattr(snapshot, "metadata", {}) or {}
+        if str(getattr(snapshot, "phase", "") or "") != "event":
+            return (
+                str(getattr(snapshot, "phase", "") or "") == "combat"
+                and str(metadata.get("window_kind") or "") == "player_turn"
+                and str(getattr(action, "type", "") or "") == "use_potion"
+            )
+        if str(metadata.get("window_kind") or "") != "event_choice":
+            return False
+        if str(metadata.get("event_subphase") or "") != "card_selection":
+            return False
+        return str(getattr(action, "type", "") or "") == "choose_event_option"
+
+    def _apply_same_window_action_filters(self, snapshot, legal_actions):
+        key = self._window_action_filter_key(snapshot)
+        exclusions = self._same_window_action_exclusions.get(key)
+        if self._same_window_action_exclusions:
+            self._same_window_action_exclusions = {} if exclusions is None else {key: exclusions}
+        if not exclusions:
+            return legal_actions
+        filtered = [
+            action
+            for action in legal_actions
+            if not (
+                self._should_exclude_same_window_action(snapshot, action)
+                and self._same_window_action_signature(action) in exclusions
+            )
+        ]
+        return filtered or legal_actions
+
+    def _note_same_window_action(self, snapshot, action, result) -> None:
+        if not self._should_exclude_same_window_action(snapshot, action):
+            return
+        if str(getattr(result, "status", "") or "") != "accepted":
+            return
+        key = self._window_action_filter_key(snapshot)
+        exclusions = self._same_window_action_exclusions.setdefault(key, set())
+        exclusions.add(self._same_window_action_signature(action))
 
     @staticmethod
     def _policy_action_args(policy_output: PolicyDecision | None) -> dict[str, object]:

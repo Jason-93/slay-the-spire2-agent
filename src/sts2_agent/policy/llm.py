@@ -38,6 +38,8 @@ class ChatCompletionsPolicy:
         "必须逐字区分时机词：'回合结束时' 只在当前回合结束触发，'战斗结束时' 只在战斗胜利/结束后触发，二者不能混淆。",
         "结束回合会放弃当前剩余能量与继续出牌机会；除非确实没有更有价值的合法动作，否则不要轻易选择 end_turn。",
         "格挡用于抵挡即将到来的伤害；若敌人意图攻击，而你还能通过格挡、减伤、击杀或其他合法动作明显降低伤害，应认真比较这些动作，不要忽略。",
+        "每回合都应尽可能减少本回合战损，而不是只在可能被击杀时才考虑防御、减伤、击杀或弱化等动作。",
+        "敌人的力量、易伤、格挡等状态默认只影响对应敌人本身；除非 description 明确写作用于玩家，否则不要把敌方状态当成玩家增益。",
         "若某张牌、药水、遗物、能力提供了 description 或 glossary，优先按这些文本的字面效果理解，不要把别的卡牌/遗物规则套过来。",
         "若描述写的是战斗结束回血、回合结束得格挡、抽牌后触发等，必须严格按描述时机判断，不能提前或延后生效。",
         "当 legal_actions 中仍有可打出的牌、可用药水或额外选牌动作时，只有在你明确判断这些动作价值都不足时，才考虑 end_turn。",
@@ -158,6 +160,8 @@ class ChatCompletionsPolicy:
             raise ChatCompletionsTimeoutError("chat completions request timed out") from exc
         except URLError as exc:
             raise ChatCompletionsRequestError(f"chat completions request failed: {exc.reason}") from exc
+        except OSError as exc:
+            raise ChatCompletionsRequestError(f"chat completions request failed: {exc}") from exc
 
     @staticmethod
     def _read_error_body(exc: HTTPError) -> str | None:

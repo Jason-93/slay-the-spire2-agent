@@ -274,6 +274,223 @@ class SequencedCombatBridge:
         raise NotImplementedError
 
 
+class StickyEventCardSelectionBridge:
+    def __init__(self) -> None:
+        self.stage = 0
+        self.submissions: list[str] = []
+        self.submitted_action_ids: list[str] = []
+
+    def attach_or_start(self, scenario: str = "live") -> BridgeSession:
+        self.stage = 0
+        self.submissions = []
+        self.submitted_action_ids = []
+        return BridgeSession(session_id="sess-event1234", scenario=scenario)
+
+    def get_snapshot(self, session_id: str) -> DecisionSnapshot:
+        if self.stage < 2:
+            return DecisionSnapshot(
+                session_id=session_id,
+                decision_id="dec-event-cards",
+                state_version=1,
+                phase="event",
+                player=PlayerState(hp=40, max_hp=80, block=0, energy=0, gold=99, hand=[]),
+                terminal=False,
+                metadata={
+                    "window_kind": "event_choice",
+                    "event_subphase": "card_selection",
+                    "event_title": "满屋芝士",
+                    "event_selection_prompt": "选择2张普通牌加入到你的**牌组**。",
+                },
+            )
+        if self.stage == 2:
+            return DecisionSnapshot(
+                session_id=session_id,
+                decision_id="dec-event-continue",
+                state_version=2,
+                phase="event",
+                player=PlayerState(hp=40, max_hp=80, block=0, energy=0, gold=99, hand=[]),
+                terminal=False,
+                metadata={
+                    "window_kind": "event_continue",
+                    "event_title": "满屋芝士",
+                    "event_continue_available": True,
+                },
+            )
+        return DecisionSnapshot(
+            session_id=session_id,
+            decision_id="dec-map",
+            state_version=3,
+            phase="map",
+            player=PlayerState(hp=40, max_hp=80, block=0, energy=0, gold=99, hand=[]),
+            map_nodes=["Monster@2,4"],
+            terminal=False,
+            metadata={"window_kind": "map_ready"},
+        )
+
+    def get_legal_actions(self, session_id: str) -> list[LegalAction]:
+        if self.stage < 2:
+            return [
+                LegalAction(
+                    action_id="act-event-card-0",
+                    type="choose_event_option",
+                    label="选择 武装",
+                    params={"option_index": 0, "card_id": "event-card-0"},
+                    target_constraints=[],
+                    metadata={},
+                ),
+                LegalAction(
+                    action_id="act-event-card-1",
+                    type="choose_event_option",
+                    label="选择 双重打击",
+                    params={"option_index": 1, "card_id": "event-card-1"},
+                    target_constraints=[],
+                    metadata={},
+                ),
+            ]
+        if self.stage == 2:
+            return [
+                LegalAction(
+                    action_id="act-event-continue",
+                    type="continue_event",
+                    label="继续",
+                    params={"button_label": "继续"},
+                    target_constraints=[],
+                    metadata={},
+                )
+            ]
+        return [
+            LegalAction(
+                action_id="act-map-node",
+                type="choose_map_node",
+                label="Choose Monster@2,4",
+                params={"node": "Monster@2,4"},
+                target_constraints=[],
+                metadata={},
+            )
+        ]
+
+    def submit_action(self, submission: ActionSubmission) -> ActionResult:
+        legal_actions = {action.action_id: action for action in self.get_legal_actions(submission.session_id)}
+        if submission.action_id not in legal_actions:
+            raise InvalidPayloadError("action is not legal for the active decision window")
+        accepted = legal_actions[submission.action_id]
+        self.submissions.append(accepted.type)
+        self.submitted_action_ids.append(accepted.action_id)
+        if self.stage < 2:
+            self.stage += 1
+        elif self.stage == 2:
+            self.stage = 3
+        next_snapshot = self.get_snapshot(submission.session_id)
+        return ActionResult(
+            status=ActionStatus.ACCEPTED,
+            session_id=submission.session_id,
+            decision_id=next_snapshot.decision_id,
+            state_version=next_snapshot.state_version,
+            accepted_action_id=accepted.action_id,
+            message="ok",
+            terminal=next_snapshot.terminal,
+            metadata={"phase": next_snapshot.phase},
+        )
+
+    def stop(self, session_id: str):
+        raise NotImplementedError
+
+    def reset(self, session_id: str):
+        raise NotImplementedError
+
+
+class StickyCombatPotionBridge:
+    def __init__(self) -> None:
+        self.stage = 0
+        self.submissions: list[str] = []
+        self.submitted_action_ids: list[str] = []
+
+    def attach_or_start(self, scenario: str = "live") -> BridgeSession:
+        self.stage = 0
+        self.submissions = []
+        self.submitted_action_ids = []
+        return BridgeSession(session_id="sess-potion1234", scenario=scenario)
+
+    def get_snapshot(self, session_id: str) -> DecisionSnapshot:
+        if self.stage < 2:
+            return DecisionSnapshot(
+                session_id=session_id,
+                decision_id="dec-combat-potion",
+                state_version=1,
+                phase="combat",
+                player=PlayerState(
+                    hp=40,
+                    max_hp=80,
+                    block=0,
+                    energy=3,
+                    gold=99,
+                    hand=[CardView(card_id="card-1", name="打击", cost=1, playable=True)],
+                ),
+                enemies=[EnemyState(enemy_id="1", name="史莱姆", hp=18, max_hp=18, block=0, intent="attack", intent_type="attack", intent_damage=6)],
+                terminal=False,
+                metadata={"window_kind": "player_turn", "current_side": "Player", "round_number": 1},
+            )
+        return DecisionSnapshot(
+            session_id=session_id,
+            decision_id="dec-reward",
+            state_version=2,
+            phase="reward",
+            player=PlayerState(hp=40, max_hp=80, block=0, energy=0, gold=99, hand=[]),
+            enemies=[],
+            rewards=[],
+            terminal=False,
+            metadata={"window_kind": "reward_choice"},
+        )
+
+    def get_legal_actions(self, session_id: str) -> list[LegalAction]:
+        if self.stage < 2:
+            return [
+                LegalAction(
+                    action_id="act-potion",
+                    type="use_potion",
+                    label="Use 火焰药水",
+                    params={"potion_index": 0, "canonical_potion_id": "POTION.FIRE_POTION"},
+                    target_constraints=[],
+                    metadata={},
+                ),
+                LegalAction(
+                    action_id="act-strike",
+                    type="play_card",
+                    label="Play 打击",
+                    params={"card_id": "card-1", "target_type": "AnyEnemy"},
+                    target_constraints=["1"],
+                    metadata={},
+                ),
+            ]
+        return []
+
+    def submit_action(self, submission: ActionSubmission) -> ActionResult:
+        legal_actions = {action.action_id: action for action in self.get_legal_actions(submission.session_id)}
+        if submission.action_id not in legal_actions:
+            raise InvalidPayloadError("action is not legal for the active decision window")
+        accepted = legal_actions[submission.action_id]
+        self.submissions.append(accepted.type)
+        self.submitted_action_ids.append(accepted.action_id)
+        self.stage += 1
+        next_snapshot = self.get_snapshot(submission.session_id)
+        return ActionResult(
+            status=ActionStatus.ACCEPTED,
+            session_id=submission.session_id,
+            decision_id=next_snapshot.decision_id,
+            state_version=next_snapshot.state_version,
+            accepted_action_id=accepted.action_id,
+            message="ok",
+            terminal=False,
+            metadata={"phase": next_snapshot.phase},
+        )
+
+    def stop(self, session_id: str):
+        raise NotImplementedError
+
+    def reset(self, session_id: str):
+        raise NotImplementedError
+
+
 class MultiTargetBridge(CapturingBridge):
     def get_legal_actions(self, session_id: str) -> list[LegalAction]:
         return [
@@ -810,6 +1027,50 @@ class OrchestratorTests(unittest.TestCase):
             records = [json.loads(line) for line in Path(summary.trace_path).read_text(encoding="utf-8").splitlines()]
             self.assertIn("event_choice", {record["step_kind"] for record in records})
             self.assertIn("event_continue", {record["step_kind"] for record in records})
+
+    def test_event_card_selection_does_not_repeat_same_card_in_same_window(self) -> None:
+        bridge = StickyEventCardSelectionBridge()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orchestrator = AutoplayOrchestrator(
+                bridge=bridge,
+                policy=FirstLegalActionPolicy(),
+                config=OrchestratorConfig(
+                    trace_dir=tmpdir,
+                    stop_after_player_turn=False,
+                    event_mode="safe-default",
+                    map_mode="halt",
+                    max_steps=8,
+                ),
+            )
+            summary = orchestrator.run(scenario="live")
+
+            self.assertTrue(summary.completed)
+            self.assertFalse(summary.interrupted)
+            self.assertEqual(summary.ended_by, "map_phase_reached")
+            self.assertEqual(bridge.submissions, ["choose_event_option", "choose_event_option", "continue_event"])
+            self.assertEqual(len(bridge.submitted_action_ids), 3)
+            self.assertNotEqual(bridge.submitted_action_ids[0], bridge.submitted_action_ids[1])
+
+    def test_combat_potion_does_not_repeat_same_use_in_same_window(self) -> None:
+        bridge = StickyCombatPotionBridge()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orchestrator = AutoplayOrchestrator(
+                bridge=bridge,
+                policy=FirstLegalActionPolicy(),
+                config=OrchestratorConfig(
+                    trace_dir=tmpdir,
+                    stop_after_player_turn=False,
+                    reward_mode="halt",
+                    max_steps=6,
+                ),
+            )
+            summary = orchestrator.run(scenario="live")
+
+            self.assertTrue(summary.completed)
+            self.assertFalse(summary.interrupted)
+            self.assertEqual(summary.ended_by, "reward_phase_reached")
+            self.assertEqual(bridge.submissions, ["use_potion", "play_card"])
+            self.assertEqual(bridge.submitted_action_ids, ["act-potion", "act-strike"])
 
     def test_battle_mode_can_advance_reward_screen_to_map(self) -> None:
         bridge = SequencedCombatBridge(
