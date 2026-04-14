@@ -1,7 +1,7 @@
 ﻿from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, is_dataclass
-from enum import StrEnum
+from enum import Enum, StrEnum
 from typing import Any
 
 
@@ -33,6 +33,9 @@ class ActionType(StrEnum):
     LEAVE_SHOP = "leave_shop"
     USE_POTION = "use_potion"
     SKIP_REWARD = "skip_reward"
+    CONTINUE_RUN = "continue_run"
+    START_NEW_RUN = "start_new_run"
+    CONFIRM_NEW_RUN = "confirm_new_run"
 
 
 class ActionStatus(StrEnum):

@@ -89,11 +89,11 @@
 
 ```bash
 dotnet build mod/Sts2Mod.StateBridge.sln \
-  -p:Sts2ManagedDir="F:\\SteamLibrary\\steamapps\\common\\Slay the Spire 2\\data_sts2_windows_x86_64" \
-  -p:Sts2ModLoaderDir="F:\\SteamLibrary\\steamapps\\common\\Slay the Spire 2\\data_sts2_windows_x86_64"
+  -p:Sts2ManagedDir="C:\\Program Files (x86)\\Steam\\steamapps\\common\\Slay the Spire 2\\data_sts2_windows_x86_64" \
+  -p:Sts2ModLoaderDir="C:\\Program Files (x86)\\Steam\\steamapps\\common\\Slay the Spire 2\\data_sts2_windows_x86_64"
 
-python tools/debug_sts2_mod.py install --game-dir "F:\\SteamLibrary\\steamapps\\common\\Slay the Spire 2"
-python tools/debug_sts2_mod.py debug --game-dir "F:\\SteamLibrary\\steamapps\\common\\Slay the Spire 2"
+python tools/debug_sts2_mod.py install --game-dir "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Slay the Spire 2"
+python tools/debug_sts2_mod.py debug --game-dir "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Slay the Spire 2"
 ```
 
 启动成功后，日志中应至少看到：

@@ -738,9 +738,10 @@ class OrchestratorTests(unittest.TestCase):
             summary = orchestrator.run(scenario="live")
 
             self.assertTrue(summary.completed)
-            self.assertEqual([item["status"] for item in bridge.agent_status_updates], ["thinking", "planned", "submitted", "accepted"])
+            # Sequence: thinking, thinking, planned, submitted, accepted
+            self.assertEqual([item["status"] for item in bridge.agent_status_updates], ["thinking", "thinking", "planned", "submitted", "accepted"])
             self.assertEqual(bridge.agent_status_updates[0]["detail"], "正在读取当前局面并生成下一步动作。")
-            self.assertEqual(bridge.agent_status_updates[1]["action_label"], "Play Strike")
+            self.assertEqual(bridge.agent_status_updates[2]["action_label"], "Play Strike")
             self.assertEqual(bridge.agent_status_updates[-1]["phase"], "combat")
             self.assertEqual(bridge.agent_status_clears, 1)
 
@@ -2063,6 +2064,61 @@ class OrchestratorTests(unittest.TestCase):
             self.assertTrue(summary.interrupted)
             self.assertEqual(summary.ended_by, "max_total_actions")
             self.assertEqual(summary.total_actions, 2)
+
+    def test_menu_mode_auto_can_start_new_run(self) -> None:
+        bridge = SequencedCombatBridge(
+            [
+                make_window(
+                    phase="menu",
+                    actions=[{"action_id": "start", "type": "start_new_run", "label": "Start New Run"}],
+                    metadata={"window_kind": "main_menu"}
+                ),
+                make_window(phase="map", actions=[{"action_id": "node-1", "type": "choose_map_node", "label": "Node"}]),
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmpdir, patch("sts2_agent.orchestrator.time.sleep", return_value=None):
+            orchestrator = AutoplayOrchestrator(
+                bridge=bridge,
+                policy=FirstLegalActionPolicy(),
+                config=OrchestratorConfig(
+                    trace_dir=tmpdir,
+                    menu_mode="auto",
+                    map_mode="halt",
+                    max_steps=5
+                ),
+            )
+            summary = orchestrator.run(scenario="live")
+
+            self.assertTrue(summary.completed)
+            self.assertFalse(summary.interrupted)
+            self.assertEqual(summary.total_actions, 1)
+
+    def test_menu_mode_auto_waits_for_actions(self) -> None:
+        bridge = SequencedCombatBridge(
+            [
+                make_window(phase="menu", actions=[], metadata={"window_kind": "main_menu"}),
+                make_window(phase="menu", actions=[{"type": "continue_run"}], metadata={"window_kind": "main_menu"}),
+                make_window(phase="map", actions=[{"type": "choose_map_node"}]),
+            ],
+            advance_on_snapshot_reads={0: 3}
+        )
+        with tempfile.TemporaryDirectory() as tmpdir, patch("sts2_agent.orchestrator.time.sleep", return_value=None), patch("sts2_agent.orchestrator.time.monotonic", side_effect=[float(i) for i in range(100)]):
+            orchestrator = AutoplayOrchestrator(
+                bridge=bridge,
+                policy=FirstLegalActionPolicy(),
+                config=OrchestratorConfig(
+                    trace_dir=tmpdir,
+                    menu_mode="auto",
+                    map_mode="halt",
+                    max_steps=100,
+                    max_non_combat_steps=50,
+                    transition_timeout_seconds=60.0,
+                    wait_for_next_player_turn_seconds=60.0
+                ),
+            )
+            summary = orchestrator.run(scenario="live")
+            self.assertTrue(summary.completed)
+            self.assertEqual(summary.total_actions, 1)
 
 
 if __name__ == "__main__":

@@ -20,8 +20,8 @@
 
 - 当前 STS2 游戏程序集依赖 `System.Runtime 9.0.0.0`，因此 bridge 现已统一切到 `.NET 9`。
 - 仓库根目录的 `global.json` 固定到 .NET 9 SDK 线，避免误用 .NET 8 构建真实 mod。
-- 本机 STS2 安装路径示例：`F:\SteamLibrary\steamapps\common\Slay the Spire 2`。
-- 实际托管程序集目录：`F:\SteamLibrary\steamapps\common\Slay the Spire 2\data_sts2_windows_x86_64`。
+- 本机 STS2 安装路径示例：`C:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2`。
+- 实际托管程序集目录：`C:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2\data_sts2_windows_x86_64`。
 
 ### 原型构建
 
@@ -33,8 +33,8 @@ dotnet build mod/Sts2Mod.StateBridge.sln
 
 ```bash
 dotnet build mod/Sts2Mod.StateBridge.sln \
-  -p:Sts2ManagedDir="F:\SteamLibrary\steamapps\common\Slay the Spire 2\data_sts2_windows_x86_64" \
-  -p:Sts2ModLoaderDir="F:\SteamLibrary\steamapps\common\Slay the Spire 2\data_sts2_windows_x86_64"
+  -p:Sts2ManagedDir="C:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2\data_sts2_windows_x86_64" \
+  -p:Sts2ModLoaderDir="C:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2\data_sts2_windows_x86_64"
 ```
 
 构建成功后，`mod/Sts2Mod.StateBridge/bin/Debug/net9.0/mod/` 会输出：
@@ -63,7 +63,7 @@ STS2 新版 mod loader 会递归扫描游戏目录下的 `mods/`，并要求在 
 推荐目录结构：
 
 ```text
-F:\SteamLibrary\steamapps\common\Slay the Spire 2\mods\Sts2Mod.StateBridge\
+C:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2\mods\Sts2Mod.StateBridge\
   sts2-agent-bridge.json
   sts2-agent-bridge.pck
   sts2-agent-bridge.dll
@@ -176,7 +176,7 @@ python tools/validate_live_apply.py \
   --enable-writes \
   --apply \
   --allow-write \
-  --game-dir "F:\SteamLibrary\steamapps\common\Slay the Spire 2"
+  --game-dir "C:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2"
 ```
 
 关键约束：

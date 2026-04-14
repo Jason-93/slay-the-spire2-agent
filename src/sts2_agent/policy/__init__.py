@@ -7,6 +7,7 @@ from .llm import (
     ChatCompletionsRequestError,
     ChatCompletionsTimeoutError,
 )
+from .mcts import MCTSPolicy, MCTS, MCTSNode, MCTSState
 
 __all__ = [
     "ChatCompletionsConfig",
@@ -18,4 +19,8 @@ __all__ = [
     "Policy",
     "PolicyDecisionValidationError",
     "PolicyError",
+    "MCTSPolicy",
+    "MCTS",
+    "MCTSNode",
+    "MCTSState",
 ]

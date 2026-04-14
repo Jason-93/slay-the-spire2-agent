@@ -546,7 +546,7 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
             with self.assertRaises(ChatCompletionsParseError):
                 self.policy.decide(build_snapshot(), build_actions())
 
-    def test_policy_rejects_missing_confidence(self) -> None:
+    def test_policy_handles_missing_confidence(self) -> None:
         response_payload = {
             "choices": [
                 {
@@ -557,8 +557,8 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
             ]
         }
         with patch("sts2_agent.policy.llm.urlopen", return_value=FakeHttpResponse(response_payload)):
-            with self.assertRaises(ChatCompletionsParseError):
-                self.policy.decide(build_snapshot(), build_actions())
+            decision = self.policy.decide(build_snapshot(), build_actions())
+            self.assertEqual(decision.confidence, "medium")
 
     def test_policy_rejects_non_object_args(self) -> None:
         response_payload = {
@@ -603,9 +603,9 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
 
         self.assertEqual(payload["player"]["hand"][0]["description"], "获得5点**格挡**。")
         self.assertEqual(payload["player"]["hand"][0]["glossary"][0]["id"], "block")
-        self.assertEqual(payload["player"]["draw_pile_cards"][0]["canonical_card_id"], "pommel_strike")
-        self.assertEqual(payload["player"]["discard_pile_cards"][0]["name"], "打击")
-        self.assertEqual(payload["player"]["exhaust_pile_cards"], [])
+        self.assertEqual(payload["player"]["draw_pile"]["cards"][0]["canonical_card_id"], "pommel_strike")
+        self.assertEqual(payload["player"]["discard_pile"]["cards"][0]["name"], "打击")
+        self.assertEqual(payload["player"]["exhaust_pile"]["cards"], [])
         self.assertEqual(payload["player"]["potion_capacity"], 2)
         self.assertEqual(payload["player"]["potions"][0]["canonical_potion_id"], "strength_potion")
         self.assertEqual(payload["player"]["relics"][0]["canonical_relic_id"], "burning_blood")
@@ -692,7 +692,7 @@ class ChatCompletionsPolicyTests(unittest.TestCase):
 
         self.assertNotIn("run_state", payload)
         self.assertEqual(payload["player"]["hand"][0]["name"], "打击")
-        self.assertEqual(payload["player"]["draw_pile_cards"], [])
+        self.assertEqual(payload["player"]["draw_pile"]["cards"], [])
         self.assertEqual(payload["player"]["potions"], [])
         self.assertEqual(payload["player"]["potion_capacity"], 0)
         self.assertEqual(payload["enemies"][0]["intent"], "attack")

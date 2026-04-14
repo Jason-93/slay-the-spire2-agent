@@ -3,17 +3,19 @@
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
+
+UTC = timezone.utc
 import inspect
 from pathlib import Path
 from typing import Any
 
 from sts2_agent.bridge import BridgeError, GameBridge, InvalidPayloadError, InterruptedSessionError, StaleActionError
-from sts2_agent.models import AgentStatusUpdate, ActionSubmission, BattleContext, PolicyDecision, RunSummary, TraceEntry, to_dict
+from sts2_agent.models import AgentStatusUpdate, ActionSubmission, ActionType, BattleContext, PolicyDecision, RunSummary, TraceEntry, to_dict
 from sts2_agent.policy import PolicyDecisionValidationError, PolicyError
 from sts2_agent.trace import JsonlTraceRecorder
 
-RECOVERABLE_REJECT_CATEGORIES = {"recoverable_stale", "recoverable_timing"}
+RECOVERABLE_REJECT_CATEGORIES = {"recoverable_stale", "recoverable_timing", "recoverable_action"}
 SELECTION_ACTION_TYPES = {"choose_combat_card", "cancel_combat_selection"}
 TRANSITION_WINDOW_KINDS = {
     "combat_transition",
@@ -27,11 +29,12 @@ TRANSITION_WINDOW_KINDS = {
 
 @dataclass(slots=True)
 class OrchestratorConfig:
-    timeout_seconds: float = 2.0
-    max_steps: int = 32
+    timeout_seconds: float = 5.0
+    max_steps: int = 64
     max_actions_per_turn: int | None = None
     stop_after_player_turn: bool = True
     auto_end_turn_when_only_end_turn: bool = True
+    menu_mode: str = "halt"  # halt|auto
     reward_mode: str = "halt"  # halt|skip|skip-only|safe-default|llm
     map_mode: str = "halt"  # halt|safe-default|llm
     event_mode: str = "halt"  # halt|safe-default|llm
@@ -43,11 +46,11 @@ class OrchestratorConfig:
     max_consecutive_failures: int = 6
     max_recovery_attempts: int = 6
     wait_for_next_player_turn_seconds: float = 30.0
-    transition_timeout_seconds: float = 15.0
+    transition_timeout_seconds: float = 30.0
     poll_interval_seconds: float = 0.5
     stable_window_required_observations: int = 2
     stable_window_timeout_seconds: float = 2.0
-    max_non_combat_steps: int = 24
+    max_non_combat_steps: int = 100
     unknown_window_fuse: int = 2
     stop_after_next_combat: bool = False
     battle_context_recent_steps: int = 4
@@ -189,6 +192,7 @@ class AutoplayOrchestrator:
         consecutive_failures = 0
         step_index = 0
         previous_phase: str | None = None
+        previous_snapshot: Any = None
         unknown_window_steps = 0
 
         while True:
@@ -199,7 +203,17 @@ class AutoplayOrchestrator:
                 and pending_end_turn_transition is None
             ):
                 break
+
             snapshot, legal_actions = self._read_consistent_state(session.session_id)
+
+            self._publish_agent_status(
+                snapshot=snapshot,
+                policy_output=self._thinking_policy_output(),
+                status="thinking",
+                step_index=step_index,
+                current_turn_index=current_turn_index,
+            )
+
             legal_actions = self._effective_legal_actions(snapshot, legal_actions)
             if pending_end_turn_transition is not None:
                 if (snapshot.decision_id, snapshot.state_version) != pending_end_turn_transition:
@@ -209,6 +223,18 @@ class AutoplayOrchestrator:
             if previous_phase in {"reward", "map", "event", "shop"} and phase == "combat" and not snapshot.terminal:
                 self._next_combat_entered = True
                 transition_wait_since = None
+
+            # New: Also clear transition_wait_since if the state version has changed
+            if transition_wait_since is not None and previous_snapshot is not None:
+                if (snapshot.decision_id, snapshot.state_version) != (previous_snapshot.decision_id, previous_snapshot.state_version):
+                    transition_wait_since = None
+
+            if previous_snapshot is not None and (snapshot.decision_id, snapshot.state_version) != (previous_snapshot.decision_id, previous_snapshot.state_version):
+                # 全局状态变更后的缓冲等待，防止动画瞬间完成导致的状态不一致
+                time.sleep(self.config.poll_interval_seconds)
+
+            current_previous_snapshot = previous_snapshot
+            previous_snapshot = snapshot
             player_turn = self._is_player_turn(snapshot)
             current_turn_marker, current_turn_index, current_turn_actions = self._update_turn_state(
                 snapshot,
@@ -228,9 +254,23 @@ class AutoplayOrchestrator:
                 pending_end_turn_transition=pending_end_turn_transition,
                 previous_phase=previous_phase,
             )
-            if self._pending_recovery_reason and self._is_actionable_phase_kind(phase_kind, legal_actions):
-                self._mark_recovery_resolved()
-            if self._is_non_combat_phase_kind(phase_kind):
+
+            # Check if we are stuck in a transition (animation still playing)
+            # even if the game still reports legal_actions from the old state.
+            if transition_wait_since is not None:
+                # If the state version has not changed yet, we MUST treat it as a transition wait
+                # instead of letting the phase handlers re-execute the same action.
+                # Only clear it when we see a combat phase (already handled below) or the state version updates.
+                phase_kind = "transition_wait"
+
+            if current_previous_snapshot is not None and not self._is_player_turn(current_previous_snapshot) and player_turn:
+                # 进入新的玩家回合时，强制执行一次稳定等待。
+                # 这有助于确保动画完全停止，并防止使用过时的 snapshot。
+                if self.config.poll_interval_seconds > 0:
+                    time.sleep(self.config.poll_interval_seconds)
+                    continue
+
+            if self._is_non_combat_phase_kind(phase_kind) and phase_kind != "transition_wait":
                 self._non_combat_steps += 1
 
             if snapshot.terminal:
@@ -361,6 +401,7 @@ class AutoplayOrchestrator:
                 if outcome["summary"] is not None:
                     return outcome["summary"]
                 previous_phase = phase
+                previous_snapshot = snapshot
                 continue
 
             if phase == "map":
@@ -387,6 +428,7 @@ class AutoplayOrchestrator:
                 if outcome["summary"] is not None:
                     return outcome["summary"]
                 previous_phase = phase
+                previous_snapshot = snapshot
                 continue
 
             if phase == "event":
@@ -413,10 +455,38 @@ class AutoplayOrchestrator:
                 if outcome["summary"] is not None:
                     return outcome["summary"]
                 previous_phase = phase
+                previous_snapshot = snapshot
                 continue
 
             if phase == "shop":
                 outcome = self._handle_shop_phase(
+                    recorder=recorder,
+                    snapshot=snapshot,
+                    legal_actions=legal_actions,
+                    step_index=step_index,
+                    current_turn_index=current_turn_index,
+                    current_turn_actions=current_turn_actions,
+                    total_actions=total_actions,
+                    turns_completed=turns_completed,
+                    trace_path=trace_path,
+                    session_id=session.session_id,
+                    transition_wait_since=transition_wait_since,
+                )
+                step_index = outcome["step_index"]
+                transition_wait_since = outcome.get("transition_wait_since", transition_wait_since)
+                current_turn_actions = outcome["current_turn_actions"]
+                total_actions = outcome["total_actions"]
+                stale_action_attempts = outcome["stale_action_attempts"]
+                consecutive_failures = outcome["consecutive_failures"]
+                pending_end_turn_transition = outcome["pending_end_turn_transition"]
+                if outcome["summary"] is not None:
+                    return outcome["summary"]
+                previous_phase = phase
+                previous_snapshot = snapshot
+                continue
+
+            if phase == "menu":
+                outcome = self._handle_menu_phase(
                     recorder=recorder,
                     snapshot=snapshot,
                     legal_actions=legal_actions,
@@ -459,7 +529,12 @@ class AutoplayOrchestrator:
                     phase_kind=phase_kind,
                 )
                 step_index = outcome["step_index"]
-                transition_wait_since = outcome["waiting_since"]
+                transition_wait_since = outcome["transition_wait_since"]
+                current_turn_actions = outcome["current_turn_actions"]
+                total_actions = outcome["total_actions"]
+                stale_action_attempts = outcome["stale_action_attempts"]
+                consecutive_failures = outcome["consecutive_failures"]
+                pending_end_turn_transition = outcome["pending_end_turn_transition"]
                 if outcome["summary"] is not None:
                     return outcome["summary"]
                 previous_phase = phase
@@ -696,6 +771,12 @@ class AutoplayOrchestrator:
             return value
         return "halt"
 
+    def _normalized_menu_mode(self) -> str:
+        value = str(getattr(self.config, "menu_mode", "") or "").strip().lower()
+        if value in {"halt", "auto"}:
+            return value
+        return "halt"
+
     @staticmethod
     def _normalize_phase(value: object) -> str:
         text = str(value or "").strip().lower()
@@ -772,6 +853,7 @@ class AutoplayOrchestrator:
             "event_choice",
             "event_continue",
             "shop",
+            "menu",
             "transition_wait",
             "unknown_window",
         }
@@ -1129,6 +1211,13 @@ class AutoplayOrchestrator:
             step_kind=phase_kind,
             phase_kind=phase_kind,
         )
+
+        # For reward transitions, give the game some time to process animations
+        # especially for skip_reward or reward_advance scenarios.
+        if str(result.status) == "accepted":
+            time.sleep(1.0)
+        new_transition_wait_since: float | None = time.time() if str(result.status) == "accepted" else transition_wait_since
+
         return self._step_result(
             step_index=step_index,
             current_turn_actions=current_turn_actions,
@@ -1136,7 +1225,7 @@ class AutoplayOrchestrator:
             stale_action_attempts=0,
             consecutive_failures=0,
             pending_end_turn_transition=None,
-            transition_wait_since=None,
+            transition_wait_since=new_transition_wait_since,
             summary=None,
         )
 
@@ -1433,6 +1522,14 @@ class AutoplayOrchestrator:
             step_kind=phase_kind,
             phase_kind=phase_kind,
         )
+
+        # For map transitions, give the game some time to start the animation
+        # instead of immediately re-polling and re-deciding.
+        # Wait at least poll_interval_seconds + 1s so the map scene has time to settle.
+        if str(result.status) == "accepted":
+            time.sleep(self.config.poll_interval_seconds + 1.0)
+        new_transition_wait_since: float | None = time.time() if str(result.status) == "accepted" else transition_wait_since
+
         return self._step_result(
             step_index=step_index,
             current_turn_actions=current_turn_actions,
@@ -1440,7 +1537,7 @@ class AutoplayOrchestrator:
             stale_action_attempts=0,
             consecutive_failures=0,
             pending_end_turn_transition=None,
-            transition_wait_since=None,
+            transition_wait_since=new_transition_wait_since,
             summary=None,
         )
 
@@ -2057,6 +2154,248 @@ class AutoplayOrchestrator:
             summary=None,
         )
 
+    def _handle_menu_phase(
+        self,
+        *,
+        recorder: JsonlTraceRecorder,
+        snapshot,
+        legal_actions,
+        step_index: int,
+        current_turn_index: int,
+        current_turn_actions: int,
+        total_actions: int,
+        turns_completed: int,
+        trace_path: Path,
+        session_id: str,
+        transition_wait_since: float | None = None,
+    ) -> dict[str, Any]:
+        menu_mode = self._normalized_menu_mode()
+        phase_kind = "menu"
+
+        if menu_mode == "halt":
+            step_index += 1
+            self._record(
+                recorder=recorder,
+                snapshot=snapshot,
+                legal_actions=legal_actions,
+                policy_output=PolicyDecision(action_id=None, reason="menu_mode=halt", halt=True),
+                bridge_result={"status": "completed", "reason": "menu_halt"},
+                interrupted=False,
+                step_index=step_index,
+                current_turn_index=current_turn_index,
+                actions_this_turn=current_turn_actions,
+                total_actions=total_actions,
+                waiting_for_player_turn=False,
+                is_final_step=True,
+                stop_reason="menu_halt",
+                battle_stop_reason="menu_halt",
+                step_kind="menu_halt",
+                phase_kind=phase_kind,
+            )
+            return self._step_result(
+                step_index=step_index,
+                current_turn_actions=current_turn_actions,
+                total_actions=total_actions,
+                stale_action_attempts=0,
+                consecutive_failures=0,
+                pending_end_turn_transition=None,
+                summary=self._finish(
+                    session_id=session_id,
+                    trace_path=trace_path,
+                    reason="menu_halt",
+                    completed=False,
+                    interrupted=True,
+                    turn_completed=turns_completed > 0,
+                    actions_this_turn=current_turn_actions,
+                    turns_completed=turns_completed,
+                    total_actions=total_actions,
+                    current_turn_index=current_turn_index,
+                ),
+            )
+
+        if not legal_actions:
+            wait_reason = "waiting for menu actions"
+            window_kind = snapshot.metadata.get("window_kind")
+            
+            # 增加更详细的诊断信息到等待原因中
+            diagnostics = []
+            if window_kind:
+                diagnostics.append(f"window_kind: {window_kind}")
+            
+            # 检查是否有被抑制的动作原因
+            suppressed_reason = snapshot.metadata.get("menu_action_suppressed_reason")
+            if suppressed_reason:
+                diagnostics.append(f"suppressed: {suppressed_reason}")
+                
+            # 记录发现的候选按钮数量
+            candidate_count = snapshot.metadata.get("menu_button_candidate_count")
+            if candidate_count is not None:
+                diagnostics.append(f"candidates: {candidate_count}")
+
+            if diagnostics:
+                wait_reason = f"waiting for menu actions ({', '.join(diagnostics)})"
+            
+            # 菜单加载可能较慢，允许更长的等待时间
+            menu_wait_timeout = max(self.config.wait_for_next_player_turn_seconds, 30.0)
+
+            return self._handle_transition_wait(
+                recorder=recorder,
+                snapshot=snapshot,
+                legal_actions=legal_actions,
+                step_index=step_index,
+                current_turn_index=current_turn_index,
+                current_turn_actions=current_turn_actions,
+                total_actions=total_actions,
+                turns_completed=turns_completed,
+                trace_path=trace_path,
+                waiting_since=transition_wait_since,
+                stop_reason="menu_transition_timeout",
+                wait_reason=wait_reason,
+                step_kind="menu_transition",
+                phase_kind=phase_kind,
+                timeout_seconds=menu_wait_timeout,
+            )
+
+        # 优先继续游戏，否则开始新游戏
+        action = next((a for a in legal_actions if a.type == ActionType.CONTINUE_RUN), None)
+        if not action:
+            action = next((a for a in legal_actions if a.type == ActionType.START_NEW_RUN), None)
+        if not action:
+            action = next((a for a in legal_actions if a.type == ActionType.CONFIRM_NEW_RUN), None)
+
+        if not action:
+            # 记录所有可用的动作类型，方便调试
+            available_types = [a.type for a in legal_actions]
+            policy_reason = f"no supported menu action (available: {available_types})"
+            step_index += 1
+            self._record(
+                recorder=recorder,
+                snapshot=snapshot,
+                legal_actions=legal_actions,
+                policy_output=PolicyDecision(action_id=None, reason=policy_reason, halt=True),
+                bridge_result={"status": "completed", "reason": "no_supported_menu_action"},
+                interrupted=False,
+                step_index=step_index,
+                current_turn_index=current_turn_index,
+                actions_this_turn=current_turn_actions,
+                total_actions=total_actions,
+                waiting_for_player_turn=False,
+                is_final_step=True,
+                stop_reason="no_supported_menu_action",
+                battle_stop_reason="no_supported_menu_action",
+                step_kind="menu_halt",
+                phase_kind=phase_kind,
+            )
+            return self._step_result(
+                step_index=step_index,
+                current_turn_actions=current_turn_actions,
+                total_actions=total_actions,
+                stale_action_attempts=0,
+                consecutive_failures=0,
+                pending_end_turn_transition=None,
+                summary=self._finish(
+                    session_id=session_id,
+                    trace_path=trace_path,
+                    reason="no_supported_menu_action",
+                    completed=False,
+                    interrupted=True,
+                    turn_completed=turns_completed > 0,
+                    actions_this_turn=current_turn_actions,
+                    turns_completed=turns_completed,
+                    total_actions=total_actions,
+                    current_turn_index=current_turn_index,
+                ),
+            )
+
+        step_index += 1
+        policy_output = PolicyDecision(action_id=action.action_id, reason=f"auto menu action: {action.type}")
+        self._publish_agent_status(
+            snapshot=snapshot,
+            policy_output=policy_output,
+            status="applying",
+            step_index=step_index,
+            current_turn_index=current_turn_index,
+            action_label=action.label,
+        )
+
+        try:
+            result = self.bridge.submit_action(
+                ActionSubmission(
+                    session_id=session_id,
+                    decision_id=snapshot.decision_id,
+                    state_version=snapshot.state_version,
+                    action_id=action.action_id,
+                    args={},
+                )
+            )
+        except Exception as e:
+            return self._finalize_failure(
+                exc=e,
+                recorder=recorder,
+                snapshot=snapshot,
+                legal_actions=legal_actions,
+                step_index=step_index,
+                current_turn_index=current_turn_index,
+                current_turn_actions=current_turn_actions,
+                turns_completed=turns_completed,
+                total_actions=total_actions,
+                stale_action_attempts=0,
+                consecutive_failures=1,
+                trace_path=trace_path,
+                session_id=session_id,
+                step_kind="menu_action",
+                phase_kind=phase_kind,
+            )
+
+        self._record(
+            recorder=recorder,
+            snapshot=snapshot,
+            legal_actions=legal_actions,
+            policy_output=policy_output,
+            bridge_result=to_dict(result),
+            interrupted=False,
+            step_index=step_index,
+            current_turn_index=current_turn_index,
+            actions_this_turn=current_turn_actions,
+            total_actions=total_actions,
+            waiting_for_player_turn=False,
+            is_final_step=False,
+            stop_reason="",
+            battle_stop_reason="",
+            step_kind="menu_action",
+            phase_kind=phase_kind,
+        )
+
+        if result.status == "accepted":
+            return self._step_result(
+                step_index=step_index,
+                current_turn_actions=current_turn_actions,
+                total_actions=total_actions + 1,
+                stale_action_attempts=0,
+                consecutive_failures=0,
+                pending_end_turn_transition=None,
+                transition_wait_since=time.monotonic(),
+                summary=None,
+            )
+        else:
+            return self._finalize_failure(
+                exc=RuntimeError(f"Menu action rejected: {result.error_code} {result.message}"),
+                recorder=recorder,
+                snapshot=snapshot,
+                legal_actions=legal_actions,
+                step_index=step_index,
+                current_turn_index=current_turn_index,
+                current_turn_actions=current_turn_actions,
+                turns_completed=turns_completed,
+                total_actions=total_actions,
+                stale_action_attempts=0,
+                consecutive_failures=1,
+                trace_path=trace_path,
+                session_id=session_id,
+                step_kind="menu_action",
+                phase_kind=phase_kind,
+            )
+
     def _handle_transition_wait(
         self,
         *,
@@ -2074,6 +2413,7 @@ class AutoplayOrchestrator:
         wait_reason: str,
         step_kind: str,
         phase_kind: str,
+        timeout_seconds: float | None = None,
     ) -> dict[str, object]:
         step_index += 1
         if waiting_since is None:
@@ -2081,7 +2421,8 @@ class AutoplayOrchestrator:
             self._transition_attempt += 1
             self._note_recovery_attempt(wait_reason)
         elapsed = time.monotonic() - waiting_since
-        if elapsed > self.config.transition_timeout_seconds:
+        effective_timeout = timeout_seconds if timeout_seconds is not None else self.config.transition_timeout_seconds
+        if elapsed > effective_timeout:
             self._record(
                 recorder=recorder,
                 snapshot=snapshot,
@@ -2101,10 +2442,15 @@ class AutoplayOrchestrator:
                 phase_kind=phase_kind,
                 transition_elapsed_seconds=elapsed,
             )
-            return {
-                "step_index": step_index,
-                "waiting_since": waiting_since,
-                "summary": self._finish(
+            return self._step_result(
+                step_index=step_index,
+                current_turn_actions=current_turn_actions,
+                total_actions=total_actions,
+                stale_action_attempts=0,
+                consecutive_failures=0,
+                pending_end_turn_transition=None,
+                transition_wait_since=waiting_since,
+                summary=self._finish(
                     session_id=snapshot.session_id,
                     trace_path=trace_path,
                     reason=stop_reason,
@@ -2116,7 +2462,7 @@ class AutoplayOrchestrator:
                     total_actions=total_actions,
                     current_turn_index=current_turn_index,
                 ),
-            }
+            )
 
         self._record(
             recorder=recorder,
@@ -2137,12 +2483,24 @@ class AutoplayOrchestrator:
             phase_kind=phase_kind,
             transition_elapsed_seconds=elapsed,
         )
+        self._publish_agent_status(
+            snapshot=snapshot,
+            policy_output=PolicyDecision(action_id=None, reason=wait_reason),
+            status="waiting",
+            step_index=step_index,
+            current_turn_index=current_turn_index,
+        )
         time.sleep(self.config.poll_interval_seconds)
-        return {
-            "step_index": step_index,
-            "waiting_since": waiting_since,
-            "summary": None,
-        }
+        return self._step_result(
+            step_index=step_index,
+            current_turn_actions=current_turn_actions,
+            total_actions=total_actions,
+            stale_action_attempts=0,
+            consecutive_failures=0,
+            pending_end_turn_transition=None,
+            transition_wait_since=waiting_since,
+            summary=None,
+        )
 
     def _handle_non_player_turn(
         self,
@@ -2159,10 +2517,15 @@ class AutoplayOrchestrator:
         waiting_since: float | None,
     ) -> dict[str, object]:
         if self.config.stop_after_player_turn:
-            return {
-                "step_index": step_index,
-                "waiting_since": waiting_since,
-                "summary": self._finish(
+            return self._step_result(
+                step_index=step_index,
+                current_turn_actions=current_turn_actions,
+                total_actions=total_actions,
+                stale_action_attempts=0,
+                consecutive_failures=0,
+                pending_end_turn_transition=None,
+                transition_wait_since=waiting_since,
+                summary=self._finish(
                     session_id=snapshot.session_id,
                     trace_path=trace_path,
                     reason="phase_changed",
@@ -2175,7 +2538,7 @@ class AutoplayOrchestrator:
                     total_actions=total_actions,
                     current_turn_index=current_turn_index,
                 ),
-            }
+            )
 
         step_index += 1
         if waiting_since is None:
@@ -2200,10 +2563,15 @@ class AutoplayOrchestrator:
                 step_kind="enemy_turn_wait",
                 phase_kind="combat_wait",
             )
-            return {
-                "step_index": step_index,
-                "waiting_since": waiting_since,
-                "summary": self._finish(
+            return self._step_result(
+                step_index=step_index,
+                current_turn_actions=current_turn_actions,
+                total_actions=total_actions,
+                stale_action_attempts=0,
+                consecutive_failures=0,
+                pending_end_turn_transition=None,
+                transition_wait_since=waiting_since,
+                summary=self._finish(
                     session_id=snapshot.session_id,
                     trace_path=trace_path,
                     reason="next_player_turn_timeout",
@@ -2215,7 +2583,7 @@ class AutoplayOrchestrator:
                     total_actions=total_actions,
                     current_turn_index=current_turn_index,
                 ),
-            }
+            )
 
         self._record(
             recorder=recorder,
@@ -2235,12 +2603,32 @@ class AutoplayOrchestrator:
             step_kind="enemy_turn_wait",
             phase_kind="combat_wait",
         )
-        time.sleep(self.config.poll_interval_seconds)
-        return {
-            "step_index": step_index,
-            "waiting_since": waiting_since,
-            "summary": None,
-        }
+        self._publish_agent_status(
+            snapshot=snapshot,
+            policy_output=PolicyDecision(action_id=None, reason="waiting for next player turn"),
+            status="waiting",
+            step_index=step_index,
+            current_turn_index=current_turn_index,
+        )
+        if waiting_since is not None:
+            # 增加对动画状态的缓冲等待
+            elapsed = time.monotonic() - waiting_since
+            if elapsed < 2.0:
+                time.sleep(min(1.0, self.config.poll_interval_seconds * 2 if self.config.poll_interval_seconds > 0 else 1.0))
+            else:
+                time.sleep(self.config.poll_interval_seconds)
+        else:
+            time.sleep(self.config.poll_interval_seconds)
+        return self._step_result(
+            step_index=step_index,
+            current_turn_actions=current_turn_actions,
+            total_actions=total_actions,
+            stale_action_attempts=0,
+            consecutive_failures=0,
+            pending_end_turn_transition=None,
+            transition_wait_since=waiting_since,
+            summary=None,
+        )
 
     def _handle_pending_end_turn_transition(
         self,
@@ -2279,10 +2667,15 @@ class AutoplayOrchestrator:
                 step_kind="pending_end_turn_transition",
                 phase_kind="pending_end_turn_transition",
             )
-            return {
-                "step_index": step_index,
-                "waiting_since": waiting_since,
-                "summary": self._finish(
+            return self._step_result(
+                step_index=step_index,
+                current_turn_actions=current_turn_actions,
+                total_actions=total_actions,
+                stale_action_attempts=0,
+                consecutive_failures=0,
+                pending_end_turn_transition=None,
+                transition_wait_since=waiting_since,
+                summary=self._finish(
                     session_id=snapshot.session_id,
                     trace_path=trace_path,
                     reason="next_player_turn_timeout",
@@ -2294,7 +2687,7 @@ class AutoplayOrchestrator:
                     total_actions=total_actions,
                     current_turn_index=current_turn_index,
                 ),
-            }
+            )
 
         self._record(
             recorder=recorder,
@@ -2314,12 +2707,32 @@ class AutoplayOrchestrator:
             step_kind="pending_end_turn_transition",
             phase_kind="pending_end_turn_transition",
         )
-        time.sleep(self.config.poll_interval_seconds)
-        return {
-            "step_index": step_index,
-            "waiting_since": waiting_since,
-            "summary": None,
-        }
+        self._publish_agent_status(
+            snapshot=snapshot,
+            policy_output=PolicyDecision(action_id=None, reason="waiting for end_turn transition"),
+            status="waiting",
+            step_index=step_index,
+            current_turn_index=current_turn_index,
+        )
+        # Check if the state has changed. If not, wait.
+        if waiting_since is not None:
+             elapsed = time.monotonic() - waiting_since
+             if elapsed < 2.0:
+                 time.sleep(1.0)
+             else:
+                 time.sleep(self.config.poll_interval_seconds)
+        else:
+             time.sleep(self.config.poll_interval_seconds)
+        return self._step_result(
+            step_index=step_index,
+            current_turn_actions=current_turn_actions,
+            total_actions=total_actions,
+            stale_action_attempts=0,
+            consecutive_failures=0,
+            pending_end_turn_transition=None,
+            transition_wait_since=waiting_since,
+            summary=None,
+        )
 
     def _player_turn_preflight(
         self,
@@ -2407,8 +2820,12 @@ class AutoplayOrchestrator:
             )
             return {
                 "step_index": step_index,
-                "waiting_since": waiting_since,
+                "current_turn_actions": current_turn_actions,
+                "total_actions": total_actions,
+                "stale_action_attempts": 0,
                 "consecutive_failures": 1,
+                "pending_end_turn_transition": None,
+                "waiting_since": waiting_since,
                 "summary": self._finish(
                     session_id=session_id,
                     trace_path=trace_path,
@@ -2443,11 +2860,22 @@ class AutoplayOrchestrator:
             step_kind="empty_player_actions",
             phase_kind="empty_player_actions",
         )
+        self._publish_agent_status(
+            snapshot=snapshot,
+            policy_output=PolicyDecision(action_id=None, reason=recovery_reason),
+            status="waiting",
+            step_index=step_index,
+            current_turn_index=current_turn_index,
+        )
         time.sleep(self.config.poll_interval_seconds)
         return {
             "step_index": step_index,
-            "waiting_since": waiting_since,
+            "current_turn_actions": current_turn_actions,
+            "total_actions": total_actions,
+            "stale_action_attempts": 0,
             "consecutive_failures": 0,
+            "pending_end_turn_transition": None,
+            "waiting_since": waiting_since,
             "summary": None,
         }
 
@@ -2612,6 +3040,9 @@ class AutoplayOrchestrator:
                         args=self._build_action_args(auto_end_turn),
                     )
                 )
+                # For end_turn transitions, give the game some time to start the animation
+                if str(result.status) == "accepted":
+                    time.sleep(2.0)
                 result_payload = to_dict(result)
                 result_payload["submitted_action_id"] = auto_end_turn.action_id
                 result_payload["submitted_action_type"] = auto_end_turn.type
@@ -3178,6 +3609,98 @@ class AutoplayOrchestrator:
                     args=self._build_action_args(selected_action, policy_output),
                 )
             )
+            # For end_turn transitions, give the game some time to start the animation
+            if str(result.status) == "accepted" and selected_action.type == "end_turn":
+                time.sleep(2.0 if self.config.poll_interval_seconds < 1.0 else self.config.poll_interval_seconds * 2)
+            
+            if str(result.status) != "accepted":
+                raw_code = str(result.error_code or "action_rejected")
+                category = self._classify_reject_category(raw_code)
+                if category == "recoverable_action":
+                    stale_action_attempts += 1
+                    retrying = stale_action_attempts <= self.config.stale_action_retries
+                else:
+                    stale_action_attempts = 0
+                    retrying = self._is_recoverable_reject_category(category)
+                consecutive_failures += 1
+                self._note_reject(
+                    category=category,
+                    raw_code=raw_code,
+                    snapshot=snapshot,
+                    selected_action=selected_action,
+                    step_index=step_index,
+                    message=str(result.message or "action was rejected by bridge"),
+                )
+                if self._is_recoverable_reject_category(category):
+                    self._note_recovery_attempt(raw_code)
+                    # For rejected actions that are recoverable, we might want to wait a bit
+                    # as it might be an animation or UI lock.
+                    time.sleep(self.config.poll_interval_seconds)
+
+                budget_stop_reason = self._battle_budget_stop_reason(
+                    total_actions=total_actions,
+                    turns_completed=turns_completed,
+                    current_turn_index=current_turn_index,
+                    consecutive_failures=consecutive_failures,
+                )
+                retrying = retrying and not budget_stop_reason
+                
+                self._publish_agent_status(
+                    snapshot=snapshot,
+                    policy_output=policy_output,
+                    status="rejected",
+                    step_index=step_index,
+                    current_turn_index=current_turn_index,
+                    action_label=selected_action.label,
+                )
+                self._record(
+                    recorder=recorder,
+                    snapshot=snapshot,
+                    legal_actions=legal_actions,
+                    policy_output=policy_output,
+                    bridge_result=to_dict(result),
+                    interrupted=not retrying,
+                    step_index=step_index,
+                    current_turn_index=current_turn_index,
+                    actions_this_turn=current_turn_actions,
+                    total_actions=total_actions,
+                    waiting_for_player_turn=False,
+                    is_final_step=not retrying,
+                    stop_reason=budget_stop_reason if budget_stop_reason else self._reject_stop_reason(category, raw_code, retrying),
+                    battle_stop_reason="" if retrying else (budget_stop_reason or self._reject_stop_reason(category, raw_code, False)),
+                    reject_category=category,
+                    reject_raw_code=raw_code,
+                )
+                if retrying:
+                    return self._step_result(
+                        step_index=step_index,
+                        current_turn_actions=current_turn_actions,
+                        total_actions=total_actions,
+                        stale_action_attempts=stale_action_attempts,
+                        consecutive_failures=consecutive_failures,
+                        pending_end_turn_transition=None,
+                        summary=None,
+                    )
+                return self._step_result(
+                    step_index=step_index,
+                    current_turn_actions=current_turn_actions,
+                    total_actions=total_actions,
+                    stale_action_attempts=stale_action_attempts,
+                    consecutive_failures=consecutive_failures,
+                    pending_end_turn_transition=None,
+                    summary=self._finish(
+                        session_id=session_id,
+                        trace_path=trace_path,
+                        reason=budget_stop_reason or self._reject_stop_reason(category, raw_code, False),
+                        completed=False,
+                        interrupted=True,
+                        actions_this_turn=current_turn_actions,
+                        turns_completed=turns_completed,
+                        total_actions=total_actions,
+                        current_turn_index=current_turn_index,
+                    ),
+                )
+
             result_payload = to_dict(result)
             result_payload["submitted_action_id"] = selected_action.action_id
             result_payload["submitted_action_type"] = selected_action.type
@@ -3398,6 +3921,7 @@ class AutoplayOrchestrator:
         is_reject = reject_category in {
             "recoverable_stale",
             "recoverable_timing",
+            "recoverable_action",
             "invalid_policy_decision",
             "hard_runtime_reject",
         } and (not is_policy_error or error_code == "policy_invalid_action_args")
@@ -3412,13 +3936,18 @@ class AutoplayOrchestrator:
             )
             if self._is_recoverable_reject_category(reject_category):
                 self._note_recovery_attempt(error_code)
+                if reject_category == "recoverable_action":
+                    stale_action_attempts += 1
+                    retrying = stale_action_attempts <= self.config.stale_action_retries
+                else:
+                    retrying = True
                 budget_stop_reason = self._battle_budget_stop_reason(
                     total_actions=total_actions,
                     turns_completed=turns_completed,
                     current_turn_index=current_turn_index,
                     consecutive_failures=consecutive_failures,
                 )
-                retrying = not budget_stop_reason
+                retrying = retrying and not budget_stop_reason
                 interrupted_payload = {
                     "status": "interrupted",
                     "error_code": error_code,
@@ -3706,6 +4235,7 @@ class AutoplayOrchestrator:
             "consecutive_failures": consecutive_failures,
             "pending_end_turn_transition": pending_end_turn_transition,
             "transition_wait_since": transition_wait_since,
+            "waiting_since": transition_wait_since,  # Compatibility alias
             "summary": summary,
         }
 
@@ -3826,6 +4356,8 @@ class AutoplayOrchestrator:
         normalized = str(raw_code or "").strip().lower()
         if normalized in {"stale_decision", "stale_action", "selection_window_changed", "pre_submit_state_drift"}:
             return "recoverable_stale"
+        if normalized in {"play_rejected", "use_potion_rejected", "discard_rejected"}:
+            return "recoverable_action"
         if normalized in {
             "not_player_turn",
             "pending_transition",
@@ -3917,6 +4449,7 @@ class AutoplayOrchestrator:
         candidate_snapshot = snapshot
         candidate_legal_actions = list(legal_actions)
         candidate_signature = self._stable_window_signature(candidate_snapshot, candidate_legal_actions)
+        candidate_version = getattr(candidate_snapshot, "state_version", 0)
         stable_observations = 1
         waiting_since: float | None = None
 
@@ -3960,10 +4493,13 @@ class AutoplayOrchestrator:
                 }
 
             latest_signature = self._stable_window_signature(latest_snapshot, latest_legal_actions)
-            if latest_signature == candidate_signature:
+            latest_version = getattr(latest_snapshot, "state_version", 0)
+            if latest_signature == candidate_signature and latest_version == candidate_version:
                 stable_observations += 1
                 candidate_snapshot = latest_snapshot
                 candidate_legal_actions = latest_legal_actions
+                if stable_observations < required:
+                    time.sleep(self.config.poll_interval_seconds)
                 continue
 
             if waiting_since is None:
@@ -3972,7 +4508,14 @@ class AutoplayOrchestrator:
             elapsed = time.monotonic() - waiting_since
             self._gate_wait_steps += 1
             step_index += 1
-            timed_out = elapsed > self.config.stable_window_timeout_seconds
+            # Scale timeout so it's always at least poll_interval * required_observations.
+            # Without this, large --poll-interval-seconds values cause the window to time
+            # out after a single poll cycle, triggering spurious stable_window_timeout exits.
+            effective_stable_timeout = max(
+                self.config.stable_window_timeout_seconds,
+                self.config.poll_interval_seconds * max(2, required + 1),
+            )
+            timed_out = elapsed > effective_stable_timeout
             self._record(
                 recorder=recorder,
                 snapshot=latest_snapshot,
@@ -4021,6 +4564,7 @@ class AutoplayOrchestrator:
             candidate_snapshot = latest_snapshot
             candidate_legal_actions = latest_legal_actions
             candidate_signature = latest_signature
+            candidate_version = latest_version
             stable_observations = 1
             time.sleep(self.config.poll_interval_seconds)
 
@@ -4617,7 +5161,8 @@ class AutoplayOrchestrator:
             card = hand_by_id.get(card_id)
             if card is None:
                 continue
-            if card.playable and card.cost <= player.energy:
+            keywords = [str(k).lower() for k in (getattr(card, "keywords", None) or [])]
+            if card.playable and card.cost >= 0 and card.cost <= player.energy and "unplayable" not in keywords:
                 effective_actions.append(action)
         return self._apply_same_window_action_filters(snapshot, effective_actions)
 
@@ -4653,8 +5198,6 @@ class AutoplayOrchestrator:
                 and str(getattr(action, "type", "") or "") == "use_potion"
             )
         if str(metadata.get("window_kind") or "") != "event_choice":
-            return False
-        if str(metadata.get("event_subphase") or "") != "card_selection":
             return False
         return str(getattr(action, "type", "") or "") == "choose_event_option"
 
@@ -4703,19 +5246,26 @@ class AutoplayOrchestrator:
             if key in args and args[key] != value:
                 raise PolicyDecisionValidationError(f"policy cannot override legal action param '{key}'")
             args.setdefault(key, value)
-        target_constraints = list(action.target_constraints)
+        target_constraints = [str(c) for c in action.target_constraints]
         target_id = args.get("target_id")
+        if target_id is not None:
+            # Normalize target_id to string as most LLMs might return integers.
+            target_id = str(target_id)
+            args["target_id"] = target_id
+
         if not target_constraints:
             if target_id is not None:
-                raise PolicyDecisionValidationError("policy provided target_id for a non-targeted action")
+                # Some LLMs may provide a redundant target_id even for non-targeted actions.
+                # We log this (if we had a logger here) and just strip it to be more robust.
+                args.pop("target_id", None)
             return args
+
         if target_id is None:
             if len(target_constraints) == 1:
                 args["target_id"] = target_constraints[0]
                 return args
             raise PolicyDecisionValidationError("policy must provide args.target_id for multi-target actions")
-        if not isinstance(target_id, str):
-            raise PolicyDecisionValidationError("policy target_id must be a string")
+
         if target_id not in target_constraints:
             raise PolicyDecisionValidationError("policy target_id is outside the legal target set")
         return args

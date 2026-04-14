@@ -5,21 +5,23 @@ from dataclasses import dataclass
 from sts2_agent.bridge import HttpGameBridge, HttpGameBridgeConfig
 from sts2_agent.models import RunSummary
 from sts2_agent.orchestrator import AutoplayOrchestrator, OrchestratorConfig
-from sts2_agent.policy import ChatCompletionsConfig, ChatCompletionsPolicy
+from sts2_agent.policy import ChatCompletionsConfig, ChatCompletionsPolicy, MCTSPolicy
 
 
 @dataclass(slots=True)
 class LiveAutoplayConfig:
+    policy_type: str = "llm"  # llm|mcts
     bridge_base_url: str = "http://127.0.0.1:17654"
-    llm_base_url: str = "http://127.0.0.1:8080/v1"
-    model: str = "default"
-    api_key: str | None = None
+    llm_base_url: str = "http://127.0.0.1:11434/v1"
+    model: str = "llama3"
+    api_key: str | None = "ollama"
     trace_dir: str = "traces/live_llm"
     max_steps: int = 32
     max_actions_per_turn: int | None = None
     battle_mode: bool = False
     stop_after_player_turn: bool = True
     auto_end_turn_when_only_end_turn: bool = True
+    menu_mode: str = "halt"  # halt|auto
     reward_mode: str = "halt"  # halt|skip|skip-only|safe-default|llm
     map_mode: str = "halt"  # halt|safe-default|llm
     event_mode: str = "halt"  # halt|safe-default|llm
@@ -42,6 +44,7 @@ class LiveAutoplayConfig:
     max_tokens: int = 256
     dry_run: bool = False
     scenario: str = "live_http_bridge"
+    mcts_iterations: int = 100
 
 
 def run_live_autoplay(config: LiveAutoplayConfig) -> RunSummary:
@@ -53,16 +56,19 @@ def run_live_autoplay(config: LiveAutoplayConfig) -> RunSummary:
             scenario=config.scenario,
         )
     )
-    policy = ChatCompletionsPolicy(
-        ChatCompletionsConfig(
-            base_url=config.llm_base_url,
-            model=config.model,
-            api_key=config.api_key,
-            timeout_seconds=config.policy_timeout_seconds,
-            temperature=config.temperature,
-            max_tokens=config.max_tokens,
+    if config.policy_type == "mcts":
+        policy = MCTSPolicy(iterations=config.mcts_iterations)
+    else:
+        policy = ChatCompletionsPolicy(
+            ChatCompletionsConfig(
+                base_url=config.llm_base_url,
+                model=config.model,
+                api_key=config.api_key,
+                timeout_seconds=config.policy_timeout_seconds,
+                temperature=config.temperature,
+                max_tokens=config.max_tokens,
+            )
         )
-    )
     orchestrator = AutoplayOrchestrator(
         bridge=bridge,
         policy=policy,
@@ -72,6 +78,7 @@ def run_live_autoplay(config: LiveAutoplayConfig) -> RunSummary:
             max_actions_per_turn=config.max_actions_per_turn,
             stop_after_player_turn=stop_after_player_turn,
             auto_end_turn_when_only_end_turn=config.auto_end_turn_when_only_end_turn,
+            menu_mode=config.menu_mode,
             reward_mode=config.reward_mode,
             map_mode=config.map_mode,
             event_mode=config.event_mode,

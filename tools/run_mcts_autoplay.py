@@ -15,18 +15,16 @@ from sts2_agent.models import to_dict
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run STS2 live autoplay through an OpenAI-compatible chat completions API.")
+    parser = argparse.ArgumentParser(description="Run STS2 live autoplay through MCTS Policy.")
     parser.add_argument("--bridge-base-url", default=os.environ.get("STS2_BRIDGE_BASE_URL", "http://127.0.0.1:17654"))
-    parser.add_argument("--base-url", default=os.environ.get("STS2_LLM_BASE_URL", "http://127.0.0.1:11434/v1"))
-    parser.add_argument("--model", default=os.environ.get("STS2_LLM_MODEL", "llama3"))
-    parser.add_argument("--api-key", default=os.environ.get("STS2_LLM_API_KEY", "ollama"))
-    parser.add_argument("--trace-dir", default=os.environ.get("STS2_TRACE_DIR", "traces/live_llm"))
-    parser.add_argument("--max-steps", type=int, default=int(os.environ.get("STS2_MAX_STEPS", "32")))
+    parser.add_argument("--trace-dir", default=os.environ.get("STS2_TRACE_DIR", "traces/live_mcts"))
+    parser.add_argument("--max-steps", type=int, default=int(os.environ.get("STS2_MAX_STEPS", "1000")))
+    parser.add_argument("--iterations", type=int, default=int(os.environ.get("STS2_MCTS_ITERATIONS", "100")))
     parser.add_argument("--max-actions-per-turn", type=int, default=_read_optional_int("STS2_MAX_ACTIONS_PER_TURN"))
     parser.add_argument("--max-turns-per-battle", type=int, default=_read_optional_int("STS2_MAX_TURNS_PER_BATTLE"))
     parser.add_argument("--max-total-actions", type=int, default=_read_optional_int("STS2_MAX_TOTAL_ACTIONS"))
-    parser.add_argument("--max-consecutive-failures", type=int, default=int(os.environ.get("STS2_MAX_CONSECUTIVE_FAILURES", "6")))
-    parser.add_argument("--max-recovery-attempts", type=int, default=int(os.environ.get("STS2_MAX_RECOVERY_ATTEMPTS", "6")))
+    parser.add_argument("--max-consecutive-failures", type=int, default=int(os.environ.get("STS2_MAX_CONSECUTIVE_FAILURES", "10")))
+    parser.add_argument("--max-recovery-attempts", type=int, default=int(os.environ.get("STS2_MAX_RECOVERY_ATTEMPTS", "10")))
     parser.add_argument(
         "--wait-for-next-player-turn-seconds",
         type=float,
@@ -52,18 +50,16 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=float(os.environ.get("STS2_STABLE_WINDOW_TIMEOUT_SECONDS", "2.0")),
     )
-    parser.add_argument("--max-non-combat-steps", type=int, default=int(os.environ.get("STS2_MAX_NON_COMBAT_STEPS", "24")))
-    parser.add_argument("--unknown-window-fuse", type=int, default=int(os.environ.get("STS2_UNKNOWN_WINDOW_FUSE", "2")))
+    parser.add_argument("--max-non-combat-steps", type=int, default=int(os.environ.get("STS2_MAX_NON_COMBAT_STEPS", "100")))
+    parser.add_argument("--unknown-window-fuse", type=int, default=int(os.environ.get("STS2_UNKNOWN_WINDOW_FUSE", "5")))
     parser.add_argument(
         "--battle-context-recent-steps",
         type=int,
         default=int(os.environ.get("STS2_BATTLE_CONTEXT_RECENT_STEPS", "4")),
     )
-    parser.add_argument("--policy-timeout-seconds", type=float, default=float(os.environ.get("STS2_POLICY_TIMEOUT_SECONDS", "20")))
-    parser.add_argument("--temperature", type=float, default=float(os.environ.get("STS2_LLM_TEMPERATURE", "0.2")))
-    parser.add_argument("--max-tokens", type=int, default=int(os.environ.get("STS2_LLM_MAX_TOKENS", "256")))
+    parser.add_argument("--policy-timeout-seconds", type=float, default=float(os.environ.get("STS2_POLICY_TIMEOUT_SECONDS", "60")))
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--full-auto", action="store_true", help="Enable LLM/safe-default for all non-combat phases, including menu.")
+    parser.add_argument("--full-auto", action="store_true", help="Enable safe-default for all non-combat phases, including menu.")
     parser.add_argument(
         "--menu-mode",
         default=os.environ.get("STS2_MENU_MODE", "halt"),
@@ -71,27 +67,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--reward-mode",
-        default=os.environ.get("STS2_REWARD_MODE", "halt"),
-        choices=("halt", "skip", "skip-only", "safe-default", "llm"),
+        default=os.environ.get("STS2_REWARD_MODE", "safe-default"),
+        choices=("halt", "skip", "skip-only", "safe-default"),
     )
     parser.add_argument(
         "--map-mode",
-        default=os.environ.get("STS2_MAP_MODE", "halt"),
-        choices=("halt", "safe-default", "llm"),
+        default=os.environ.get("STS2_MAP_MODE", "safe-default"),
+        choices=("halt", "safe-default"),
     )
     parser.add_argument(
         "--event-mode",
-        default=os.environ.get("STS2_EVENT_MODE", "halt"),
-        choices=("halt", "safe-default", "llm"),
+        default=os.environ.get("STS2_EVENT_MODE", "safe-default"),
+        choices=("halt", "safe-default"),
     )
     parser.add_argument(
         "--shop-mode",
-        default=os.environ.get("STS2_SHOP_MODE", "halt"),
-        choices=("halt", "safe-default", "llm"),
+        default=os.environ.get("STS2_SHOP_MODE", "safe-default"),
+        choices=("halt", "safe-default"),
     )
     parser.set_defaults(
-        battle_mode=_read_optional_bool("STS2_BATTLE_MODE", False),
-        stop_after_player_turn=_read_optional_bool("STS2_STOP_AFTER_PLAYER_TURN", True),
+        battle_mode=_read_optional_bool("STS2_BATTLE_MODE", True),
+        stop_after_player_turn=_read_optional_bool("STS2_STOP_AFTER_PLAYER_TURN", False),
         auto_end_turn_when_only_end_turn=_read_optional_bool("STS2_AUTO_END_TURN_WHEN_ONLY_END_TURN", True),
         stop_after_next_combat=_read_optional_bool("STS2_STOP_AFTER_NEXT_COMBAT", False),
     )
@@ -135,24 +131,23 @@ def main(argv: list[str] | None = None) -> int:
         if menu_mode == "halt":
             menu_mode = "auto"
         if reward_mode == "halt":
-            reward_mode = "llm"
+            reward_mode = "safe-default"
         if map_mode == "halt":
-            map_mode = "llm"
+            map_mode = "safe-default"
         if event_mode == "halt":
-            event_mode = "llm"
+            event_mode = "safe-default"
         if shop_mode == "halt":
-            shop_mode = "llm"
+            shop_mode = "safe-default"
         battle_mode = True
         stop_after_player_turn = False
 
     summary = run_live_autoplay(
         LiveAutoplayConfig(
+            policy_type="mcts",
             bridge_base_url=args.bridge_base_url,
-            llm_base_url=args.base_url,
-            model=args.model,
-            api_key=args.api_key,
             trace_dir=args.trace_dir,
             max_steps=args.max_steps,
+            mcts_iterations=args.iterations,
             max_actions_per_turn=args.max_actions_per_turn,
             battle_mode=battle_mode,
             stop_after_player_turn=stop_after_player_turn,
@@ -170,8 +165,6 @@ def main(argv: list[str] | None = None) -> int:
             unknown_window_fuse=args.unknown_window_fuse,
             battle_context_recent_steps=args.battle_context_recent_steps,
             policy_timeout_seconds=args.policy_timeout_seconds,
-            temperature=args.temperature,
-            max_tokens=args.max_tokens,
             reward_mode=reward_mode,
             map_mode=map_mode,
             event_mode=event_mode,

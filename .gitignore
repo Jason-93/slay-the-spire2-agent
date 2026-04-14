@@ -9,3 +9,6 @@ build/
 dist/
 traces/
 tmp/
+.idea/
+.claude/
+last_line.json
