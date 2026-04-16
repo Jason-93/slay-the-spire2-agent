@@ -34,7 +34,7 @@ dotnet build mod/Sts2Mod.StateBridge.sln \
 
 ```bash
 python tools/debug_sts2_mod.py install --game-dir "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Slay the Spire 2"
-python tools/debug_sts2_mod.py debug --game-dir "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Slay the Spire 2"
+python tools/debug_sts2_mod.py debug --game-dir "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Slay the Spire 2"  --enable-writes
 ```
 
 运行 Python 测试：
@@ -45,40 +45,66 @@ $env:PYTHONPATH='src'; python -m unittest discover -s tests -v
 
 ## 自动对局 (Autoplay)
 
-Agent 可以使用 LLM (通过 Ollama/OpenAI) 或 MCTS 策略自动进行游戏。
+Agent 可以使用 LLM（通过 Ollama/OpenAI）或 MCTS 策略自动进行游戏。
 
-### 全自动运行 (推荐用于测试)
+### 全自动运行（推荐用于测试）
 
-要以全自动模式运行 Agent (自动处理战斗、奖励、地图和事件)：
+以全自动模式运行 Agent（自动处理菜单导航、战斗、奖励、地图和事件）：
 
-**LLM 模式 (需要 Ollama):**
+**LLM 模式（需要 Ollama）：**
 ```bash
 $env:PYTHONPATH='src'; python tools/run_llm_autoplay.py --full-auto --model llama3
 ```
 
-**MCTS 模式 (启发式/搜索):**
+**MCTS 模式（启发式/搜索）：**
 ```bash
 $env:PYTHONPATH='src'; python tools/run_mcts_autoplay.py --full-auto
 ```
 
 *注意：请确保游戏已启动并安装了 Bridge Mod，且已启用写操作权限，以便 Agent 能够在游戏中实际执行动作。*
 
+### 菜单自动导航
+
+开启 `--full-auto`（或 `--menu-mode auto`）时，Agent 会自动完成游戏启动后的菜单流程：
+
+1. **单人模式** — 自动点击"Single Player"/"单人模式"按钮
+2. **标准模式** — 自动点击"Standard Mode"/"标准模式"按钮
+3. **随机职业** — 从可用职业中随机选择一个
+4. **确认** — 点击"开始/确认"按钮
+
+Bridge 通过按钮文字标签识别上述操作；C# 侧的 `MenuNewRunLabelHints` 数组已覆盖常见的中英文变体。
+
+### 多局自动重开（Auto-Restart）
+
+使用 `--max-runs` 参数可连续运行多局。每局结束后（死亡或通关），Agent 自动等待游戏返回主菜单并开始下一局。
+
+```bash
+# 连续运行 10 局
+$env:PYTHONPATH='src'; python tools/run_mcts_autoplay.py --full-auto --max-runs 10
+
+# 无限循环，直到 Ctrl+C
+$env:PYTHONPATH='src'; python tools/run_mcts_autoplay.py --full-auto --max-runs 0
+
+# 持续收集轨迹数据
+$env:PYTHONPATH='src'; python tools/run_mcts_autoplay.py --full-auto --max-runs 0 --trace-dir traces/collection
+```
+
+关键参数说明：
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `--max-runs N` | `1` | 运行局数，`0` 表示无限循环。 |
+| `--menu-wait-timeout S` | `90` | 每局结束后等待游戏返回主菜单的超时秒数。 |
+
 ## MCTS 自我学习与 AlphaZero
 
 Agent 支持基于 Policy-Value 神经网络的 MCTS 自我学习模式。该模式不依赖外部大模型，可以通过你自己的游戏对局轨迹进行训练。
 
-### 硬件优化 (AMD 7800X3D + 7900XTX)
-
-针对 AMD 7800X3D 和 7900XTX 高端配置的优化：
-- **CPU**: 7800X3D 的强大单核性能非常适合 MCTS 树搜索。你可以将 `--mcts-iterations` 增加到 400-800 以获得更高的决策质量。
-- **GPU**: 7900XTX 可用于加速神经网络训练。请确保安装了支持 ROCm 的 PyTorch (在 Windows 上也可尝试通过 DirectML 使用)。
-- **内存**: 针对 32GB 内存，经验回放池 (Replay Buffer) 默认增大至 50,000 条，以存储更多样化的对局数据。
-
 ### 如何训练
 
-1. **收集数据**：使用 MCTS (启发式模式) 运行 Agent 以收集对局轨迹。
+1. **收集数据**：使用 MCTS（启发式模式）运行 Agent 以收集对局轨迹。
    ```powershell
-   $env:PYTHONPATH='src'; python tools/run_mcts_autoplay.py --full-auto --trace-dir traces/collection
+   $env:PYTHONPATH='src'; python tools/run_mcts_autoplay.py --full-auto --max-runs 0 --trace-dir traces/collection
    ```
 2. **训练模型**：使用收集到的轨迹训练 Policy-Value 网络。
    ```powershell

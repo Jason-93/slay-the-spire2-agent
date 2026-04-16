@@ -49,7 +49,7 @@ The agent can automatically play the game using either an LLM (via Ollama/OpenAI
 
 ### Full Autoplay (Recommended for testing)
 
-To run the agent in full autoplay mode (handling combat, rewards, map, and events automatically):
+To run the agent in full autoplay mode (handling menu navigation, combat, rewards, map, and events automatically):
 
 **LLM Mode (Requires Ollama):**
 ```bash
@@ -63,6 +63,39 @@ $env:PYTHONPATH='src'; python tools/run_mcts_autoplay.py --full-auto
 
 *Note: Make sure the game is running with the Bridge Mod installed and writes enabled if you want the agent to actually perform actions in-game.*
 
+### Automatic Menu Navigation
+
+When `--full-auto` (or `--menu-mode auto`) is active, the agent automatically navigates the game's startup flow:
+
+1. **Single Player** — clicks the "Single Player" / "单人模式" button
+2. **Standard Mode** — clicks the "Standard Mode" / "标准模式" button
+3. **Random Class** — randomly picks one of the available character options
+4. **Confirm** — clicks the start/confirm button
+
+The bridge recognises these buttons by label text; the C# `MenuNewRunLabelHints` array covers the common Chinese and English variants.
+
+### Multi-Run (Auto-Restart)
+
+Use `--max-runs` to play multiple games in sequence. After each run ends (death or run completion), the agent waits for the game to return to the main menu and automatically starts the next run.
+
+```bash
+# Play 10 runs in sequence
+$env:PYTHONPATH='src'; python tools/run_mcts_autoplay.py --full-auto --max-runs 10
+
+# Run indefinitely until Ctrl+C
+$env:PYTHONPATH='src'; python tools/run_mcts_autoplay.py --full-auto --max-runs 0
+
+# Collect traces across many runs
+$env:PYTHONPATH='src'; python tools/run_mcts_autoplay.py --full-auto --max-runs 0 --trace-dir traces/collection
+```
+
+Key `--max-runs` flags:
+
+| Flag | Default | Description |
+|---|---|---|
+| `--max-runs N` | `1` | Number of runs to play. `0` = unlimited. |
+| `--menu-wait-timeout S` | `90` | Seconds to wait for the game to return to the main menu between runs. |
+
 ## MCTS Self-Learning & AlphaZero
 
 The agent supports MCTS with a Policy-Value neural network for self-learning. This mode doesn't rely on external LLMs and can be trained on your own gameplay traces.
@@ -71,7 +104,7 @@ The agent supports MCTS with a Policy-Value neural network for self-learning. Th
 
 1. **Collect Data**: Run the agent with MCTS (heuristic mode) to collect gameplay traces.
    ```powershell
-   $env:PYTHONPATH='src'; python tools/run_mcts_autoplay.py --full-auto --trace-dir traces/collection
+   $env:PYTHONPATH='src'; python tools/run_mcts_autoplay.py --full-auto --max-runs 0 --trace-dir traces/collection
    ```
 2. **Train Model**: Use the collected traces to train the Policy-Value network.
    ```powershell
